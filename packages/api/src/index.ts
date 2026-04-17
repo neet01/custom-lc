@@ -1,6 +1,7 @@
 export * from './app';
 /* Admin */
 export * from './admin';
+export * from './usage';
 export * from './cdn';
 /* Auth */
 export * from './auth';

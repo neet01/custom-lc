@@ -28,6 +28,7 @@ const {
   filterMalformedContentParts,
   countFormattedMessageTokens,
   hydrateMissingIndexTokenCounts,
+  persistUsageRecords,
 } = require('@librechat/api');
 const {
   Callback,
@@ -654,6 +655,7 @@ class AgentClient extends BaseClient {
     transactions,
     context = 'message',
     collectedUsage = this.collectedUsage,
+    latencyMs,
   }) {
     const result = await recordCollectedUsage(
       {
@@ -661,6 +663,7 @@ class AgentClient extends BaseClient {
         spendStructuredTokens: db.spendStructuredTokens,
         pricing: { getMultiplier: db.getMultiplier, getCacheMultiplier: db.getCacheMultiplier },
         bulkWriteOps: { insertMany: db.bulkInsertTransactions, updateBalance: db.updateBalance },
+        usagePersistence: { createUsageRecords: db.createUsageRecords },
       },
       {
         user: this.user ?? this.options.req.user?.id,
@@ -672,6 +675,11 @@ class AgentClient extends BaseClient {
         balance,
         transactions,
         endpointTokenConfig: this.options.endpointTokenConfig,
+        sessionId: this.options.req?.sessionID,
+        provider: this.options.agent?.provider,
+        endpoint: this.options.endpoint,
+        source: 'agent',
+        latencyMs,
       },
     );
 
@@ -709,6 +717,7 @@ class AgentClient extends BaseClient {
     let run;
     /** @type {Promise<(TAttachment | null)[] | undefined>} */
     let memoryPromise;
+    const startedAt = Date.now();
     const appConfig = this.options.req.config;
     const balanceConfig = getBalanceConfig(appConfig);
     const transactionsConfig = getTransactionsConfig(appConfig);
@@ -924,6 +933,7 @@ class AgentClient extends BaseClient {
             context: 'message',
             balance: balanceConfig,
             transactions: transactionsConfig,
+            latencyMs: Date.now() - startedAt,
           });
         } else {
           logger.debug(
@@ -952,6 +962,7 @@ class AgentClient extends BaseClient {
     if (!this.run) {
       throw new Error('Run not initialized');
     }
+    const startedAt = Date.now();
     const { handleLLMEnd, collected: collectedMetadata } = createMetadataAggregator();
     const { req, agent } = this.options;
 
@@ -1137,6 +1148,7 @@ class AgentClient extends BaseClient {
         balance: balanceConfig,
         transactions: transactionsConfig,
         messageId: this.responseMessageId,
+        latencyMs: Date.now() - startedAt,
       }).catch((err) => {
         logger.error(
           '[api/server/controllers/agents/client.js #titleConvo] Error recording collected usage',
@@ -1170,6 +1182,7 @@ class AgentClient extends BaseClient {
     context = 'message',
   }) {
     try {
+      const userId = this.user ?? this.options.req.user?.id;
       await db.spendTokens(
         {
           model,
@@ -1177,10 +1190,29 @@ class AgentClient extends BaseClient {
           balance,
           messageId: this.responseMessageId,
           conversationId: this.conversationId,
-          user: this.user ?? this.options.req.user?.id,
+          user: userId,
           endpointTokenConfig: this.options.endpointTokenConfig,
         },
         { promptTokens, completionTokens },
+      );
+
+      await persistUsageRecords(
+        { createUsageRecords: db.createUsageRecords },
+        [
+          {
+            user: userId,
+            conversationId: this.conversationId,
+            messageId: this.responseMessageId,
+            sessionId: this.options.req?.sessionID,
+            model,
+            provider: this.options.agent?.provider,
+            endpoint: this.options.endpoint,
+            context,
+            source: 'agent',
+            inputTokens: promptTokens,
+            outputTokens: completionTokens,
+          },
+        ],
       );
 
       if (
@@ -1196,10 +1228,29 @@ class AgentClient extends BaseClient {
             context: 'reasoning',
             messageId: this.responseMessageId,
             conversationId: this.conversationId,
-            user: this.user ?? this.options.req.user?.id,
+            user: userId,
             endpointTokenConfig: this.options.endpointTokenConfig,
           },
           { completionTokens: usage.reasoning_tokens },
+        );
+
+        await persistUsageRecords(
+          { createUsageRecords: db.createUsageRecords },
+          [
+            {
+              user: userId,
+              conversationId: this.conversationId,
+              messageId: this.responseMessageId,
+              sessionId: this.options.req?.sessionID,
+              model,
+              provider: this.options.agent?.provider,
+              endpoint: this.options.endpoint,
+              context: 'reasoning',
+              source: 'agent',
+              inputTokens: 0,
+              outputTokens: usage.reasoning_tokens,
+            },
+          ],
         );
       }
     } catch (error) {

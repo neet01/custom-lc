@@ -66,6 +66,11 @@ async function abortRun(req, res) {
       model: run.model,
       user: req.user.id,
       conversationId,
+      messageId: latestMessageId,
+      sessionId: req.sessionID,
+      provider: endpoint,
+      endpoint,
+      context: 'abort',
     });
   } catch (error) {
     logger.error('[abortRun] Error fetching or processing run', error);

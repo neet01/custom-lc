@@ -44,6 +44,13 @@ import {
 } from './tx';
 import { createTransactionMethods, type TransactionMethods } from './transaction';
 import { createSpendTokensMethods, type SpendTokensMethods } from './spendTokens';
+import {
+  createUsageMethods,
+  type UsageMethods,
+  type UsageOverviewSummary,
+  type UsageSummaryQueryOptions,
+  type UsageUserSummary,
+} from './usage';
 import { createPromptMethods, type PromptMethods, type PromptDeps } from './prompt';
 /* Tier 5 — Agent */
 import { createAgentMethods, type AgentMethods, type AgentDeps } from './agent';
@@ -81,6 +88,7 @@ export type AllMethods = UserMethods &
   TxMethods &
   TransactionMethods &
   SpendTokensMethods &
+  UsageMethods &
   PromptMethods &
   AgentMethods &
   ConfigMethods;
@@ -127,6 +135,8 @@ export function createMethods(
     createTransaction: transactionMethods.createTransaction,
     createStructuredTransaction: transactionMethods.createStructuredTransaction,
   });
+
+  const usageMethods = createUsageMethods(mongoose);
 
   const messageMethods = createMessageMethods(mongoose);
 
@@ -201,6 +211,7 @@ export function createMethods(
     ...txMethods,
     ...transactionMethods,
     ...spendTokensMethods,
+    ...usageMethods,
     ...promptMethods,
     /* Tier 5 */
     ...agentMethods,
@@ -238,6 +249,10 @@ export type {
   TxMethods,
   TransactionMethods,
   SpendTokensMethods,
+  UsageMethods,
+  UsageSummaryQueryOptions,
+  UsageUserSummary,
+  UsageOverviewSummary,
   PromptMethods,
   AgentMethods,
   ConfigMethods,

@@ -46,6 +46,7 @@ async function spendCollectedUsage({
       spendStructuredTokens: db.spendStructuredTokens,
       pricing: { getMultiplier: db.getMultiplier, getCacheMultiplier: db.getCacheMultiplier },
       bulkWriteOps: { insertMany: db.bulkInsertTransactions, updateBalance: db.updateBalance },
+      usagePersistence: { createUsageRecords: db.createUsageRecords },
     },
     {
       user: userId,
@@ -54,6 +55,7 @@ async function spendCollectedUsage({
       context: 'abort',
       messageId,
       model: fallbackModel,
+      source: 'agent',
     },
   );
 

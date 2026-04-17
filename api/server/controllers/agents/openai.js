@@ -525,6 +525,7 @@ const OpenAIChatCompletionController = async (req, res) => {
         spendStructuredTokens: db.spendStructuredTokens,
         pricing: { getMultiplier: db.getMultiplier, getCacheMultiplier: db.getCacheMultiplier },
         bulkWriteOps: { insertMany: db.bulkInsertTransactions, updateBalance: db.updateBalance },
+        usagePersistence: { createUsageRecords: db.createUsageRecords },
       },
       {
         user: userId,
@@ -535,6 +536,11 @@ const OpenAIChatCompletionController = async (req, res) => {
         balance: balanceConfig,
         transactions: transactionsConfig,
         model: primaryConfig.model || agent.model_parameters?.model,
+        sessionId: req.sessionID,
+        provider: agent.provider,
+        endpoint: req.baseUrl,
+        source: 'agent',
+        latencyMs: Date.now() - requestStartTime,
       },
     ).catch((err) => {
       logger.error('[OpenAI API] Error recording usage:', err);

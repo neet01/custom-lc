@@ -225,3 +225,112 @@ export type GraphTokenResponse = {
   expires_in: number;
   scope: string;
 };
+
+export type AdminUsersListParams = {
+  limit?: number;
+  offset?: number;
+};
+
+export type AdminUsageListParams = {
+  user_id?: string;
+  conversation_id?: string;
+  context?: string;
+  source?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type AdminUsageSummaryParams = AdminUsageListParams & {
+  days?: number;
+};
+
+export type AdminUserListItem = {
+  id: string;
+  name: string;
+  username: string;
+  email: string;
+  avatar: string;
+  role: string;
+  provider: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdminUsersListResponse = {
+  users: AdminUserListItem[];
+  total: number;
+  limit: number;
+  offset?: number;
+};
+
+export type AdminUsageListItem = {
+  id: string;
+  userId: string;
+  conversationId: string;
+  messageId?: string;
+  requestId?: string;
+  sessionId?: string;
+  model?: string;
+  provider?: string;
+  endpoint?: string;
+  context?: string;
+  source?: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
+  latencyMs?: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdminUsageListResponse = {
+  usage: AdminUsageListItem[];
+  total: number;
+  limit: number;
+  offset?: number;
+};
+
+export type AdminUsageOverview = {
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  avgLatencyMs: number | null;
+  activeUsers: number;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+  windowStart?: string;
+  windowEnd?: string;
+};
+
+export type AdminUsageSummaryItem = {
+  userId: string;
+  name: string;
+  username: string;
+  email: string;
+  avatar: string;
+  role: string;
+  provider: string;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  avgLatencyMs: number | null;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+};
+
+export type AdminUsageSummaryResponse = {
+  overview: AdminUsageOverview;
+  users: AdminUsageSummaryItem[];
+  total: number;
+  limit: number;
+  offset?: number;
+  days: number;
+};

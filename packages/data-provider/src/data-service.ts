@@ -113,6 +113,24 @@ export function getUser(): Promise<t.TUser> {
   return request.get(endpoints.user());
 }
 
+export function getAdminUsers(
+  params: q.AdminUsersListParams = {},
+): Promise<q.AdminUsersListResponse> {
+  return request.get(endpoints.adminUsers(params));
+}
+
+export function getAdminUsage(
+  params: q.AdminUsageListParams = {},
+): Promise<q.AdminUsageListResponse> {
+  return request.get(endpoints.adminUsage(params));
+}
+
+export function getAdminUsageSummary(
+  params: q.AdminUsageSummaryParams = {},
+): Promise<q.AdminUsageSummaryResponse> {
+  return request.get(endpoints.adminUsageSummary(params));
+}
+
 export function getUserBalance(): Promise<t.TBalanceResponse> {
   return request.get(endpoints.balance());
 }

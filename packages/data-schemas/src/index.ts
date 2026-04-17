@@ -5,6 +5,7 @@ export * from './crypto';
 export * from './schema';
 export * from './utils';
 export { createModels } from './models';
+export type { IUsage } from './schema/usage';
 export {
   createMethods,
   RoleConflictError,

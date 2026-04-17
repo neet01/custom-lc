@@ -23,6 +23,7 @@ function Balance() {
     refillIntervalUnit,
     refillIntervalValue,
   } = balanceData ?? {};
+  const tokenLimit = startupConfig?.balance?.startBalance;
 
   // Check that all auto-refill props are present
   const hasValidRefillSettings =
@@ -34,7 +35,7 @@ function Balance() {
   return (
     <div className="flex flex-col gap-4 p-4 text-sm text-text-primary">
       {/* Token credits display */}
-      <TokenCreditsItem tokenCredits={tokenCredits} />
+      <TokenCreditsItem tokenCredits={tokenCredits} tokenLimit={tokenLimit} />
 
       {/* Auto-refill display */}
       {autoRefillEnabled ? (

@@ -192,6 +192,15 @@ export function buildLoginRedirectUrl(pathname?: string, search?: string, hash?:
 
 export const resendVerificationEmail = () => `${BASE_URL}/api/user/verify/resend`;
 
+export const adminUsers = (params: q.AdminUsersListParams = {}) =>
+  `${BASE_URL}/api/admin/users${buildQuery(params as Record<string, unknown>)}`;
+
+export const adminUsage = (params: q.AdminUsageListParams = {}) =>
+  `${BASE_URL}/api/admin/usage${buildQuery(params as Record<string, unknown>)}`;
+
+export const adminUsageSummary = (params: q.AdminUsageSummaryParams = {}) =>
+  `${BASE_URL}/api/admin/usage/summary${buildQuery(params as Record<string, unknown>)}`;
+
 export const plugins = () => `${BASE_URL}/api/plugins`;
 
 export const mcpReinitialize = (serverName: string) =>

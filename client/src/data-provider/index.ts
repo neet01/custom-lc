@@ -1,4 +1,5 @@
 export * from './Auth';
+export * from './Admin';
 export * from './Agents';
 export * from './Endpoints';
 export * from './Files';

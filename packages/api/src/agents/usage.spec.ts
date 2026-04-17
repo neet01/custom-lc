@@ -19,6 +19,7 @@ describe('recordCollectedUsage', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    delete process.env.USAGE_TRACKING_ENABLED;
     mockSpendTokens = jest.fn().mockResolvedValue(undefined);
     mockSpendStructuredTokens = jest.fn().mockResolvedValue(undefined);
     deps = {
@@ -86,6 +87,46 @@ describe('recordCollectedUsage', () => {
 
       expect(mockSpendTokens).toHaveBeenCalledTimes(2);
       expect(result).toEqual({ input_tokens: 100, output_tokens: 110 });
+    });
+
+    it('persists usage records when tracking is enabled', async () => {
+      process.env.USAGE_TRACKING_ENABLED = 'true';
+      const createUsageRecords = jest.fn().mockResolvedValue(undefined);
+      const collectedUsage: UsageMetadata[] = [
+        { input_tokens: 100, output_tokens: 50, model: 'gpt-4' },
+      ];
+
+      await recordCollectedUsage(
+        {
+          ...deps,
+          usagePersistence: { createUsageRecords },
+        },
+        {
+          ...baseParams,
+          collectedUsage,
+          sessionId: 'sess-123',
+          provider: 'openai',
+          endpoint: 'agents',
+          source: 'agent',
+          latencyMs: 250,
+        },
+      );
+
+      expect(createUsageRecords).toHaveBeenCalledWith([
+        expect.objectContaining({
+          user: 'user-123',
+          conversationId: 'convo-123',
+          sessionId: 'sess-123',
+          model: 'gpt-4',
+          provider: 'openai',
+          endpoint: 'agents',
+          source: 'agent',
+          inputTokens: 100,
+          outputTokens: 50,
+          totalTokens: 150,
+          latencyMs: 250,
+        }),
+      ]);
     });
   });
 

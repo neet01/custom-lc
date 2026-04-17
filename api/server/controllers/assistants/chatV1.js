@@ -59,6 +59,7 @@ const { getOpenAIClient } = require('./helpers');
  */
 const chatV1 = async (req, res) => {
   const appConfig = req.config;
+  const requestStartTime = Date.now();
   logger.debug('[/assistants/chat/] req.body', req.body);
 
   const {
@@ -180,6 +181,11 @@ const chatV1 = async (req, res) => {
         model: run.model,
         user: req.user.id,
         conversationId,
+        messageId: responseMessageId,
+        sessionId: req.sessionID,
+        provider: endpoint,
+        endpoint,
+        latencyMs: Date.now() - requestStartTime,
       });
     } catch (error) {
       logger.error('[/assistants/chat/] Error fetching or processing run', error);
@@ -658,6 +664,11 @@ const chatV1 = async (req, res) => {
           user: req.user.id,
           model: completedRun.model ?? model,
           conversationId,
+          messageId: responseMessage.messageId,
+          sessionId: req.sessionID,
+          provider: endpoint,
+          endpoint,
+          latencyMs: Date.now() - requestStartTime,
         });
       }
     } else {
@@ -666,6 +677,11 @@ const chatV1 = async (req, res) => {
         user: req.user.id,
         model: response.run.model ?? model,
         conversationId,
+        messageId: responseMessage.messageId,
+        sessionId: req.sessionID,
+        provider: endpoint,
+        endpoint,
+        latencyMs: Date.now() - requestStartTime,
       });
     }
   } catch (error) {

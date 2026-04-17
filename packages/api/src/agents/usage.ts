@@ -1,5 +1,6 @@
 import { logger } from '@librechat/data-schemas';
 import type { TCustomConfig, TTransactionsConfig } from 'librechat-data-provider';
+import { persistUsageRecords, type UsageRecordInput, type UsagePersistenceDeps } from '~/usage';
 import type {
   StructuredTokenUsage,
   BulkWriteDeps,
@@ -27,6 +28,7 @@ export interface RecordUsageDeps {
   spendStructuredTokens: SpendStructuredTokensFn;
   pricing?: PricingFns;
   bulkWriteOps?: BulkWriteDeps;
+  usagePersistence?: UsagePersistenceDeps;
 }
 
 export interface RecordUsageParams {
@@ -39,6 +41,12 @@ export interface RecordUsageParams {
   balance?: Partial<TCustomConfig['balance']> | null;
   transactions?: Partial<TTransactionsConfig>;
   endpointTokenConfig?: EndpointTokenConfig;
+  sessionId?: string;
+  requestId?: string;
+  provider?: string;
+  endpoint?: string;
+  source?: 'agent' | 'assistant' | 'tool' | 'system';
+  latencyMs?: number;
 }
 
 export interface RecordUsageResult {
@@ -98,6 +106,7 @@ export async function recordCollectedUsage(
 
   const { pricing, bulkWriteOps } = deps;
   const useBulk = pricing && bulkWriteOps;
+  const usageRecords: UsageRecordInput[] = [];
 
   const processUsageGroup = (
     usages: UsageMetadata[],
@@ -153,10 +162,7 @@ export async function recordCollectedUsage(
                 pricing,
               );
         docs.push(...entries);
-        continue;
-      }
-
-      if (cache_creation > 0 || cache_read > 0) {
+      } else if (cache_creation > 0 || cache_read > 0) {
         deps
           .spendStructuredTokens(txMetadata, {
             promptTokens: {
@@ -172,20 +178,37 @@ export async function recordCollectedUsage(
               err,
             );
           });
-        continue;
+      } else {
+        deps
+          .spendTokens(txMetadata, {
+            promptTokens: usage.input_tokens,
+            completionTokens: usage.output_tokens,
+          })
+          .catch((err) => {
+            logger.error(
+              `[packages/api #recordCollectedUsage] Error spending ${usageContext} tokens`,
+              err,
+            );
+          });
       }
 
-      deps
-        .spendTokens(txMetadata, {
-          promptTokens: usage.input_tokens,
-          completionTokens: usage.output_tokens,
-        })
-        .catch((err) => {
-          logger.error(
-            `[packages/api #recordCollectedUsage] Error spending ${usageContext} tokens`,
-            err,
-          );
-        });
+      usageRecords.push({
+        user,
+        conversationId,
+        messageId,
+        requestId: params.requestId ?? messageId,
+        sessionId: params.sessionId,
+        model: usage.model ?? model,
+        provider: params.provider,
+        endpoint: params.endpoint,
+        context: usageContext,
+        source: params.source ?? 'agent',
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        cacheCreationTokens: cache_creation,
+        cacheReadTokens: cache_read,
+        latencyMs: params.latencyMs,
+      });
     }
   };
 
@@ -198,6 +221,9 @@ export async function recordCollectedUsage(
     } catch (err) {
       logger.error('[packages/api #recordCollectedUsage] Error in bulk write', err);
     }
+  }
+  if (deps.usagePersistence) {
+    await persistUsageRecords(deps.usagePersistence, usageRecords);
   }
 
   return {

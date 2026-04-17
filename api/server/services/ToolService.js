@@ -188,6 +188,12 @@ const processVisionRequest = async (client, currentAction) => {
       user: client.req.user.id,
       model: client.req.body.model,
       conversationId: (client.responseMessage ?? client.finalMessage).conversationId,
+      messageId: (client.responseMessage ?? client.finalMessage).messageId,
+      sessionId: client.req.sessionID,
+      provider: client.req.body.endpoint,
+      endpoint: client.req.body.endpoint,
+      source: 'tool',
+      context: 'vision',
       ...completion.usage,
     });
   }

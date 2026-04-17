@@ -132,3 +132,59 @@ export type AdminUserSearchResult = {
   username?: string;
   avatarUrl?: string;
 };
+
+export type AdminUsageListItem = {
+  id: string;
+  userId: string;
+  conversationId: string;
+  messageId?: string;
+  requestId?: string;
+  sessionId?: string;
+  model?: string;
+  provider?: string;
+  endpoint?: string;
+  context?: string;
+  source?: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
+  latencyMs?: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdminUsageOverview = {
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  avgLatencyMs: number | null;
+  activeUsers: number;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+  windowStart?: string;
+  windowEnd?: string;
+};
+
+export type AdminUsageSummaryItem = {
+  userId: string;
+  name: string;
+  username: string;
+  email: string;
+  avatar: string;
+  role: string;
+  provider: string;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  avgLatencyMs: number | null;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+};

@@ -58,6 +58,9 @@ export enum QueryKeys {
   resourcePermissions = 'resourcePermissions',
   effectivePermissions = 'effectivePermissions',
   graphToken = 'graphToken',
+  adminUsers = 'adminUsers',
+  adminUsage = 'adminUsage',
+  adminUsageSummary = 'adminUsageSummary',
   /* MCP Servers */
   mcpServers = 'mcpServers',
   mcpServer = 'mcpServer',

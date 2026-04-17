@@ -54,6 +54,7 @@ const { getOpenAIClient } = require('./helpers');
 const chatV2 = async (req, res) => {
   logger.debug('[/assistants/chat/] req.body', req.body);
   const appConfig = req.config;
+  const requestStartTime = Date.now();
 
   /** @type {{files: MongoFile[]}} */
   const {
@@ -492,6 +493,11 @@ const chatV2 = async (req, res) => {
           user: req.user.id,
           model: completedRun.model ?? model,
           conversationId,
+          messageId: responseMessage.messageId,
+          sessionId: req.sessionID,
+          provider: endpoint,
+          endpoint,
+          latencyMs: Date.now() - requestStartTime,
         });
       }
     } else {
@@ -500,6 +506,11 @@ const chatV2 = async (req, res) => {
         user: req.user.id,
         model: response.run.model ?? model,
         conversationId,
+        messageId: responseMessage.messageId,
+        sessionId: req.sessionID,
+        provider: endpoint,
+        endpoint,
+        latencyMs: Date.now() - requestStartTime,
       });
     }
   } catch (error) {

@@ -540,6 +540,7 @@ const createResponse = async (req, res) => {
           spendStructuredTokens: db.spendStructuredTokens,
           pricing: { getMultiplier: db.getMultiplier, getCacheMultiplier: db.getCacheMultiplier },
           bulkWriteOps: { insertMany: db.bulkInsertTransactions, updateBalance: db.updateBalance },
+          usagePersistence: { createUsageRecords: db.createUsageRecords },
         },
         {
           user: userId,
@@ -550,6 +551,11 @@ const createResponse = async (req, res) => {
           balance: balanceConfig,
           transactions: transactionsConfig,
           model: primaryConfig.model || agent.model_parameters?.model,
+          sessionId: req.sessionID,
+          provider: agent.provider,
+          endpoint: req.baseUrl,
+          source: 'agent',
+          latencyMs: Date.now() - requestStartTime,
         },
       ).catch((err) => {
         logger.error('[Responses API] Error recording usage:', err);
@@ -702,6 +708,7 @@ const createResponse = async (req, res) => {
           spendStructuredTokens: db.spendStructuredTokens,
           pricing: { getMultiplier: db.getMultiplier, getCacheMultiplier: db.getCacheMultiplier },
           bulkWriteOps: { insertMany: db.bulkInsertTransactions, updateBalance: db.updateBalance },
+          usagePersistence: { createUsageRecords: db.createUsageRecords },
         },
         {
           user: userId,
@@ -712,6 +719,11 @@ const createResponse = async (req, res) => {
           balance: balanceConfig,
           transactions: transactionsConfig,
           model: primaryConfig.model || agent.model_parameters?.model,
+          sessionId: req.sessionID,
+          provider: agent.provider,
+          endpoint: req.baseUrl,
+          source: 'agent',
+          latencyMs: Date.now() - requestStartTime,
         },
       ).catch((err) => {
         logger.error('[Responses API] Error recording usage:', err);

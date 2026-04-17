@@ -1,6 +1,6 @@
 const path = require('path');
 const { v4 } = require('uuid');
-const { countTokens } = require('@librechat/api');
+const { countTokens, persistUsageRecords } = require('@librechat/api');
 const { escapeRegExp } = require('@librechat/data-schemas');
 const {
   Constants,
@@ -8,7 +8,7 @@ const {
   AnnotationTypes,
   defaultOrderQuery,
 } = require('librechat-data-provider');
-const { recordMessage, getMessages, spendTokens, saveConvo } = require('~/models');
+const { recordMessage, getMessages, spendTokens, saveConvo, createUsageRecords } = require('~/models');
 const { retrieveAndProcessFile } = require('~/server/services/Files/process');
 
 /**
@@ -497,6 +497,13 @@ async function checkMessageGaps({
  * @param {string} params.user - The user's ID.
  * @param {string} params.conversationId - LibreChat conversation ID.
  * @param {string} [params.context='message'] - The context of the usage. Defaults to 'message'.
+ * @param {string} [params.messageId] - The response message ID.
+ * @param {string} [params.requestId] - The request correlation ID.
+ * @param {string} [params.sessionId] - The current session identifier.
+ * @param {string} [params.provider] - The provider serving the request.
+ * @param {string} [params.endpoint] - The endpoint handling the request.
+ * @param {'assistant' | 'tool' | 'system'} [params.source='assistant'] - The source of the LLM call.
+ * @param {number} [params.latencyMs] - End-to-end request latency.
  * @return {Promise<TMessage[]>} A promise that resolves to the updated messages
  */
 const recordUsage = async ({
@@ -506,6 +513,13 @@ const recordUsage = async ({
   user,
   conversationId,
   context = 'message',
+  messageId,
+  requestId,
+  sessionId,
+  provider,
+  endpoint,
+  source = 'assistant',
+  latencyMs,
 }) => {
   await spendTokens(
     {
@@ -515,6 +529,27 @@ const recordUsage = async ({
       conversationId,
     },
     { promptTokens: prompt_tokens, completionTokens: completion_tokens },
+  );
+
+  await persistUsageRecords(
+    { createUsageRecords },
+    [
+      {
+        user,
+        conversationId,
+        messageId,
+        requestId,
+        sessionId,
+        model,
+        provider,
+        endpoint,
+        context,
+        source,
+        inputTokens: prompt_tokens,
+        outputTokens: completion_tokens,
+        latencyMs,
+      },
+    ],
   );
 };
 

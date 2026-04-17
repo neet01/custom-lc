@@ -21,6 +21,7 @@ export { default as shareSchema } from './share';
 export { default as tokenSchema } from './token';
 export { default as toolCallSchema } from './toolCall';
 export { default as transactionSchema } from './transaction';
+export { default as usageSchema } from './usage';
 export { default as userSchema } from './user';
 export { default as memorySchema } from './memory';
 export { default as groupSchema } from './group';

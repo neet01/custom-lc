@@ -7,14 +7,14 @@ const execAsync = promisify(exec);
 async function main() {
   try {
     if (isWindows) {
-      console.red('The backend process has been terminated');
       await execAsync('taskkill /F /IM node.exe /T');
+      console.log('The backend process has been terminated');
     } else {
       await execAsync('pkill -f api/server/index.js');
-      console.orange('The backend process has been terminated');
+      console.log('The backend process has been terminated');
     }
   } catch (err) {
-    console.red('The backend process has been terminated', err.message);
+    console.log('The backend process has been terminated', err.message);
   }
 }
 

@@ -60,7 +60,13 @@ Added a user-facing green-to-red progress bar in the balance UI.
 Important note:
 
 - LibreChat native balance is cost-credit based, not literal raw tokens
-- current UI may still be interpreted by users as tokens unless relabeled later
+- the UI has been relabeled to show estimated budget and spend rather than pretending the remaining number is raw token count
+- current modeling is tuned for AWS GovCloud usage of Claude Sonnet 3.7 and Claude Sonnet 4.5
+- implemented rates:
+  - input: `$3 / 1M tokens`
+  - output: `$15 / 1M tokens`
+  - cache write: `$3.75 / 1M tokens`
+  - cache read: `$0.30 / 1M tokens`
 
 Primary files:
 
@@ -68,6 +74,7 @@ Primary files:
 - [client/src/components/Nav/SettingsTabs/Balance/Balance.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Nav/SettingsTabs/Balance/Balance.tsx:1)
 - [client/src/components/Nav/AccountSettings.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Nav/AccountSettings.tsx:1)
 - [api/server/controllers/Balance.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/controllers/Balance.js:1)
+- [packages/data-schemas/src/methods/tx.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/methods/tx.ts:1)
 
 ### 4. Issue Reporting System
 

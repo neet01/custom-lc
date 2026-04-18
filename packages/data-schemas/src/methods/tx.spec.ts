@@ -208,6 +208,16 @@ describe('getValueKey', () => {
     expect(getValueKey('claude-3.7-sonnet-0125')).toBe('claude-3.7-sonnet');
   });
 
+  it('should return "claude-sonnet-4-5" for Bedrock Sonnet 4.5 model ids', () => {
+    expect(getValueKey('anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe('claude-sonnet-4-5');
+    expect(getValueKey('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(
+      'claude-sonnet-4-5',
+    );
+    expect(getValueKey('global.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(
+      'claude-sonnet-4-5',
+    );
+  });
+
   it('should return "claude-3-5-sonnet" for model type of "claude-3-5-sonnet-"', () => {
     expect(getValueKey('claude-3-5-sonnet-20240620')).toBe('claude-3-5-sonnet');
     expect(getValueKey('anthropic/claude-3-5-sonnet')).toBe('claude-3-5-sonnet');

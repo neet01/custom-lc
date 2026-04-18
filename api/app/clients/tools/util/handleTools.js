@@ -40,6 +40,11 @@ const {
 } = require('../');
 const { createMCPTool, createMCPTools, resolveConfigServers } = require('~/server/services/MCP');
 const { createFileSearchTool, primeFiles: primeSearchFiles } = require('./fileSearch');
+const {
+  SPREADSHEET_TOOL_NAME,
+  createSpreadsheetTool,
+  primeFiles: primeSpreadsheetFiles,
+} = require('./spreadsheet');
 const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
 const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
@@ -320,6 +325,22 @@ const loadTools = async ({
           files,
           entity_id: agent?.id,
           fileCitations,
+        });
+      };
+      continue;
+    } else if (tool === SPREADSHEET_TOOL_NAME) {
+      requestedTools[tool] = async () => {
+        const { files, toolContext } = await primeSpreadsheetFiles({
+          ...options,
+          agentId: agent?.id,
+        });
+        if (toolContext) {
+          toolContextMap[tool] = toolContext;
+        }
+        return createSpreadsheetTool({
+          req: options.req,
+          res: options.res,
+          files,
         });
       };
       continue;

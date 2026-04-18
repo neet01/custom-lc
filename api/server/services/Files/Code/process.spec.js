@@ -97,6 +97,7 @@ jest.mock('~/server/utils', () => ({
 
 const http = require('http');
 const https = require('https');
+const { Readable } = require('stream');
 const { createFile, getFiles } = require('~/models');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { convertImage } = require('~/server/services/Files/images/convert');
@@ -104,7 +105,7 @@ const { determineFileType } = require('~/server/utils');
 const { logger } = require('@librechat/data-schemas');
 const { codeServerHttpAgent, codeServerHttpsAgent } = require('@librechat/api');
 
-const { processCodeOutput, getSessionInfo } = require('./process');
+const { processCodeOutput, getSessionInfo, primeFiles } = require('./process');
 
 describe('Code Process', () => {
   const mockReq = {
@@ -445,6 +446,71 @@ describe('Code Process', () => {
         expect(callConfig.httpAgent.keepAlive).toBe(false);
         expect(callConfig.httpsAgent.keepAlive).toBe(false);
       });
+    });
+  });
+
+  describe('primeFiles', () => {
+    it('should auto-upload attached spreadsheets into the code environment', async () => {
+      getFiles.mockResolvedValue([]);
+      const resourceSpreadsheet = {
+        file_id: 'spreadsheet-1',
+        filename: 'runway.xlsx',
+        filepath: '/uploads/runway.xlsx',
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        source: 'local',
+        metadata: {},
+        context: 'message_attachment',
+      };
+
+      const getDownloadStream = jest.fn().mockResolvedValue(Readable.from([Buffer.from('xlsx')]));
+      const uploadCodeEnvFile = jest.fn().mockResolvedValue('session-abc/file-xyz');
+      getStrategyFunctions.mockImplementation((source) => {
+        if (source === 'local') {
+          return { getDownloadStream };
+        }
+        if (source === 'execute_code') {
+          return { handleFileUpload: uploadCodeEnvFile };
+        }
+        return {};
+      });
+
+      const req = {
+        user: { id: 'user-123', role: 'USER' },
+      };
+
+      const result = await primeFiles(
+        {
+          req,
+          tool_resources: {
+            execute_code: {
+              files: [resourceSpreadsheet],
+            },
+          },
+          agentId: 'agent-123',
+        },
+        'test-api-key',
+      );
+
+      expect(getDownloadStream).toHaveBeenCalledWith(req, '/uploads/runway.xlsx');
+      expect(uploadCodeEnvFile).toHaveBeenCalledWith({
+        req,
+        stream: expect.any(Object),
+        filename: 'runway.xlsx',
+        apiKey: 'test-api-key',
+      });
+      const { updateFile } = require('~/models');
+      expect(updateFile).toHaveBeenCalledWith({
+        file_id: 'spreadsheet-1',
+        metadata: { fileIdentifier: 'session-abc/file-xyz' },
+      });
+      expect(result.files).toEqual([
+        {
+          id: 'file-xyz',
+          session_id: 'session-abc',
+          name: 'runway.xlsx',
+        },
+      ]);
+      expect(result.toolContext).toContain('/mnt/data/runway.xlsx');
     });
   });
 });

@@ -303,6 +303,15 @@ function writeAttachment(res, streamId, attachment) {
   }
 }
 
+function createSavedFileAttachment(file, metadata, toolCallId) {
+  return {
+    ...file,
+    messageId: metadata.run_id,
+    toolCallId,
+    conversationId: metadata.thread_id,
+  };
+}
+
 /**
  *
  * @param {Object} params
@@ -443,13 +452,32 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null }) 
       return;
     }
 
-    const isCodeTool =
-      output.name === Tools.execute_code || output.name === Constants.PROGRAMMATIC_TOOL_CALLING;
-    if (!isCodeTool) {
+    if (!output.artifact.files) {
       return;
     }
 
-    if (!output.artifact.files) {
+    const isCodeTool =
+      output.name === Tools.execute_code || output.name === Constants.PROGRAMMATIC_TOOL_CALLING;
+    if (!isCodeTool) {
+      for (const file of output.artifact.files) {
+        if (!file?.file_id) {
+          continue;
+        }
+        artifactPromises.push(
+          (async () => {
+            const fileMetadata = createSavedFileAttachment(file, metadata, output.tool_call_id);
+            if (!streamId && !res.headersSent) {
+              return fileMetadata;
+            }
+
+            writeAttachment(res, streamId, fileMetadata);
+            return fileMetadata;
+          })().catch((error) => {
+            logger.error('Error processing saved file artifact:', error);
+            return null;
+          }),
+        );
+      }
       return;
     }
 
@@ -651,13 +679,41 @@ function createResponsesToolEndCallback({ req, res, tracker, artifactPromises })
       return;
     }
 
-    const isCodeTool =
-      output.name === Tools.execute_code || output.name === Constants.PROGRAMMATIC_TOOL_CALLING;
-    if (!isCodeTool) {
+    if (!output.artifact.files) {
       return;
     }
 
-    if (!output.artifact.files) {
+    const isCodeTool =
+      output.name === Tools.execute_code || output.name === Constants.PROGRAMMATIC_TOOL_CALLING;
+    if (!isCodeTool) {
+      for (const file of output.artifact.files) {
+        if (!file?.file_id) {
+          continue;
+        }
+        artifactPromises.push(
+          (async () => {
+            const fileMetadata = createSavedFileAttachment(file, metadata, output.tool_call_id);
+
+            if (res.headersSent && !res.writableEnded) {
+              const attachment = {
+                file_id: fileMetadata.file_id,
+                filename: fileMetadata.filename,
+                type: fileMetadata.type,
+                url: fileMetadata.filepath,
+                width: fileMetadata.width,
+                height: fileMetadata.height,
+                tool_call_id: output.tool_call_id,
+              };
+              writeResponsesAttachment(res, tracker, attachment, metadata);
+            }
+
+            return fileMetadata;
+          })().catch((error) => {
+            logger.error('Error processing saved file artifact:', error);
+            return null;
+          }),
+        );
+      }
       return;
     }
 

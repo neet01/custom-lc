@@ -91,6 +91,13 @@
     "authConfig": []
   },
   {
+    "name": "Spreadsheet Transform",
+    "pluginKey": "spreadsheet_transform",
+    "description": "Inspect attached spreadsheets and create cleaned spreadsheet exports by keeping, removing, or redacting columns. Returns a downloadable file in chat.",
+    "icon": "assets/calculator.svg",
+    "authConfig": []
+  },
+  {
     "name": "Stable Diffusion",
     "pluginKey": "stable-diffusion",
     "description": "Generate photo-realistic images given any text input.",

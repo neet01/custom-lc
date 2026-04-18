@@ -15,6 +15,7 @@ const {
   ResourceType,
   EModelEndpoint,
   PermissionBits,
+  FileContext,
   checkOpenAIStorage,
   isAssistantsEndpoint,
 } = require('librechat-data-provider');
@@ -31,7 +32,10 @@ const { hasCapability } = require('~/server/middleware/roles/capabilities');
 const { checkPermission } = require('~/server/services/PermissionService');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { hasAccessToFilesViaAgent } = require('~/server/services/Files');
-const { cleanFileName } = require('~/server/utils/files');
+const {
+  isSpreadsheetTransformable,
+} = require('~/server/services/Files/Spreadsheets/transform');
+const { transformSpreadsheetFile } = require('~/server/services/Files/Spreadsheets/service');
 const { getLogStores } = require('~/cache');
 const { Readable } = require('stream');
 const db = require('~/models');
@@ -366,6 +370,45 @@ router.get('/download/:userId/:file_id', fileAccess, async (req, res) => {
   } catch (error) {
     logger.error('[DOWNLOAD ROUTE] Error downloading file:', error);
     res.status(500).send('Error downloading file');
+  }
+});
+
+router.post('/:file_id/transform/spreadsheet', fileAccess, async (req, res) => {
+  try {
+    const sourceFile = req.fileAccess.file;
+
+    if (!isSpreadsheetTransformable(sourceFile.type)) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: `File "${sourceFile.filename}" is not a supported spreadsheet type`,
+      });
+    }
+
+    const transformed = await transformSpreadsheetFile({
+      req,
+      res,
+      sourceFile,
+      removeColumns: req.body.removeColumns,
+      keepColumns: req.body.keepColumns,
+      redactColumns: req.body.redactColumns,
+      redactionText: req.body.redactionText,
+      sheetNames: req.body.sheetNames,
+      outputFormat: req.body.outputFormat,
+      conversationId: req.body.conversationId,
+      messageId: req.body.messageId,
+    });
+
+    return res.status(200).json({
+      message: 'Spreadsheet transformed successfully',
+      file: transformed.file,
+      summary: transformed.summary,
+    });
+  } catch (error) {
+    logger.error('[POST /files/:file_id/transform/spreadsheet] Error transforming spreadsheet:', error);
+    return res.status(400).json({
+      error: 'Bad Request',
+      message: error.message ?? 'Failed to transform spreadsheet',
+    });
   }
 });
 

@@ -1,5 +1,10 @@
 import { logger } from '@librechat/data-schemas';
-import { EModelEndpoint, EToolResources, AgentCapabilities } from 'librechat-data-provider';
+import {
+  EModelEndpoint,
+  EToolResources,
+  AgentCapabilities,
+  excelMimeTypes,
+} from 'librechat-data-provider';
 import type { AgentToolResources, TFile, AgentBaseResource } from 'librechat-data-provider';
 import type { IMongoFile, AppConfig, IUser } from '@librechat/data-schemas';
 import type { FilterQuery, QueryOptions, ProjectionType } from 'mongoose';
@@ -77,6 +82,16 @@ const addFileToResource = ({
   }
 };
 
+const spreadsheetMimeTypes = new Set([
+  'text/csv',
+  'application/csv',
+  'application/vnd.oasis.opendocument.spreadsheet',
+]);
+
+const isSpreadsheetFile = (file: TFile): boolean =>
+  Boolean(file.type) &&
+  (excelMimeTypes.test(file.type) || spreadsheetMimeTypes.has(file.type));
+
 /**
  * Categorizes a file into the appropriate tool resource based on its properties
  * Files are categorized as:
@@ -101,6 +116,16 @@ const categorizeFileForToolResources = ({
   processedResourceFiles: Set<string>;
 }): void => {
   if (file.metadata?.fileIdentifier) {
+    addFileToResource({
+      file,
+      resourceType: EToolResources.execute_code,
+      tool_resources,
+      processedResourceFiles,
+    });
+    return;
+  }
+
+  if (requestFileSet.has(file.file_id) && isSpreadsheetFile(file)) {
     addFileToResource({
       file,
       resourceType: EToolResources.execute_code,

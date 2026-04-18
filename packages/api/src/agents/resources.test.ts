@@ -147,6 +147,36 @@ describe('primeResources', () => {
       expect(result.tool_resources?.[EToolResources.execute_code]?.files).toEqual(mockFiles);
     });
 
+    it('should process attached spreadsheets as execute_code resources', async () => {
+      const mockFiles: TFile[] = [
+        {
+          user: 'user1',
+          file_id: 'file1',
+          filename: 'runway.xlsx',
+          filepath: '/uploads/runway.xlsx',
+          object: 'file',
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          bytes: 1024,
+          embedded: false,
+          usage: 0,
+        },
+      ];
+
+      const attachments = Promise.resolve(mockFiles);
+
+      const result = await primeResources({
+        req: mockReq,
+        appConfig: mockAppConfig,
+        getFiles: mockGetFiles,
+        requestFileSet,
+        attachments,
+        tool_resources: {},
+      });
+
+      expect(result.attachments).toEqual(mockFiles);
+      expect(result.tool_resources?.[EToolResources.execute_code]?.files).toEqual(mockFiles);
+    });
+
     it('should process embedded files as file_search resources', async () => {
       const mockFiles: TFile[] = [
         {

@@ -354,6 +354,69 @@ export const fileSearchSchema: ExtendedJsonSchema = {
   required: ['query'],
 };
 
+export const spreadsheetTransformSchema: ExtendedJsonSchema = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['inspect', 'transform'],
+      description:
+        'Use "inspect" to understand workbook sheets, columns, and preview rows. Use "transform" to create a new downloadable spreadsheet file.',
+    },
+    file_id: {
+      type: 'string',
+      description:
+        'The exact LibreChat file_id for the spreadsheet to inspect or transform. Prefer this when available.',
+    },
+    file_name: {
+      type: 'string',
+      description:
+        'The spreadsheet filename when file_id is not known. Must match one of the attached spreadsheet files.',
+    },
+    keepColumns: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'For transform: keep only these column headers, preserving order from the source sheet.',
+    },
+    removeColumns: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'For transform: remove these column headers from the output workbook.',
+    },
+    redactColumns: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'For transform: replace non-empty cell values in these columns with a redaction label.',
+    },
+    redactionText: {
+      type: 'string',
+      description: 'For transform: custom replacement text for redacted cells.',
+    },
+    sheetNames: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Optional list of sheet names to target. Leave empty to inspect or transform every sheet.',
+    },
+    outputFormat: {
+      type: 'string',
+      enum: ['xlsx', 'csv'],
+      description:
+        'For transform: output workbook format. CSV requires exactly one selected sheet.',
+    },
+    maxPreviewRows: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 10,
+      description:
+        'For inspect: number of data rows to preview from each sheet. Defaults to 5 and maxes out at 10.',
+    },
+  },
+  required: ['action'],
+};
+
 /** Tool definitions registry - maps tool names to their definitions */
 export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   google: {
@@ -425,6 +488,14 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
     description:
       'Performs semantic search across attached "file_search" documents using natural language queries. This tool analyzes the content of uploaded files to find relevant information, quotes, and passages that best match your query.',
     schema: fileSearchSchema,
+    toolType: 'builtin',
+    responseFormat: 'content_and_artifact',
+  },
+  spreadsheet_transform: {
+    name: 'spreadsheet_transform',
+    description:
+      'Inspect attached spreadsheets and create downloadable spreadsheet exports directly in chat. Use this to inspect workbook structure, remove columns, keep only selected columns, or redact sensitive spreadsheet data.',
+    schema: spreadsheetTransformSchema,
     toolType: 'builtin',
     responseFormat: 'content_and_artifact',
   },

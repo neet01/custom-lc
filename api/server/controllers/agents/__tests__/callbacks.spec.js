@@ -325,5 +325,42 @@ describe('createToolEndCallback', () => {
       expect(artifactPromises).toHaveLength(0);
       expect(res.write).not.toHaveBeenCalled();
     });
+
+    it('should emit saved file artifacts for non-code tools', async () => {
+      const toolEndCallback = createToolEndCallback({ req, res, artifactPromises });
+
+      const output = {
+        name: 'spreadsheet_transform',
+        tool_call_id: 'tool123',
+        artifact: {
+          files: [
+            {
+              file_id: 'file-1',
+              filename: 'runway-transformed.xlsx',
+              filepath: '/uploads/runway-transformed.xlsx',
+              type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            },
+          ],
+        },
+      };
+
+      const metadata = {
+        run_id: 'run456',
+        thread_id: 'thread789',
+      };
+
+      await toolEndCallback({ output }, metadata);
+      const results = await Promise.all(artifactPromises);
+
+      expect(results[0]).toEqual({
+        file_id: 'file-1',
+        filename: 'runway-transformed.xlsx',
+        filepath: '/uploads/runway-transformed.xlsx',
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        messageId: 'run456',
+        toolCallId: 'tool123',
+        conversationId: 'thread789',
+      });
+    });
   });
 });

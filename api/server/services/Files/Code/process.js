@@ -22,6 +22,7 @@ const {
   EModelEndpoint,
   mergeFileConfig,
   getEndpointFileConfig,
+  excelMimeTypes,
 } = require('librechat-data-provider');
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const { createFile, getFiles, updateFile, claimCodeFile } = require('~/models');
@@ -30,6 +31,14 @@ const { convertImage } = require('~/server/services/Files/images/convert');
 const { determineFileType } = require('~/server/utils');
 
 const axios = createAxiosInstance();
+const spreadsheetMimeTypes = new Set([
+  'text/csv',
+  'application/csv',
+  'application/vnd.oasis.opendocument.spreadsheet',
+]);
+
+const isSpreadsheetFile = (file) =>
+  Boolean(file?.type) && (excelMimeTypes.test(file.type) || spreadsheetMimeTypes.has(file.type));
 
 /**
  * Creates a fallback download URL response when file cannot be processed locally.
@@ -363,6 +372,7 @@ const primeFiles = async (options, apiKey) => {
 
   const files = [];
   const sessions = new Map();
+  const processedFileIds = new Set();
   let toolContext = '';
 
   for (let i = 0; i < dbFiles.length; i++) {
@@ -370,6 +380,10 @@ const primeFiles = async (options, apiKey) => {
     if (!file) {
       continue;
     }
+    if (processedFileIds.has(file.file_id)) {
+      continue;
+    }
+    processedFileIds.add(file.file_id);
 
     if (file.metadata.fileIdentifier) {
       const [path, queryString] = file.metadata.fileIdentifier.split('?');
@@ -452,6 +466,45 @@ const primeFiles = async (options, apiKey) => {
       }
       sessions.set(session_id, true);
       pushFile();
+      continue;
+    }
+
+    if (isSpreadsheetFile(file)) {
+      try {
+        const { getDownloadStream } = getStrategyFunctions(file.source);
+        const { handleFileUpload: uploadCodeEnvFile } = getStrategyFunctions(FileSources.execute_code);
+        const stream = await getDownloadStream(options.req, file.filepath);
+        const fileIdentifier = await uploadCodeEnvFile({
+          req: options.req,
+          stream,
+          filename: file.filename,
+          apiKey,
+        });
+
+        const updatedMetadata = {
+          ...file.metadata,
+          fileIdentifier,
+        };
+
+        await updateFile({
+          file_id: file.file_id,
+          metadata: updatedMetadata,
+        });
+
+        const [path] = fileIdentifier.split('?');
+        const [session_id, id] = path.split('/');
+        if (!toolContext) {
+          toolContext = `- Note: The following files are available in the "${Tools.execute_code}" tool environment:`;
+        }
+        toolContext += `\n\t- /mnt/data/${file.filename} (attached spreadsheet)`;
+        files.push({
+          id,
+          session_id,
+          name: file.filename,
+        });
+      } catch (error) {
+        logger.error(`Error uploading spreadsheet ${file.filename} to code environment: ${error.message}`, error);
+      }
     }
   }
 

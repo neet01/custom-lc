@@ -14,6 +14,7 @@ const { processFileURL, uploadImageBuffer } = require('~/server/services/Files/p
 const { processCodeOutput } = require('~/server/services/Files/Code/process');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { loadTools } = require('~/app/clients/tools/util');
+const { availableTools } = require('~/app/clients/tools');
 
 const fieldsMap = {
   [Tools.execute_code]: [EnvVar.CODE_API_KEY],
@@ -22,6 +23,13 @@ const fieldsMap = {
 const toolAccessPermType = {
   [Tools.execute_code]: PermissionTypes.RUN_CODE,
 };
+
+const availableToolKeys = new Set([
+  ...availableTools.map((tool) => tool.pluginKey),
+  Tools.execute_code,
+  Tools.file_search,
+  Tools.web_search,
+]);
 
 /**
  * Verifies web search authentication, ensuring each category has at least
@@ -64,6 +72,12 @@ const verifyToolAuth = async (req, res) => {
     const { toolId } = req.params;
     if (toolId === Tools.web_search) {
       return await verifyWebSearchAuth(req, res);
+    }
+    if (availableToolKeys.has(toolId) && !fieldsMap[toolId]) {
+      return res.status(200).json({
+        authenticated: true,
+        message: AuthType.SYSTEM_DEFINED,
+      });
     }
     const authFields = fieldsMap[toolId];
     if (!authFields) {
@@ -111,7 +125,7 @@ const callTool = async (req, res) => {
   try {
     const appConfig = req.config;
     const { toolId = '' } = req.params;
-    if (!fieldsMap[toolId]) {
+    if (!availableToolKeys.has(toolId)) {
       logger.warn(`[${toolId}/call] User ${req.user.id} attempted call to invalid tool`);
       res.status(404).json({ message: 'Tool not found' });
       return;
@@ -181,12 +195,32 @@ const callTool = async (req, res) => {
       user: req.user.id,
     };
 
-    if (!artifact || !artifact.files || toolId !== Tools.execute_code) {
+    if (!artifact || !artifact.files) {
       createToolCall(toolCallData).catch((error) => {
         logger.error(`Error creating tool call: ${error.message}`);
       });
       return res.status(200).json({
         result: content,
+      });
+    }
+
+    const isCodeTool = toolId === Tools.execute_code;
+    if (!isCodeTool) {
+      const attachments = artifact.files
+        .filter((file) => file?.file_id)
+        .map((file) => ({
+          ...file,
+          messageId,
+          toolCallId,
+          conversationId,
+        }));
+      toolCallData.attachments = attachments;
+      createToolCall(toolCallData).catch((error) => {
+        logger.error(`Error creating tool call: ${error.message}`);
+      });
+      return res.status(200).json({
+        result: content,
+        attachments,
       });
     }
 

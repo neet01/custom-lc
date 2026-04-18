@@ -301,6 +301,7 @@ if (cluster.isMaster) {
     app.use('/oauth', routes.oauth);
     app.use('/api/auth', routes.auth);
     app.use('/api/admin', routes.adminAuth);
+    app.use('/api/admin/issues', routes.adminIssues);
     app.use('/api/actions', routes.actions);
     app.use('/api/keys', routes.keys);
     app.use('/api/api-keys', routes.apiKeys);
@@ -317,6 +318,7 @@ if (cluster.isMaster) {
     app.use('/api/config', preAuthTenantMiddleware, optionalJwtAuth, routes.config);
     app.use('/api/assistants', routes.assistants);
     app.use('/api/files', await routes.files.initialize());
+    app.use('/api/issues', routes.issues);
     app.use('/images/', createValidateImageRequest(appConfig.secureImageLinks), routes.staticRoute);
     app.use('/api/share', routes.share);
     app.use('/api/roles', routes.roles);

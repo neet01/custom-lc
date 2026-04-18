@@ -98,6 +98,13 @@
     "authConfig": []
   },
   {
+    "name": "Word Document Transform",
+    "pluginKey": "word_document_transform",
+    "description": "Inspect attached .docx files and create rewritten or redacted Word documents that are returned as downloadable files in chat.",
+    "icon": "assets/calculator.svg",
+    "authConfig": []
+  },
+  {
     "name": "Stable Diffusion",
     "pluginKey": "stable-diffusion",
     "description": "Generate photo-realistic images given any text input.",

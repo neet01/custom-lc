@@ -5,6 +5,7 @@ const adminAuth = require('./admin/auth');
 const adminConfig = require('./admin/config');
 const adminGrants = require('./admin/grants');
 const adminGroups = require('./admin/groups');
+const adminIssues = require('./admin/issues');
 const adminRoles = require('./admin/roles');
 const adminUsage = require('./admin/usage');
 const adminUsers = require('./admin/users');
@@ -26,6 +27,7 @@ const agents = require('./agents');
 const roles = require('./roles');
 const oauth = require('./oauth');
 const files = require('./files');
+const issues = require('./issues');
 const share = require('./share');
 const tags = require('./tags');
 const auth = require('./auth');
@@ -40,6 +42,7 @@ module.exports = {
   adminConfig,
   adminGrants,
   adminGroups,
+  adminIssues,
   adminRoles,
   adminUsage,
   adminUsers,
@@ -50,6 +53,7 @@ module.exports = {
   roles,
   oauth,
   files,
+  issues,
   share,
   banner,
   agents,

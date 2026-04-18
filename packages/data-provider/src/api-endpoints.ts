@@ -201,6 +201,11 @@ export const adminUsage = (params: q.AdminUsageListParams = {}) =>
 export const adminUsageSummary = (params: q.AdminUsageSummaryParams = {}) =>
   `${BASE_URL}/api/admin/usage/summary${buildQuery(params as Record<string, unknown>)}`;
 
+export const issues = () => `${BASE_URL}/api/issues`;
+
+export const adminIssues = (params: q.AdminIssuesListParams = {}) =>
+  `${BASE_URL}/api/admin/issues${buildQuery(params as Record<string, unknown>)}`;
+
 export const plugins = () => `${BASE_URL}/api/plugins`;
 
 export const mcpReinitialize = (serverName: string) =>

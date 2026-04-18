@@ -45,6 +45,11 @@ const {
   createSpreadsheetTool,
   primeFiles: primeSpreadsheetFiles,
 } = require('./spreadsheet');
+const {
+  WORD_DOCUMENT_TOOL_NAME,
+  createWordDocumentTool,
+  primeFiles: primeWordDocumentFiles,
+} = require('./wordDocument');
 const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
 const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
@@ -338,6 +343,22 @@ const loadTools = async ({
           toolContextMap[tool] = toolContext;
         }
         return createSpreadsheetTool({
+          req: options.req,
+          res: options.res,
+          files,
+        });
+      };
+      continue;
+    } else if (tool === WORD_DOCUMENT_TOOL_NAME) {
+      requestedTools[tool] = async () => {
+        const { files, toolContext } = await primeWordDocumentFiles({
+          ...options,
+          agentId: agent?.id,
+        });
+        if (toolContext) {
+          toolContextMap[tool] = toolContext;
+        }
+        return createWordDocumentTool({
           req: options.req,
           res: options.res,
           files,

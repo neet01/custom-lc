@@ -6,6 +6,7 @@ import { useGenerationsByLatest, useLocalize } from '~/hooks';
 import { Fork } from '~/components/Conversations';
 import MessageAudio from './MessageAudio';
 import Feedback from './Feedback';
+import ReportIssueButton from './ReportIssueButton';
 import { cn } from '~/utils';
 import store from '~/store';
 
@@ -171,6 +172,14 @@ const HoverButtons = ({
             isLast={isLast}
           />
         )}
+        {!isCreatedByUser && (
+          <ReportIssueButton
+            conversation={conversation}
+            message={message}
+            isLast={isLast}
+            alwaysVisible={true}
+          />
+        )}
       </div>
     );
   }
@@ -246,6 +255,10 @@ const HoverButtons = ({
       {/* Feedback Buttons */}
       {!isCreatedByUser && handleFeedback != null && (
         <Feedback handleFeedback={handleFeedback} feedback={message.feedback} isLast={isLast} />
+      )}
+
+      {!isCreatedByUser && (
+        <ReportIssueButton conversation={conversation} message={message} isLast={isLast} />
       )}
 
       {/* Regenerate Button */}

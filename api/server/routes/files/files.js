@@ -36,6 +36,10 @@ const {
   isSpreadsheetTransformable,
 } = require('~/server/services/Files/Spreadsheets/transform');
 const { transformSpreadsheetFile } = require('~/server/services/Files/Spreadsheets/service');
+const {
+  isWordDocumentTransformable,
+} = require('~/server/services/Files/WordDocuments/transform');
+const { transformWordDocumentFile } = require('~/server/services/Files/WordDocuments/service');
 const { getLogStores } = require('~/cache');
 const { Readable } = require('stream');
 const db = require('~/models');
@@ -408,6 +412,46 @@ router.post('/:file_id/transform/spreadsheet', fileAccess, async (req, res) => {
     return res.status(400).json({
       error: 'Bad Request',
       message: error.message ?? 'Failed to transform spreadsheet',
+    });
+  }
+});
+
+router.post('/:file_id/transform/word-document', fileAccess, async (req, res) => {
+  try {
+    const sourceFile = req.fileAccess.file;
+
+    if (!isWordDocumentTransformable(sourceFile.type)) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: `File "${sourceFile.filename}" is not a supported Word document type`,
+      });
+    }
+
+    const transformed = await transformWordDocumentFile({
+      req,
+      res,
+      sourceFile,
+      replaceText: req.body.replaceText,
+      redactPhrases: req.body.redactPhrases,
+      redactionText: req.body.redactionText,
+      prependText: req.body.prependText,
+      appendText: req.body.appendText,
+      replacementText: req.body.replacementText,
+      outputFilename: req.body.outputFilename,
+      conversationId: req.body.conversationId,
+      messageId: req.body.messageId,
+    });
+
+    return res.status(200).json({
+      message: 'Word document transformed successfully',
+      file: transformed.file,
+      summary: transformed.summary,
+    });
+  } catch (error) {
+    logger.error('[POST /files/:file_id/transform/word-document] Error transforming Word document:', error);
+    return res.status(400).json({
+      error: 'Bad Request',
+      message: error.message ?? 'Failed to transform Word document',
     });
   }
 });

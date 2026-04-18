@@ -6,6 +6,7 @@ export * from './schema';
 export * from './utils';
 export { createModels } from './models';
 export type { IUsage } from './schema/usage';
+export type { IIssueReport } from './schema/issueReport';
 export {
   createMethods,
   RoleConflictError,

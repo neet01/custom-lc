@@ -2,11 +2,17 @@ import React, { useMemo, useState } from 'react';
 import { Spinner } from '@librechat/client';
 import { SystemRoles } from 'librechat-data-provider';
 import type {
+  AdminIssueReportItem,
   AdminUsageListItem,
   AdminUsageSummaryItem,
   AdminUserListItem,
 } from 'librechat-data-provider';
-import { useAdminUsageQuery, useAdminUsageSummaryQuery, useAdminUsersQuery } from '~/data-provider';
+import {
+  useAdminIssuesQuery,
+  useAdminUsageQuery,
+  useAdminUsageSummaryQuery,
+  useAdminUsersQuery,
+} from '~/data-provider';
 import { useAuthContext } from '~/hooks';
 import { formatDate } from '~/utils';
 
@@ -99,6 +105,12 @@ function Admin() {
       enabled: isAdmin,
     },
   );
+  const issuesQuery = useAdminIssuesQuery(
+    { limit: 15, status: 'open' },
+    {
+      enabled: isAdmin,
+    },
+  );
 
   const summaryByUser = useMemo(() => {
     const usage = summaryQuery.data?.users ?? [];
@@ -131,10 +143,19 @@ function Admin() {
     });
   }, [summaryByUser, usersQuery.data?.users]);
 
-  const isLoading = usersQuery.isLoading || summaryQuery.isLoading || recentUsageQuery.isLoading;
-  const hasError = usersQuery.isError || summaryQuery.isError || recentUsageQuery.isError;
+  const isLoading =
+    usersQuery.isLoading ||
+    summaryQuery.isLoading ||
+    recentUsageQuery.isLoading ||
+    issuesQuery.isLoading;
+  const hasError =
+    usersQuery.isError ||
+    summaryQuery.isError ||
+    recentUsageQuery.isError ||
+    issuesQuery.isError;
   const overview = summaryQuery.data?.overview;
   const recentUsage = recentUsageQuery.data?.usage ?? [];
+  const openIssues = issuesQuery.data?.issues ?? [];
 
   if (!isAdmin) {
     return (
@@ -303,6 +324,61 @@ function Admin() {
                     <tr>
                       <td colSpan={7} className="py-6 text-center text-text-secondary">
                         No usage records have been captured yet.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </TableShell>
+
+          <TableShell
+            title="Reported issues"
+            description="Open user reports for bad responses, MCP failures, and file transformation problems."
+          >
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-border-medium text-left">
+                <thead>
+                  <tr className="text-xs uppercase tracking-wide text-text-secondary">
+                    <th className="py-2 pr-4 font-medium">Reporter</th>
+                    <th className="py-2 pr-4 font-medium">Category</th>
+                    <th className="py-2 pr-4 font-medium">Context</th>
+                    <th className="py-2 pr-4 font-medium">Notes</th>
+                    <th className="py-2 pr-4 font-medium">Created</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-light">
+                  {openIssues.map((issue: AdminIssueReportItem) => (
+                    <tr key={issue.id} className="align-top">
+                      <td className="py-3 pr-4">
+                        <div className="font-medium text-text-primary">
+                          {issue.reporterName || issue.reporterEmail || issue.userId}
+                        </div>
+                        <div className="text-xs text-text-secondary">{issue.reporterEmail}</div>
+                      </td>
+                      <td className="py-3 pr-4 text-text-secondary">{issue.category}</td>
+                      <td className="py-3 pr-4 text-text-secondary">
+                        <div>{issue.model || issue.endpoint || 'General chat'}</div>
+                        <div className="mt-1 text-xs">
+                          {issue.mcpServer || issue.toolName || issue.error
+                            ? 'Execution issue'
+                            : 'Response issue'}
+                        </div>
+                      </td>
+                      <td className="py-3 pr-4">
+                        <div className="max-w-md text-text-primary">
+                          {issue.description || issue.messagePreview || 'No notes provided'}
+                        </div>
+                      </td>
+                      <td className="py-3 pr-4 text-text-secondary">
+                        {issue.createdAt ? formatDate(issue.createdAt) : 'n/a'}
+                      </td>
+                    </tr>
+                  ))}
+                  {openIssues.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-text-secondary">
+                        No open issue reports yet.
                       </td>
                     </tr>
                   ) : null}

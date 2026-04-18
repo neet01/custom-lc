@@ -334,3 +334,87 @@ export type AdminUsageSummaryResponse = {
   offset?: number;
   days: number;
 };
+
+export type IssueReportCategory =
+  | 'bad_response'
+  | 'faulty_mcp_tool'
+  | 'bad_file_transformation'
+  | 'timeout_or_error'
+  | 'auth_or_permissions'
+  | 'other';
+
+export type IssueReportStatus = 'open' | 'triaged' | 'resolved';
+
+export type IssueReportCreateRequest = {
+  conversationId: string;
+  messageId: string;
+  category: IssueReportCategory;
+  description?: string;
+  model?: string;
+  endpoint?: string;
+  messagePreview?: string;
+  error?: boolean;
+  fileIds?: string[];
+  toolName?: string;
+  mcpServer?: string;
+};
+
+export type IssueReportCreateResponse = {
+  issue: {
+    id: string;
+    userId: string;
+    conversationId: string;
+    messageId: string;
+    category: IssueReportCategory;
+    status: IssueReportStatus;
+    description?: string;
+    model?: string;
+    endpoint?: string;
+    messagePreview?: string;
+    error?: boolean;
+    fileIds?: string[];
+    toolName?: string;
+    mcpServer?: string;
+    createdAt?: string;
+    updatedAt?: string;
+  };
+};
+
+export type AdminIssuesListParams = {
+  user_id?: string;
+  conversation_id?: string;
+  category?: IssueReportCategory;
+  status?: IssueReportStatus;
+  limit?: number;
+  offset?: number;
+};
+
+export type AdminIssueReportItem = {
+  id: string;
+  userId: string;
+  reporterName: string;
+  reporterEmail: string;
+  reporterAvatar: string;
+  reporterRole: string;
+  conversationId: string;
+  messageId: string;
+  category: IssueReportCategory;
+  status: IssueReportStatus;
+  description?: string;
+  model?: string;
+  endpoint?: string;
+  messagePreview?: string;
+  error?: boolean;
+  fileIds?: string[];
+  toolName?: string;
+  mcpServer?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdminIssuesListResponse = {
+  issues: AdminIssueReportItem[];
+  total: number;
+  limit: number;
+  offset?: number;
+};

@@ -188,3 +188,32 @@ export type AdminUsageSummaryItem = {
   firstSeenAt?: string;
   lastSeenAt?: string;
 };
+
+export type AdminIssueReportItem = {
+  id: string;
+  userId: string;
+  reporterName: string;
+  reporterEmail: string;
+  reporterAvatar: string;
+  reporterRole: string;
+  conversationId: string;
+  messageId: string;
+  category:
+    | 'bad_response'
+    | 'faulty_mcp_tool'
+    | 'bad_file_transformation'
+    | 'timeout_or_error'
+    | 'auth_or_permissions'
+    | 'other';
+  status: 'open' | 'triaged' | 'resolved';
+  description?: string;
+  model?: string;
+  endpoint?: string;
+  messagePreview?: string;
+  error?: boolean;
+  fileIds?: string[];
+  toolName?: string;
+  mcpServer?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};

@@ -131,6 +131,18 @@ export function getAdminUsageSummary(
   return request.get(endpoints.adminUsageSummary(params));
 }
 
+export function createIssueReport(
+  payload: q.IssueReportCreateRequest,
+): Promise<q.IssueReportCreateResponse> {
+  return request.post(endpoints.issues(), payload);
+}
+
+export function getAdminIssues(
+  params: q.AdminIssuesListParams = {},
+): Promise<q.AdminIssuesListResponse> {
+  return request.get(endpoints.adminIssues(params));
+}
+
 export function getUserBalance(): Promise<t.TBalanceResponse> {
   return request.get(endpoints.balance());
 }

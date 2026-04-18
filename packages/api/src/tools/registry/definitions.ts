@@ -417,6 +417,76 @@ export const spreadsheetTransformSchema: ExtendedJsonSchema = {
   required: ['action'],
 };
 
+export const wordDocumentTransformSchema: ExtendedJsonSchema = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['inspect', 'transform'],
+      description:
+        'Use "inspect" to understand the attached .docx document. Use "transform" to create a new downloadable Word document file.',
+    },
+    file_id: {
+      type: 'string',
+      description:
+        'The exact LibreChat file_id for the .docx document to inspect or transform. Prefer this when available.',
+    },
+    file_name: {
+      type: 'string',
+      description:
+        'The Word document filename when file_id is not known. Must match one of the attached .docx files.',
+    },
+    replaceText: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          find: { type: 'string' },
+          replace: { type: 'string' },
+        },
+        required: ['find', 'replace'],
+      },
+      description: 'For transform: exact text replacements to apply throughout the document.',
+    },
+    redactPhrases: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'For transform: exact phrases to replace with the redaction text throughout the document.',
+    },
+    redactionText: {
+      type: 'string',
+      description: 'For transform: custom replacement text for redacted phrases.',
+    },
+    prependText: {
+      type: 'string',
+      description: 'For transform: text to insert at the beginning of the generated document.',
+    },
+    appendText: {
+      type: 'string',
+      description: 'For transform: text to append to the end of the generated document.',
+    },
+    replacementText: {
+      type: 'string',
+      description:
+        'For transform: full replacement body for the new document. Use this when rewriting the entire document.',
+    },
+    outputFilename: {
+      type: 'string',
+      description:
+        'Optional output filename for the generated .docx file. The .docx extension is enforced automatically.',
+    },
+    maxPreviewParagraphs: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 10,
+      description:
+        'For inspect: number of paragraphs to preview from the document. Defaults to 5 and maxes out at 10.',
+    },
+  },
+  required: ['action'],
+};
+
 /** Tool definitions registry - maps tool names to their definitions */
 export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   google: {
@@ -496,6 +566,14 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
     description:
       'Inspect attached spreadsheets and create downloadable spreadsheet exports directly in chat. Use this to inspect workbook structure, remove columns, keep only selected columns, or redact sensitive spreadsheet data.',
     schema: spreadsheetTransformSchema,
+    toolType: 'builtin',
+    responseFormat: 'content_and_artifact',
+  },
+  word_document_transform: {
+    name: 'word_document_transform',
+    description:
+      'Inspect attached .docx files and create downloadable Word document exports directly in chat. Use this to preview document content, redact phrases, replace text, or generate a rewritten .docx file.',
+    schema: wordDocumentTransformSchema,
     toolType: 'builtin',
     responseFormat: 'content_and_artifact',
   },

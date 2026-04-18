@@ -44,6 +44,7 @@ import {
 } from './tx';
 import { createTransactionMethods, type TransactionMethods } from './transaction';
 import { createSpendTokensMethods, type SpendTokensMethods } from './spendTokens';
+import { createIssueReportMethods, type IssueReportMethods } from './issueReport';
 import {
   createUsageMethods,
   type UsageMethods,
@@ -88,6 +89,7 @@ export type AllMethods = UserMethods &
   TxMethods &
   TransactionMethods &
   SpendTokensMethods &
+  IssueReportMethods &
   UsageMethods &
   PromptMethods &
   AgentMethods &
@@ -136,6 +138,7 @@ export function createMethods(
     createStructuredTransaction: transactionMethods.createStructuredTransaction,
   });
 
+  const issueReportMethods = createIssueReportMethods(mongoose);
   const usageMethods = createUsageMethods(mongoose);
 
   const messageMethods = createMessageMethods(mongoose);
@@ -211,6 +214,7 @@ export function createMethods(
     ...txMethods,
     ...transactionMethods,
     ...spendTokensMethods,
+    ...issueReportMethods,
     ...usageMethods,
     ...promptMethods,
     /* Tier 5 */

@@ -61,3 +61,22 @@ export const useAdminUsageSummaryQuery = (
     },
   );
 };
+
+export const useAdminIssuesQuery = (
+  params: t.AdminIssuesListParams = {},
+  config?: UseQueryOptions<t.AdminIssuesListResponse>,
+): QueryObserverResult<t.AdminIssuesListResponse> => {
+  const queriesEnabled = useRecoilValue<boolean>(store.queriesEnabled);
+
+  return useQuery<t.AdminIssuesListResponse>(
+    [QueryKeys.adminIssues, params],
+    () => dataService.getAdminIssues(params),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+      enabled: (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};

@@ -61,6 +61,7 @@ export enum QueryKeys {
   adminUsers = 'adminUsers',
   adminUsage = 'adminUsage',
   adminUsageSummary = 'adminUsageSummary',
+  adminIssues = 'adminIssues',
   /* MCP Servers */
   mcpServers = 'mcpServers',
   mcpServer = 'mcpServer',

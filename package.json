@@ -95,7 +95,8 @@
     "migrate:prompt-permissions:dry-run": "node config/migrate-prompt-permissions.js --dry-run",
     "migrate:prompt-permissions": "node config/migrate-prompt-permissions.js",
     "migrate:prompt-permissions:batch": "node config/migrate-prompt-permissions.js --batch-size=50",
-    "migrate:usage-records": "node config/migrate-usage-records.js"
+    "migrate:usage-records": "node config/migrate-usage-records.js",
+    "migrate:issue-reports": "node config/migrate-issue-reports.js"
   },
   "repository": {
     "type": "git",

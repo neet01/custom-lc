@@ -56,6 +56,14 @@ const {
 } = require('~/server/services/Config');
 const { processFileURL, uploadImageBuffer } = require('~/server/services/Files/process');
 const { primeFiles: primeSearchFiles } = require('~/app/clients/tools/util/fileSearch');
+const {
+  SPREADSHEET_TOOL_NAME,
+  primeFiles: primeSpreadsheetFiles,
+} = require('~/app/clients/tools/util/spreadsheet');
+const {
+  WORD_DOCUMENT_TOOL_NAME,
+  primeFiles: primeWordDocumentFiles,
+} = require('~/app/clients/tools/util/wordDocument');
 const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
 const { manifestToolMap, toolkits } = require('~/app/clients/tools/manifest');
 const { createOnSearchResults } = require('~/server/services/Tools/search');
@@ -96,6 +104,50 @@ const normalizeActionToolName = (toolName) => {
   const encodedDomain = toolName.slice(prefixEnd);
   return toolName.slice(0, prefixEnd) + encodedDomain.replace(domainSeparatorRegex, '_');
 };
+
+async function resolveImplicitDocumentTools({ req, tool_resources, agentId }) {
+  const toolNames = [];
+  const toolContextMap = {};
+
+  try {
+    const { files, toolContext } = await primeSpreadsheetFiles({
+      req,
+      tool_resources,
+      agentId,
+    });
+
+    if ((files?.length ?? 0) > 0) {
+      toolNames.push(SPREADSHEET_TOOL_NAME);
+      if (toolContext) {
+        toolContextMap[SPREADSHEET_TOOL_NAME] = toolContext;
+      }
+    }
+  } catch (error) {
+    logger.error('[resolveImplicitDocumentTools] Error priming spreadsheet files:', error);
+  }
+
+  try {
+    const { files, toolContext } = await primeWordDocumentFiles({
+      req,
+      tool_resources,
+      agentId,
+    });
+
+    if ((files?.length ?? 0) > 0) {
+      toolNames.push(WORD_DOCUMENT_TOOL_NAME);
+      if (toolContext) {
+        toolContextMap[WORD_DOCUMENT_TOOL_NAME] = toolContext;
+      }
+    }
+  } catch (error) {
+    logger.error('[resolveImplicitDocumentTools] Error priming Word document files:', error);
+  }
+
+  return {
+    toolNames,
+    toolContextMap,
+  };
+}
 
 /**
  * Populate a `toolToAction` map with one slot per fully-qualified tool
@@ -529,16 +581,7 @@ const isBuiltInTool = (toolName) =>
  * }>}
  */
 async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, tool_resources }) {
-  if (!agent.tools || agent.tools.length === 0) {
-    return { toolDefinitions: [] };
-  }
-
-  if (
-    agent.tools.length === 1 &&
-    (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr)
-  ) {
-    return { toolDefinitions: [] };
-  }
+  const explicitTools = agent.tools ?? [];
 
   const appConfig = req.config;
   const enabledCapabilities = await resolveAgentCapabilities(req, appConfig, agent.id);
@@ -548,7 +591,29 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
   const actionsEnabled = checkCapability(AgentCapabilities.actions);
   const deferredToolsEnabled = checkCapability(AgentCapabilities.deferred_tools);
 
-  const filteredTools = agent.tools?.filter((tool) => {
+  const { toolNames: implicitDocumentTools, toolContextMap: implicitDocumentToolContextMap } =
+    areToolsEnabled
+      ? await resolveImplicitDocumentTools({
+          req,
+          tool_resources,
+          agentId: agent.id,
+        })
+      : { toolNames: [], toolContextMap: {} };
+
+  const mergedTools = Array.from(new Set([...explicitTools, ...implicitDocumentTools]));
+
+  if (mergedTools.length === 0) {
+    return { toolDefinitions: [] };
+  }
+
+  if (
+    mergedTools.length === 1 &&
+    (mergedTools[0] === AgentCapabilities.context || mergedTools[0] === AgentCapabilities.ocr)
+  ) {
+    return { toolDefinitions: [] };
+  }
+
+  const filteredTools = mergedTools.filter((tool) => {
     if (tool === Tools.file_search) {
       return checkCapability(AgentCapabilities.file_search);
     }
@@ -573,9 +638,9 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
 
   /** @type {Record<string, Record<string, string>>} */
   let userMCPAuthMap;
-  if (agent.tools?.some((t) => t.includes(Constants.mcp_delimiter))) {
+  if (mergedTools.some((t) => t.includes(Constants.mcp_delimiter))) {
     userMCPAuthMap = await getUserMCPAuthMap({
-      tools: agent.tools,
+      tools: mergedTools,
       userId: req.user.id,
       findPluginAuthsByKeys,
     });
@@ -787,7 +852,7 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
   }
 
   /** @type {Record<string, string>} */
-  const toolContextMap = {};
+  const toolContextMap = { ...implicitDocumentToolContextMap };
   const hasWebSearch = filteredTools.includes(Tools.web_search);
   const hasFileSearch = filteredTools.includes(Tools.file_search);
   const hasExecuteCode = filteredTools.includes(Tools.execute_code);
@@ -899,16 +964,7 @@ async function loadAgentTools({
     return loadToolDefinitionsWrapper({ req, res, agent, streamId, tool_resources });
   }
 
-  if (!agent.tools || agent.tools.length === 0) {
-    return { toolDefinitions: [] };
-  } else if (
-    agent.tools &&
-    agent.tools.length === 1 &&
-    /** Legacy handling for `ocr` as may still exist in existing Agents */
-    (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr)
-  ) {
-    return { toolDefinitions: [] };
-  }
+  const explicitTools = agent.tools ?? [];
 
   const appConfig = req.config;
   const enabledCapabilities = await resolveAgentCapabilities(req, appConfig, agent.id);
@@ -930,8 +986,28 @@ async function loadAgentTools({
   const areToolsEnabled = checkCapability(AgentCapabilities.tools);
   const actionsEnabled = checkCapability(AgentCapabilities.actions);
 
+  const { toolNames: implicitDocumentTools } = areToolsEnabled
+    ? await resolveImplicitDocumentTools({
+        req,
+        tool_resources,
+        agentId: agent.id,
+      })
+    : { toolNames: [] };
+
+  const mergedTools = Array.from(new Set([...explicitTools, ...implicitDocumentTools]));
+
+  if (mergedTools.length === 0) {
+    return { toolDefinitions: [] };
+  } else if (
+    mergedTools.length === 1 &&
+    /** Legacy handling for `ocr` as may still exist in existing Agents */
+    (mergedTools[0] === AgentCapabilities.context || mergedTools[0] === AgentCapabilities.ocr)
+  ) {
+    return { toolDefinitions: [] };
+  }
+
   let includesWebSearch = false;
-  const _agentTools = agent.tools?.filter((tool) => {
+  const _agentTools = mergedTools.filter((tool) => {
     if (tool === Tools.file_search) {
       return checkCapability(AgentCapabilities.file_search);
     } else if (tool === Tools.execute_code) {
@@ -958,9 +1034,9 @@ async function loadAgentTools({
 
   /** @type {Record<string, Record<string, string>>} */
   let userMCPAuthMap;
-  if (agent.tools?.some((t) => t.includes(Constants.mcp_delimiter))) {
+  if (mergedTools.some((t) => t.includes(Constants.mcp_delimiter))) {
     userMCPAuthMap = await getUserMCPAuthMap({
-      tools: agent.tools,
+      tools: mergedTools,
       userId: req.user.id,
       findPluginAuthsByKeys,
     });

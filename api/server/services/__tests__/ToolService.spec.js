@@ -51,6 +51,16 @@ jest.mock('~/server/services/Files/process', () => ({
 jest.mock('~/app/clients/tools/util/fileSearch', () => ({
   primeFiles: jest.fn().mockResolvedValue({}),
 }));
+const mockPrimeSpreadsheetFiles = jest.fn().mockResolvedValue({});
+jest.mock('~/app/clients/tools/util/spreadsheet', () => ({
+  SPREADSHEET_TOOL_NAME: 'spreadsheet_transform',
+  primeFiles: (...args) => mockPrimeSpreadsheetFiles(...args),
+}));
+const mockPrimeWordDocumentFiles = jest.fn().mockResolvedValue({});
+jest.mock('~/app/clients/tools/util/wordDocument', () => ({
+  WORD_DOCUMENT_TOOL_NAME: 'word_document_transform',
+  primeFiles: (...args) => mockPrimeWordDocumentFiles(...args),
+}));
 jest.mock('~/server/services/Files/Code/process', () => ({
   primeFiles: jest.fn().mockResolvedValue({}),
 }));
@@ -106,6 +116,8 @@ function createEndpointsConfig(capabilities) {
 describe('ToolService - Action Capability Gating', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockPrimeSpreadsheetFiles.mockResolvedValue({});
+    mockPrimeWordDocumentFiles.mockResolvedValue({});
     mockLoadToolDefinitions.mockResolvedValue({
       toolDefinitions: [],
       toolRegistry: new Map(),
@@ -259,6 +271,51 @@ describe('ToolService - Action Capability Gating', () => {
 
       expect(result.actionsEnabled).toBe(false);
     });
+
+    it('should implicitly include word document transform for attached .docx files', async () => {
+      const capabilities = [AgentCapabilities.tools];
+      const req = createMockReq(capabilities);
+      mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
+      mockPrimeWordDocumentFiles.mockResolvedValue({
+        files: [{ file_id: 'file_docx_1', filename: 'draft.docx' }],
+        toolContext: '- Note: Use the word_document_transform tool.',
+      });
+
+      const result = await loadAgentTools({
+        req,
+        res: {},
+        agent: { id: 'agent_123', tools: [] },
+        definitionsOnly: true,
+      });
+
+      expect(mockLoadToolDefinitions).toHaveBeenCalledTimes(1);
+      const [callArgs] = mockLoadToolDefinitions.mock.calls[0];
+      expect(callArgs.tools).toContain('word_document_transform');
+      expect(result.toolContextMap.word_document_transform).toContain(
+        'word_document_transform',
+      );
+    });
+
+    it('should implicitly include spreadsheet transform for attached spreadsheet files', async () => {
+      const capabilities = [AgentCapabilities.tools];
+      const req = createMockReq(capabilities);
+      mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
+      mockPrimeSpreadsheetFiles.mockResolvedValue({
+        files: [{ file_id: 'file_xlsx_1', filename: 'runway.xlsx' }],
+        toolContext: '- Note: Use the spreadsheet_transform tool.',
+      });
+
+      await loadAgentTools({
+        req,
+        res: {},
+        agent: { id: 'agent_123', tools: [] },
+        definitionsOnly: true,
+      });
+
+      expect(mockLoadToolDefinitions).toHaveBeenCalledTimes(1);
+      const [callArgs] = mockLoadToolDefinitions.mock.calls[0];
+      expect(callArgs.tools).toContain('spreadsheet_transform');
+    });
   });
 
   describe('loadAgentTools (definitionsOnly=false) — action tool filtering', () => {
@@ -293,6 +350,32 @@ describe('ToolService - Action Capability Gating', () => {
       });
 
       expect(mockLoadActionSets).toHaveBeenCalledWith({ agent_id: 'agent_123' });
+    });
+
+    it('should pass implicitly detected document tools to the runtime tool loader', async () => {
+      const capabilities = [AgentCapabilities.tools];
+      const req = createMockReq(capabilities);
+      mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
+      mockPrimeWordDocumentFiles.mockResolvedValue({
+        files: [{ file_id: 'file_docx_1', filename: 'proposal.docx' }],
+        toolContext: '- Note: Use the word_document_transform tool.',
+      });
+      mockPrimeSpreadsheetFiles.mockResolvedValue({
+        files: [{ file_id: 'file_xlsx_1', filename: 'forecast.xlsx' }],
+        toolContext: '- Note: Use the spreadsheet_transform tool.',
+      });
+
+      await loadAgentTools({
+        req,
+        res: {},
+        agent: { id: 'agent_123', tools: [] },
+        definitionsOnly: false,
+      });
+
+      expect(mockLoadToolsUtil).toHaveBeenCalledTimes(1);
+      const [callArgs] = mockLoadToolsUtil.mock.calls[0];
+      expect(callArgs.tools).toContain('word_document_transform');
+      expect(callArgs.tools).toContain('spreadsheet_transform');
     });
   });
 

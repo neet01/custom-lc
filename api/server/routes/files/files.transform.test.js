@@ -68,12 +68,12 @@ describe('Spreadsheet transform route', () => {
     );
   });
 
-  async function invokeRoute({ testFile, body }) {
+  async function invokeRoute({ testFile, body, config = { fileStrategy: FileSources.local } }) {
     const req = {
       params: { file_id: 'source-file-1' },
       body,
       user: { id: 'user-123', role: SystemRoles.USER },
-      config: { fileStrategy: FileSources.local },
+      config,
       app: { locals: { testFile } },
     };
 
@@ -142,6 +142,51 @@ describe('Spreadsheet transform route', () => {
         type: 'text/csv',
         conversationId: 'convo-1',
         messageId: 'msg-1',
+      }),
+      true,
+    );
+  });
+
+  it('falls back to local storage when request config does not declare a file strategy', async () => {
+    const csvData = Buffer.from(
+      ['Employee,Salary,Department', 'Alice,150000,Finance', 'Bob,120000,Operations'].join('\n'),
+      'utf8',
+    );
+    const saveBuffer = jest.fn().mockResolvedValue('/uploads/user-123/runway-transformed.csv');
+
+    getStrategyFunctions.mockImplementation((source) => {
+      if (source === FileSources.local) {
+        return {
+          getDownloadStream: jest.fn().mockResolvedValue(Readable.from([csvData])),
+          saveBuffer,
+        };
+      }
+
+      throw new Error(`unexpected source: ${source}`);
+    });
+
+    const { res } = await invokeRoute({
+      testFile: {
+        file_id: 'source-file-1',
+        filename: 'runway.csv',
+        filepath: '/uploads/user-123/runway.csv',
+        type: 'text/csv',
+        source: FileSources.local,
+        conversationId: 'convo-1',
+        messageId: 'msg-1',
+      },
+      body: {
+        removeColumns: ['Salary'],
+        outputFormat: 'csv',
+      },
+      config: {},
+    });
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(saveBuffer).toHaveBeenCalled();
+    expect(db.createFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: FileSources.local,
       }),
       true,
     );

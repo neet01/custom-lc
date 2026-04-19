@@ -54,6 +54,42 @@ async function getWordDocumentFileBuffer(req, res, file) {
   return streamToBuffer(stream);
 }
 
+function resolveGeneratedFileExportStrategy(req) {
+  const candidates = [
+    (() => {
+      try {
+        return getFileStrategy(req?.config ?? {}, { context: FileContext.message_attachment });
+      } catch (_error) {
+        return undefined;
+      }
+    })(),
+    req?.config?.fileStrategy,
+    FileSources.local,
+  ].filter(Boolean);
+
+  const checked = new Set();
+  for (const candidate of candidates) {
+    if (checked.has(candidate)) {
+      continue;
+    }
+    checked.add(candidate);
+
+    try {
+      const strategy = getStrategyFunctions(candidate);
+      if (strategy?.saveBuffer) {
+        return {
+          fileStrategy: candidate,
+          saveBuffer: strategy.saveBuffer,
+        };
+      }
+    } catch (_error) {
+      continue;
+    }
+  }
+
+  throw new Error('No valid file strategy available for generated Word document exports');
+}
+
 async function saveGeneratedWordDocument({
   req,
   sourceFile,
@@ -61,13 +97,7 @@ async function saveGeneratedWordDocument({
   conversationId,
   messageId,
 }) {
-  const fileStrategy = getFileStrategy(req.config, { context: FileContext.message_attachment });
-  const { saveBuffer } = getStrategyFunctions(fileStrategy);
-  if (!saveBuffer) {
-    throw new Error(
-      `File strategy "${fileStrategy}" does not support generated Word document exports`,
-    );
-  }
+  const { fileStrategy, saveBuffer } = resolveGeneratedFileExportStrategy(req);
 
   const outputFileId = uuidv4();
   const storedFileName = `${outputFileId}__${generated.filename}`;

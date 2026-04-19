@@ -3,6 +3,29 @@ import type { EndpointFileConfig, FileConfig } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
 import { validateFiles } from '../files';
 
+jest.mock('librechat-data-provider', () => {
+  const actual = jest.requireActual('librechat-data-provider');
+  return {
+    ...actual,
+    inferMimeType: jest.fn((fileName: string, currentType: string) => {
+      const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
+      if (
+        extension === 'docx' &&
+        (currentType === 'text/plain' || currentType === 'application/octet-stream')
+      ) {
+        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      }
+      if (
+        extension === 'xlsx' &&
+        (currentType === 'text/plain' || currentType === 'application/octet-stream')
+      ) {
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      }
+      return actual.inferMimeType(fileName, currentType);
+    }),
+  };
+});
+
 const supportedMimeTypes = defaultFileConfig.endpoints.default.supportedMimeTypes;
 
 function makeEndpointConfig(overrides: Partial<EndpointFileConfig> = {}): EndpointFileConfig {
@@ -96,6 +119,30 @@ describe('validateFiles', () => {
     const result = validateFiles({ files, fileList, setError, endpointFileConfig, fileConfig });
     expect(result).toBe(false);
     expect(setError).toHaveBeenCalledWith('Unsupported file type: application/x-unknown');
+  });
+
+  it('normalizes a generic browser MIME type for Word uploads', () => {
+    const fileList = [makeFile('proposal.docx', 'text/plain', 1024)];
+
+    const result = validateFiles({ files, fileList, setError, endpointFileConfig, fileConfig });
+
+    expect(result).toBe(true);
+    expect(fileList[0].type).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    expect(setError).not.toHaveBeenCalled();
+  });
+
+  it('normalizes a generic browser MIME type for spreadsheet uploads', () => {
+    const fileList = [makeFile('runway.xlsx', 'application/octet-stream', 1024)];
+
+    const result = validateFiles({ files, fileList, setError, endpointFileConfig, fileConfig });
+
+    expect(result).toBe(true);
+    expect(fileList[0].type).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    expect(setError).not.toHaveBeenCalled();
   });
 
   it('rejects when file size equals fileSizeLimit (>= comparison)', () => {

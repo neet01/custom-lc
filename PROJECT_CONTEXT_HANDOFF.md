@@ -13,6 +13,18 @@ It is meant to answer:
 
 This is broader than [ENTERPRISE_FEATURES_DEBUGGING.md](/Users/praneetkotah/Desktop/Development/LibreChat/ENTERPRISE_FEATURES_DEBUGGING.md:1), which is focused more on how to debug the custom features in this LibreChat fork.
 
+## Cross-Machine Note
+
+There may be temporary divergence between this local workspace and the user's work laptop.
+
+One specifically reported work-laptop fix was:
+
+- file outputs from native document tools were not being streamed back through `ToolService.js`
+- the fix added `FILE` handling in `packages/data-provider/src/types/runs.ts`
+- the fix also updated `api/server/services/ToolService.js` so tools like `word_document_transform` and `spreadsheet_transform` can return downloadable files to the UI instead of only pasting text in chat
+
+If document transforms work on one machine but not another, compare those files first before assuming the Word/spreadsheet services are broken.
+
 ## Project Goal
 
 This LibreChat fork is being turned into an internal enterprise AI platform, effectively an `EnterpriseGPT`, for a regulated environment.
@@ -273,6 +285,7 @@ Known limitation:
 
 - current implementation recreates a clean `.docx` from extracted text
 - it does not preserve complex source formatting, tables, comments, or tracked changes
+- if the backend document transform succeeds but the UI only shows pasted text, also inspect `ToolService.js` / run-content handling for file artifact streaming
 
 ### 7. Enterprise Debugging Guide
 
@@ -556,4 +569,3 @@ For native Word support:
 For request-level usage tracking:
 
 - see [packages/api/src/usage/service.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/api/src/usage/service.ts:1)
-

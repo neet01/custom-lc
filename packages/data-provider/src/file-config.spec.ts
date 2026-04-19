@@ -38,10 +38,40 @@ describe('inferMimeType', () => {
     expect(inferMimeType('code.js', '')).toBe('text/javascript');
     expect(inferMimeType('photo.heic', '')).toBe('image/heic');
     expect(inferMimeType('Main.java', '')).toBe('text/x-java');
+    expect(inferMimeType('proposal.docx', '')).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    expect(inferMimeType('runway.xlsx', '')).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
   });
 
   it('should return empty string for unknown extension with no browser type', () => {
     expect(inferMimeType('file.xyz', '')).toBe('');
+  });
+
+  it('should prefer extension-based office types over generic browser text/plain', () => {
+    expect(inferMimeType('proposal.docx', 'text/plain')).toBe(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    expect(inferMimeType('runway.xlsx', 'text/plain')).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    expect(inferMimeType('legacy.xls', 'application/octet-stream')).toBe(
+      'application/vnd.ms-excel',
+    );
+  });
+
+  it('should prefer extension-based markdown and csv types over generic browser types', () => {
+    expect(inferMimeType('notes.md', 'text/plain')).toBe('text/markdown');
+    expect(inferMimeType('metrics.csv', 'application/octet-stream')).toBe('text/csv');
+  });
+
+  it('should keep generic browser types when no better extension mapping exists', () => {
+    expect(inferMimeType('mystery.bin', 'application/octet-stream')).toBe(
+      'application/octet-stream',
+    );
+    expect(inferMimeType('README.unknown', 'text/plain')).toBe('text/plain');
   });
 
   it('should produce a type accepted by checkType after normalizing text/x-python-script', () => {

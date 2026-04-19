@@ -17,6 +17,7 @@ const {
   isAssistantsEndpoint,
   getEndpointFileConfig,
   documentParserMimeTypes,
+  inferMimeType,
 } = require('librechat-data-provider');
 const { EnvVar } = require('@librechat/agents');
 const { logger } = require('@librechat/data-schemas');
@@ -393,6 +394,7 @@ const processFileUpload = async ({ req, res, metadata }) => {
   }
 
   const { file } = req;
+  file.mimetype = inferMimeType(file.originalname, file.mimetype);
   const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
   const {
     id,
@@ -468,6 +470,7 @@ const processFileUpload = async ({ req, res, metadata }) => {
  */
 const processAgentFileUpload = async ({ req, res, metadata }) => {
   const { file } = req;
+  file.mimetype = inferMimeType(file.originalname, file.mimetype);
   const appConfig = req.config;
   const { agent_id, tool_resource, file_id, temp_file_id = null } = metadata;
 

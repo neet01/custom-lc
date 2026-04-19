@@ -9,6 +9,23 @@ This file documents the custom LibreChat changes added in this fork so another L
 
 This guide only covers the custom features added in this fork. It does not try to restate all stock LibreChat behavior.
 
+## Cross-Machine Divergence
+
+The user reported an additional fix being implemented on a separate work laptop:
+
+- `packages/data-provider/src/types/runs.ts` was updated to include a `FILE` content type
+- `api/server/services/ToolService.js` was updated so native tools returning `{ files: [...] }` are streamed back to the UI
+
+This matters for:
+
+- `word_document_transform`
+- `spreadsheet_transform`
+
+Symptom of missing this fix:
+
+- the model appears to rewrite the document in plain chat text
+- no downloadable file attachment appears even though the native transform tool may have succeeded
+
 ## Features Added
 
 ### 1. Request-Level Usage Tracking
@@ -150,6 +167,7 @@ Important limitation:
 
 - current implementation regenerates a clean `.docx` from extracted text
 - it does not preserve rich source formatting, tables, comments, or tracked changes
+- if the backend returns a generated file but the UI still pastes text into chat, inspect `ToolService.js` and run-content typing/streaming next
 
 Primary files:
 
@@ -308,12 +326,15 @@ Check route/service:
 - [api/server/routes/files/files.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/files/files.js:1)
 - [api/server/services/Files/WordDocuments/service.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Files/WordDocuments/service.js:1)
 - [api/server/services/Files/WordDocuments/transform.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Files/WordDocuments/transform.js:1)
+- [api/server/services/ToolService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/ToolService.js:1)
+- [packages/data-provider/src/types/runs.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-provider/src/types/runs.ts:1)
 
 Common causes:
 
 - file is not `.docx`
 - no requested transformation matched any text
 - another actor expects rich-format preservation, but current implementation intentionally rewrites a clean text-based docx
+- tool output includes `{ files: [...] }` but the run/message streaming layer is not surfacing file outputs to the UI
 
 If the complaint is “formatting disappeared,” that is expected with the current implementation.
 

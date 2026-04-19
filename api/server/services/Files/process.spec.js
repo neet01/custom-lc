@@ -17,6 +17,22 @@ jest.mock('@librechat/api', () => ({
 jest.mock('librechat-data-provider', () => ({
   ...jest.requireActual('librechat-data-provider'),
   mergeFileConfig: jest.fn(),
+  inferMimeType: jest.fn((fileName, currentType) => {
+    const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
+    if (
+      extension === 'docx' &&
+      (currentType === 'text/plain' || currentType === 'application/octet-stream')
+    ) {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+    if (
+      extension === 'xlsx' &&
+      (currentType === 'text/plain' || currentType === 'application/octet-stream')
+    ) {
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
+    return currentType;
+  }),
 }));
 
 jest.mock('~/server/services/Files/images', () => ({
@@ -85,11 +101,11 @@ const ODT_MIME = 'application/vnd.oasis.opendocument.text';
 const ODP_MIME = 'application/vnd.oasis.opendocument.presentation';
 const ODG_MIME = 'application/vnd.oasis.opendocument.graphics';
 
-const makeReq = ({ mimetype = PDF_MIME, ocrConfig = null } = {}) => ({
+const makeReq = ({ mimetype = PDF_MIME, originalname = 'upload.bin', ocrConfig = null } = {}) => ({
   user: { id: 'user-123' },
   file: {
     path: '/tmp/upload.bin',
-    originalname: 'upload.bin',
+    originalname,
     filename: 'upload-uuid.bin',
     mimetype,
   },
@@ -231,6 +247,34 @@ describe('processAgentFileUpload', () => {
       ).rejects.toThrow('File type text/plain is not supported for text parsing.');
 
       expect(getStrategyFunctions).not.toHaveBeenCalled();
+    });
+
+    test('normalizes generic text/plain Word uploads before OCR/document parsing decisions', async () => {
+      mergeFileConfig.mockReturnValue(makeFileConfig());
+      const req = makeReq({
+        mimetype: 'text/plain',
+        originalname: 'proposal.docx',
+        ocrConfig: null,
+      });
+
+      await processAgentFileUpload({ req, res: mockRes, metadata: makeMetadata() });
+
+      expect(req.file.mimetype).toBe(DOCX_MIME);
+      expect(getStrategyFunctions).toHaveBeenCalledWith(FileSources.document_parser);
+    });
+
+    test('normalizes generic octet-stream spreadsheet uploads before OCR/document parsing decisions', async () => {
+      mergeFileConfig.mockReturnValue(makeFileConfig());
+      const req = makeReq({
+        mimetype: 'application/octet-stream',
+        originalname: 'runway.xlsx',
+        ocrConfig: null,
+      });
+
+      await processAgentFileUpload({ req, res: mockRes, metadata: makeMetadata() });
+
+      expect(req.file.mimetype).toBe(XLSX_MIME);
+      expect(getStrategyFunctions).toHaveBeenCalledWith(FileSources.document_parser);
     });
 
     test.each([

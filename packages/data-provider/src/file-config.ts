@@ -234,6 +234,10 @@ export const codeInterpreterMimeTypes = [
 ];
 
 export const codeTypeMapping: { [key: string]: string } = {
+  doc: 'application/msword', // .doc - Microsoft Word document
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx - Word document
+  xls: 'application/vnd.ms-excel', // .xls - Excel workbook
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx - Excel workbook
   c: 'text/x-c', // .c - C source
   cs: 'text/x-csharp', // .cs - C# source
   cpp: 'text/x-c++', // .cpp - C++ source
@@ -366,6 +370,21 @@ export const mimeTypeAliases: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Some browsers and desktop environments report structured files with generic MIME types
+ * like `text/plain` or `application/octet-stream`. When we have a trusted extension mapping,
+ * prefer the inferred MIME so downstream tooling can distinguish Word/Excel uploads from text.
+ */
+const genericBrowserMimeTypes = new Set([
+  '',
+  'text/plain',
+  'application/octet-stream',
+  'binary/octet-stream',
+  'application/x-download',
+  'application/zip',
+  'application/x-zip-compressed',
+]);
+
+/**
  * Infers the MIME type from a file's extension when the browser doesn't recognize it,
  * and normalizes known non-standard MIME type aliases to their canonical forms.
  * @param fileName - The file name including its extension
@@ -373,12 +392,19 @@ export const mimeTypeAliases: Readonly<Record<string, string>> = {
  * @returns The normalized or inferred MIME type; empty string if unresolvable
  */
 export function inferMimeType(fileName: string, currentType: string): string {
-  if (currentType) {
-    return mimeTypeAliases[currentType] ?? currentType;
+  const normalizedType = mimeTypeAliases[currentType] ?? currentType;
+  const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
+  const inferredType = codeTypeMapping[extension] || imageTypeMapping[extension] || '';
+
+  if (!normalizedType) {
+    return inferredType;
   }
 
-  const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
-  return codeTypeMapping[extension] || imageTypeMapping[extension] || currentType;
+  if (inferredType && genericBrowserMimeTypes.has(normalizedType)) {
+    return inferredType;
+  }
+
+  return normalizedType;
 }
 
 export const retrievalMimeTypes = [

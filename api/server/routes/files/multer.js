@@ -7,6 +7,7 @@ const {
   mergeFileConfig,
   getEndpointFileConfig,
   fileConfig: defaultFileConfig,
+  inferMimeType,
 } = require('librechat-data-provider');
 const { getAppConfig } = require('~/server/services/Config');
 
@@ -51,6 +52,8 @@ const createFileFilter = (customFileConfig) => {
     if (!file) {
       return cb(new Error('No file provided'), false);
     }
+
+    file.mimetype = inferMimeType(file.originalname, file.mimetype);
 
     if (req.originalUrl.endsWith('/speech/stt') && file.mimetype.startsWith('audio/')) {
       return cb(null, true);

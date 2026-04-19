@@ -46,6 +46,8 @@ const db = require('~/models');
 
 const router = express.Router();
 
+const resolveFileSource = (req, file) => file?.source || req?.config?.fileStrategy || FileSources.s3;
+
 router.get('/', async (req, res) => {
   try {
     const appConfig = req.config;
@@ -317,16 +319,17 @@ router.get('/download/:userId/:file_id', fileAccess, async (req, res) => {
 
     // Access already validated by fileAccess middleware
     const file = req.fileAccess.file;
+    const fileSource = resolveFileSource(req, file);
 
-    if (checkOpenAIStorage(file.source) && !file.model) {
+    if (checkOpenAIStorage(fileSource) && !file.model) {
       logger.warn(`File download requested by user ${userId} has no associated model: ${file_id}`);
       return res.status(400).send('The model used when creating this file is not available');
     }
 
-    const { getDownloadStream } = getStrategyFunctions(file.source);
+    const { getDownloadStream } = getStrategyFunctions(fileSource);
     if (!getDownloadStream) {
       logger.warn(
-        `File download requested by user ${userId} has no stream method implemented: ${file.source}`,
+        `File download requested by user ${userId} has no stream method implemented: ${fileSource}`,
       );
       return res.status(501).send('Not Implemented');
     }
@@ -338,7 +341,7 @@ router.get('/download/:userId/:file_id', fileAccess, async (req, res) => {
       res.setHeader('X-File-Metadata', JSON.stringify(file));
     };
 
-    if (checkOpenAIStorage(file.source)) {
+    if (checkOpenAIStorage(fileSource)) {
       req.body = { model: file.model };
       const endpointMap = {
         [FileSources.openai]: EModelEndpoint.assistants,
@@ -347,7 +350,7 @@ router.get('/download/:userId/:file_id', fileAccess, async (req, res) => {
       const { openai } = await getOpenAIClient({
         req,
         res,
-        overrideEndpoint: endpointMap[file.source],
+        overrideEndpoint: endpointMap[fileSource],
       });
       logger.debug(`Downloading file ${file_id} from OpenAI`);
       const passThrough = await getDownloadStream(file_id, openai);

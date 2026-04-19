@@ -23,13 +23,18 @@ async function streamToBuffer(stream) {
   return Buffer.concat(chunks);
 }
 
+function resolveDocumentFileSource(req, file) {
+  return file?.source || req?.config?.fileStrategy || FileSources.s3;
+}
+
 async function getWordDocumentFileBuffer(req, res, file) {
-  const { getDownloadStream } = getStrategyFunctions(file.source);
+  const fileSource = resolveDocumentFileSource(req, file);
+  const { getDownloadStream } = getStrategyFunctions(fileSource);
   if (!getDownloadStream) {
-    throw new Error(`No download stream method implemented for file source: ${file.source}`);
+    throw new Error(`No download stream method implemented for file source: ${fileSource}`);
   }
 
-  if (checkOpenAIStorage(file.source)) {
+  if (checkOpenAIStorage(fileSource)) {
     req.body = { ...req.body, model: file.model };
     const endpointMap = {
       [FileSources.openai]: EModelEndpoint.assistants,
@@ -38,7 +43,7 @@ async function getWordDocumentFileBuffer(req, res, file) {
     const { openai } = await getOpenAIClient({
       req,
       res,
-      overrideEndpoint: endpointMap[file.source],
+      overrideEndpoint: endpointMap[fileSource],
     });
 
     const passThrough = await getDownloadStream(file.file_id, openai);
@@ -64,6 +69,7 @@ function resolveGeneratedFileExportStrategy(req) {
       }
     })(),
     req?.config?.fileStrategy,
+    FileSources.s3,
     FileSources.local,
   ].filter(Boolean);
 

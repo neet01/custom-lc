@@ -383,7 +383,7 @@ const processFileUpload = async ({ req, res, metadata }) => {
   const assistantSource =
     metadata.endpoint === EModelEndpoint.azureAssistants ? FileSources.azure : FileSources.openai;
   // Use the configured file strategy for regular file uploads (not vectordb)
-  const source = isAssistantUpload ? assistantSource : appConfig.fileStrategy;
+  const source = isAssistantUpload ? assistantSource : appConfig.fileStrategy || FileSources.s3;
   const { handleFileUpload } = getStrategyFunctions(source);
   const { file_id, temp_file_id = null } = metadata;
 

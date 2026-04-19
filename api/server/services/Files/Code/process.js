@@ -40,6 +40,8 @@ const spreadsheetMimeTypes = new Set([
 const isSpreadsheetFile = (file) =>
   Boolean(file?.type) && (excelMimeTypes.test(file.type) || spreadsheetMimeTypes.has(file.type));
 
+const resolveFileSource = (req, file) => file?.source || req?.config?.fileStrategy || FileSources.s3;
+
 /**
  * Creates a fallback download URL response when file cannot be processed locally.
  * Used when: file exceeds size limit, storage strategy unavailable, or download error occurs.
@@ -422,7 +424,7 @@ const primeFiles = async (options, apiKey) => {
 
       const reuploadFile = async () => {
         try {
-          const { getDownloadStream } = getStrategyFunctions(file.source);
+          const { getDownloadStream } = getStrategyFunctions(resolveFileSource(options.req, file));
           const { handleFileUpload: uploadCodeEnvFile } = getStrategyFunctions(
             FileSources.execute_code,
           );
@@ -471,7 +473,7 @@ const primeFiles = async (options, apiKey) => {
 
     if (isSpreadsheetFile(file)) {
       try {
-        const { getDownloadStream } = getStrategyFunctions(file.source);
+        const { getDownloadStream } = getStrategyFunctions(resolveFileSource(options.req, file));
         const { handleFileUpload: uploadCodeEnvFile } = getStrategyFunctions(FileSources.execute_code);
         const stream = await getDownloadStream(options.req, file.filepath);
         const fileIdentifier = await uploadCodeEnvFile({

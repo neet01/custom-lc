@@ -1,6 +1,7 @@
 const express = require('express');
 const request = require('supertest');
 const mongoose = require('mongoose');
+const { Readable } = require('stream');
 const { v4: uuidv4 } = require('uuid');
 const { createMethods } = require('@librechat/data-schemas');
 const { MongoMemoryServer } = require('mongodb-memory-server');
@@ -61,6 +62,7 @@ jest.mock('~/config', () => ({
 }));
 
 const { processDeleteRequest } = require('~/server/services/Files/process');
+const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 
 // Import the router after mocks
 const router = require('./files');
@@ -429,6 +431,32 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(response.body.message).toBe('You can only delete files you have access to');
       expect(response.body.unauthorizedFiles).toContain(fileId);
       expect(processDeleteRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /files/download/:userId/:file_id', () => {
+    it('downloads a local file with a cleaned filename header', async () => {
+      otherUserId = otherUserId.toString();
+      const downloadableFileId = uuidv4();
+      await createFile({
+        user: otherUserId,
+        file_id: downloadableFileId,
+        filename: `${uuidv4()}__budget-transformed.docx`,
+        filepath: '/uploads/budget-transformed.docx',
+        bytes: 200,
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        source: 'local',
+      });
+
+      getStrategyFunctions.mockReturnValue({
+        getDownloadStream: jest.fn().mockResolvedValue(Readable.from(['file-content'])),
+      });
+
+      const response = await request(app).get(`/files/download/${otherUserId}/${downloadableFileId}`);
+
+      expect(response.status).toBe(200);
+      expect(response.headers['content-disposition']).toContain('budget-transformed.docx');
+      expect(getStrategyFunctions).toHaveBeenCalledWith('local');
     });
   });
 });

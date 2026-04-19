@@ -7,22 +7,8 @@ const {
   transformWordDocumentBuffer,
 } = require('./transform');
 
-async function createDocxBufferFromText(text) {
+async function createStructuredDocxBuffer() {
   const zip = new JSZip();
-  const bodyXml = String(text)
-    .split('\n')
-    .map((paragraph) => {
-      if (!paragraph) {
-        return '<w:p/>';
-      }
-      const escaped = paragraph
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-      return `<w:p><w:r><w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>`;
-    })
-    .join('');
-
   zip.file(
     '[Content_Types].xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -49,10 +35,35 @@ async function createDocxBufferFromText(text) {
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:body>
-    ${bodyXml}
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+        </w:rPr>
+        <w:t xml:space="preserve">Budget memo</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:t xml:space="preserve">Revenue is 500.</w:t>
+      </w:r>
+    </w:p>
+    <w:tbl>
+      <w:tr>
+        <w:tc>
+          <w:p>
+            <w:r>
+              <w:t xml:space="preserve">Cell text</w:t>
+            </w:r>
+          </w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
     <w:sectPr>
       <w:pgSz w:w="12240" w:h="15840"/>
-      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
     </w:sectPr>
   </w:body>
 </w:document>`,
@@ -63,9 +74,7 @@ async function createDocxBufferFromText(text) {
 
 describe('Word document transform service', () => {
   it('inspects a docx buffer and previews paragraphs', async () => {
-    const inputBuffer = await createDocxBufferFromText(
-      ['Quarterly update', '', 'Revenue grew 18 percent year over year.', 'Next steps follow.'].join('\n'),
-    );
+    const inputBuffer = await createStructuredDocxBuffer();
 
     const inspection = await inspectWordDocumentBuffer({
       buffer: inputBuffer,
@@ -75,34 +84,51 @@ describe('Word document transform service', () => {
 
     expect(inspection.filename).toBe('update.docx');
     expect(inspection.paragraphCount).toBe(3);
-    expect(inspection.previewParagraphs).toEqual([
-      'Quarterly update',
-      'Revenue grew 18 percent year over year.',
-    ]);
+    expect(inspection.previewParagraphs).toEqual(['Budget memo', 'Revenue is 500.']);
   });
 
-  it('rewrites and redacts a docx buffer into a new docx file', async () => {
-    const inputBuffer = await createDocxBufferFromText(
-      ['Budget memo', 'Revenue is 500.', 'Contact CFO at cfo@example.com.'].join('\n'),
-    );
+  it('preserves document structure while updating text and adding a blurb', async () => {
+    const inputBuffer = await createStructuredDocxBuffer();
 
     const result = await transformWordDocumentBuffer({
       buffer: inputBuffer,
       sourceFilename: 'memo.docx',
       replaceText: [{ find: '500', replace: '650' }],
-      redactPhrases: ['cfo@example.com'],
       appendText: 'Prepared for the finance team.',
     });
 
     expect(result.mimeType).toBe(DOCX_MIME_TYPE);
     expect(result.filename).toBe('memo-transformed.docx');
     expect(result.summary.replacements[0].occurrences).toBe(1);
-    expect(result.summary.redactions[0].occurrences).toBe(1);
+    expect(result.summary.appendedText).toBe(true);
 
     const extracted = await mammoth.extractRawText({ buffer: result.buffer });
     expect(extracted.value).toContain('Revenue is 650.');
-    expect(extracted.value).toContain('[REDACTED]');
     expect(extracted.value).toContain('Prepared for the finance team.');
+    expect(extracted.value).toContain('Cell text');
+
+    const outputZip = await JSZip.loadAsync(result.buffer);
+    const documentXml = await outputZip.file('word/document.xml').async('string');
+    expect(documentXml).toContain('<w:tbl>');
+    expect(documentXml).toContain('w:pStyle w:val="Heading1"');
+    expect(documentXml).toContain('<w:b>');
+  });
+
+  it('supports full replacement text while preserving section properties', async () => {
+    const inputBuffer = await createStructuredDocxBuffer();
+
+    const result = await transformWordDocumentBuffer({
+      buffer: inputBuffer,
+      sourceFilename: 'memo.docx',
+      replacementText: 'Completely rewritten memo',
+    });
+
+    const extracted = await mammoth.extractRawText({ buffer: result.buffer });
+    expect(extracted.value).toContain('Completely rewritten memo');
+
+    const outputZip = await JSZip.loadAsync(result.buffer);
+    const documentXml = await outputZip.file('word/document.xml').async('string');
+    expect(documentXml).toContain('<w:sectPr>');
   });
 
   it('recognizes supported Word document MIME types', () => {

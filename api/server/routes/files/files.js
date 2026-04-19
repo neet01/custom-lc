@@ -32,6 +32,7 @@ const { hasCapability } = require('~/server/middleware/roles/capabilities');
 const { checkPermission } = require('~/server/services/PermissionService');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { hasAccessToFilesViaAgent } = require('~/server/services/Files');
+const { cleanFileName } = require('~/server/utils/files');
 const {
   isSpreadsheetTransformable,
 } = require('~/server/services/Files/Spreadsheets/transform');

@@ -47,6 +47,7 @@ export default function useUnifiedSidebarLinks() {
     interfaceConfig,
     endpointsConfig,
     includeHidePanel: false,
+    outlookAIEnabled: startupConfig?.outlookAIEnabled,
   });
 
   const links = useMemo(() => {

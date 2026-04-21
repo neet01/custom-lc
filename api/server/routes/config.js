@@ -18,6 +18,7 @@ const publicSharedLinksEnabled =
   sharedLinksEnabled && isEnabled(process.env.ALLOW_SHARED_LINKS_PUBLIC);
 
 const sharePointFilePickerEnabled = isEnabled(process.env.ENABLE_SHAREPOINT_FILEPICKER);
+const outlookAIEnabled = isEnabled(process.env.OUTLOOK_AI_ENABLED) || isEnabled(process.env.ENABLE_OUTLOOK_AI);
 const openidReuseTokens = isEnabled(process.env.OPENID_REUSE_TOKENS);
 
 function isBirthday() {
@@ -167,6 +168,9 @@ router.get('/', async function (req, res) {
       sharePointBaseUrl: process.env.SHAREPOINT_BASE_URL,
       sharePointPickerGraphScope: process.env.SHAREPOINT_PICKER_GRAPH_SCOPE,
       sharePointPickerSharePointScope: process.env.SHAREPOINT_PICKER_SHAREPOINT_SCOPE,
+      outlookAIEnabled,
+      outlookGraphBaseUrl: process.env.OUTLOOK_GRAPH_BASE_URL || 'https://graph.microsoft.us',
+      outlookGraphScopes: process.env.OUTLOOK_GRAPH_SCOPES || 'Mail.Read Mail.ReadWrite',
       conversationImportMaxFileSize: process.env.CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES
         ? parseInt(process.env.CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES, 10)
         : 0,

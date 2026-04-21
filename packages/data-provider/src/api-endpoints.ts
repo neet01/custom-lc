@@ -1,5 +1,6 @@
 import type { AssistantsEndpoint } from './schemas';
 import * as q from './types/queries';
+import type * as o from './types/outlook';
 import { ResourceType } from './accessPermissions';
 
 let BASE_URL = '';
@@ -67,6 +68,22 @@ export const messages = (params: q.MessagesListParams) => {
 export const messagesArtifacts = (messageId: string) => `${messagesRoot}/artifact/${messageId}`;
 
 export const messagesBranch = () => `${messagesRoot}/branch`;
+
+const outlookRoot = `${BASE_URL}/api/outlook`;
+
+export const outlookStatus = () => `${outlookRoot}/status`;
+
+export const outlookMessages = (params: o.OutlookMessagesParams = {}) =>
+  `${outlookRoot}/messages${buildQuery(params)}`;
+
+export const outlookMessage = (messageId: string) =>
+  `${outlookRoot}/messages/${encodeURIComponent(messageId)}`;
+
+export const outlookAnalyzeMessage = (messageId: string) =>
+  `${outlookMessage(messageId)}/analyze`;
+
+export const outlookCreateDraft = (messageId: string) =>
+  `${outlookMessage(messageId)}/drafts`;
 
 const shareRoot = `${BASE_URL}/api/share`;
 export const shareMessages = (shareId: string) => `${shareRoot}/${shareId}`;
@@ -205,6 +222,9 @@ export const issues = () => `${BASE_URL}/api/issues`;
 
 export const adminIssues = (params: q.AdminIssuesListParams = {}) =>
   `${BASE_URL}/api/admin/issues${buildQuery(params as Record<string, unknown>)}`;
+
+export const adminOutlookAudit = (params: q.AdminOutlookAuditListParams = {}) =>
+  `${BASE_URL}/api/admin/outlook-audit${buildQuery(params as Record<string, unknown>)}`;
 
 export const plugins = () => `${BASE_URL}/api/plugins`;
 

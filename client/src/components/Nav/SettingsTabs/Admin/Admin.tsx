@@ -3,12 +3,14 @@ import { Spinner } from '@librechat/client';
 import { SystemRoles } from 'librechat-data-provider';
 import type {
   AdminIssueReportItem,
+  AdminOutlookAuditItem,
   AdminUsageListItem,
   AdminUsageSummaryItem,
   AdminUserListItem,
 } from 'librechat-data-provider';
 import {
   useAdminIssuesQuery,
+  useAdminOutlookAuditQuery,
   useAdminUsageQuery,
   useAdminUsageSummaryQuery,
   useAdminUsersQuery,
@@ -42,6 +44,13 @@ function formatLatency(value: number | null | undefined) {
   }
 
   return `${Math.round(value)} ms`;
+}
+
+function formatAuditAction(action: string) {
+  return action
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 function MetricCard({
@@ -111,6 +120,12 @@ function Admin() {
       enabled: isAdmin,
     },
   );
+  const outlookAuditQuery = useAdminOutlookAuditQuery(
+    { limit: 25 },
+    {
+      enabled: isAdmin,
+    },
+  );
 
   const summaryByUser = useMemo(() => {
     const usage = summaryQuery.data?.users ?? [];
@@ -147,15 +162,18 @@ function Admin() {
     usersQuery.isLoading ||
     summaryQuery.isLoading ||
     recentUsageQuery.isLoading ||
-    issuesQuery.isLoading;
+    issuesQuery.isLoading ||
+    outlookAuditQuery.isLoading;
   const hasError =
     usersQuery.isError ||
     summaryQuery.isError ||
     recentUsageQuery.isError ||
-    issuesQuery.isError;
+    issuesQuery.isError ||
+    outlookAuditQuery.isError;
   const overview = summaryQuery.data?.overview;
   const recentUsage = recentUsageQuery.data?.usage ?? [];
   const openIssues = issuesQuery.data?.issues ?? [];
+  const outlookAudits = outlookAuditQuery.data?.audits ?? [];
 
   if (!isAdmin) {
     return (
@@ -324,6 +342,75 @@ function Admin() {
                     <tr>
                       <td colSpan={7} className="py-6 text-center text-text-secondary">
                         No usage records have been captured yet.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </TableShell>
+
+          <TableShell
+            title="Outlook AI audit trail"
+            description="Metadata-only trace of AI Inbox views, analyses, and draft creation. Email bodies are not stored here."
+          >
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-border-medium text-left">
+                <thead>
+                  <tr className="text-xs uppercase tracking-wide text-text-secondary">
+                    <th className="py-2 pr-4 font-medium">Time</th>
+                    <th className="py-2 pr-4 font-medium">User</th>
+                    <th className="py-2 pr-4 font-medium">Action</th>
+                    <th className="py-2 pr-4 font-medium">Status</th>
+                    <th className="py-2 pr-4 font-medium">Message</th>
+                    <th className="py-2 pr-4 font-medium">Draft</th>
+                    <th className="py-2 pr-4 font-medium">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-light">
+                  {outlookAudits.map((audit: AdminOutlookAuditItem) => (
+                    <tr key={audit.id} className="align-top">
+                      <td className="py-3 pr-4 text-text-secondary">
+                        {audit.createdAt ? formatDate(audit.createdAt) : 'n/a'}
+                      </td>
+                      <td className="py-3 pr-4">
+                        <div className="font-medium text-text-primary">
+                          {audit.actorName || audit.actorEmail || audit.userId}
+                        </div>
+                        <div className="text-xs text-text-secondary">{audit.actorEmail}</div>
+                      </td>
+                      <td className="py-3 pr-4">{formatAuditAction(audit.action)}</td>
+                      <td className="py-3 pr-4">
+                        <span
+                          className={
+                            audit.status === 'success'
+                              ? 'rounded-full bg-green-500/10 px-2 py-1 text-xs font-medium text-green-700 dark:text-green-300'
+                              : 'rounded-full bg-red-500/10 px-2 py-1 text-xs font-medium text-red-700 dark:text-red-300'
+                          }
+                        >
+                          {audit.status}
+                        </span>
+                      </td>
+                      <td className="max-w-48 truncate py-3 pr-4 text-text-secondary">
+                        {audit.graphMessageId || 'n/a'}
+                      </td>
+                      <td className="max-w-48 truncate py-3 pr-4 text-text-secondary">
+                        {audit.graphDraftId || 'n/a'}
+                      </td>
+                      <td className="py-3 pr-4 text-text-secondary">
+                        {audit.errorMessage ||
+                          (audit.metadata?.analysisMode
+                            ? `mode: ${String(audit.metadata.analysisMode)}`
+                            : audit.metadata?.folder
+                              ? `folder: ${String(audit.metadata.folder)}`
+                              : 'metadata only')}
+                      </td>
+                    </tr>
+                  ))}
+                  {outlookAudits.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-6 text-center text-text-secondary">
+                        No Outlook AI audit records have been captured yet.
                       </td>
                     </tr>
                   ) : null}

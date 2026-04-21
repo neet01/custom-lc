@@ -80,3 +80,22 @@ export const useAdminIssuesQuery = (
     },
   );
 };
+
+export const useAdminOutlookAuditQuery = (
+  params: t.AdminOutlookAuditListParams = {},
+  config?: UseQueryOptions<t.AdminOutlookAuditListResponse>,
+): QueryObserverResult<t.AdminOutlookAuditListResponse> => {
+  const queriesEnabled = useRecoilValue<boolean>(store.queriesEnabled);
+
+  return useQuery<t.AdminOutlookAuditListResponse>(
+    [QueryKeys.adminOutlookAudit, params],
+    () => dataService.getAdminOutlookAudit(params),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+      enabled: (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};

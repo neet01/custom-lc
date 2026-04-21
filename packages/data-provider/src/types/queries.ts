@@ -418,3 +418,46 @@ export type AdminIssuesListResponse = {
   limit: number;
   offset?: number;
 };
+
+export type OutlookAuditAction =
+  | 'mailbox_listed'
+  | 'message_viewed'
+  | 'message_analyzed'
+  | 'draft_created';
+
+export type OutlookAuditStatus = 'success' | 'failure';
+
+export type AdminOutlookAuditListParams = {
+  user_id?: string;
+  action?: OutlookAuditAction;
+  status?: OutlookAuditStatus;
+  message_id?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type AdminOutlookAuditItem = {
+  id: string;
+  userId: string;
+  actorName: string;
+  actorEmail: string;
+  actorAvatar: string;
+  actorRole: string;
+  action: OutlookAuditAction;
+  status: OutlookAuditStatus;
+  graphMessageId?: string;
+  graphConversationId?: string;
+  graphDraftId?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdminOutlookAuditListResponse = {
+  audits: AdminOutlookAuditItem[];
+  total: number;
+  limit: number;
+  offset?: number;
+};

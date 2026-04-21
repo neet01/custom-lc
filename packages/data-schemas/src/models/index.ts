@@ -13,6 +13,7 @@ import { createActionModel } from './action';
 import { createAssistantModel } from './assistant';
 import { createFileModel } from './file';
 import { createIssueReportModel } from './issueReport';
+import { createOutlookAuditModel } from './outlookAudit';
 import { createBannerModel } from './banner';
 import { createKeyModel } from './key';
 import { createPluginAuthModel } from './pluginAuth';
@@ -51,6 +52,7 @@ export function createModels(mongoose: typeof import('mongoose')) {
     Assistant: createAssistantModel(mongoose),
     File: createFileModel(mongoose),
     IssueReport: createIssueReportModel(mongoose),
+    OutlookAudit: createOutlookAuditModel(mongoose),
     Banner: createBannerModel(mongoose),
     Key: createKeyModel(mongoose),
     PluginAuth: createPluginAuthModel(mongoose),

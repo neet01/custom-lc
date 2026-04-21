@@ -7,6 +7,7 @@ import * as m from './types/mutations';
 import * as q from './types/queries';
 import * as f from './types/files';
 import * as mcp from './types/mcpServers';
+import * as o from './types/outlook';
 import * as config from './config';
 import request from './request';
 import * as s from './schemas';
@@ -35,6 +36,31 @@ export function updateFavorites(favorites: q.TUserFavorite[]): Promise<q.TUserFa
 
 export function getSharedMessages(shareId: string): Promise<t.TSharedMessagesResponse> {
   return request.get(endpoints.shareMessages(shareId));
+}
+
+export function getOutlookStatus(): Promise<o.OutlookStatusResponse> {
+  return request.get(endpoints.outlookStatus());
+}
+
+export function getOutlookMessages(
+  params: o.OutlookMessagesParams = {},
+): Promise<o.OutlookMessagesResponse> {
+  return request.get(endpoints.outlookMessages(params));
+}
+
+export function getOutlookMessage(messageId: string): Promise<o.OutlookMessage> {
+  return request.get(endpoints.outlookMessage(messageId));
+}
+
+export function analyzeOutlookMessage(messageId: string): Promise<o.OutlookAnalyzeResponse> {
+  return request.post(endpoints.outlookAnalyzeMessage(messageId), {});
+}
+
+export function createOutlookDraft(
+  messageId: string,
+  payload: o.OutlookDraftRequest,
+): Promise<o.OutlookDraftResponse> {
+  return request.post(endpoints.outlookCreateDraft(messageId), payload);
 }
 
 export const listSharedLinks = async (
@@ -141,6 +167,12 @@ export function getAdminIssues(
   params: q.AdminIssuesListParams = {},
 ): Promise<q.AdminIssuesListResponse> {
   return request.get(endpoints.adminIssues(params));
+}
+
+export function getAdminOutlookAudit(
+  params: q.AdminOutlookAuditListParams = {},
+): Promise<q.AdminOutlookAuditListResponse> {
+  return request.get(endpoints.adminOutlookAudit(params));
 }
 
 export function getUserBalance(): Promise<t.TBalanceResponse> {

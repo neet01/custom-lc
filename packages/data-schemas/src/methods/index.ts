@@ -45,6 +45,7 @@ import {
 import { createTransactionMethods, type TransactionMethods } from './transaction';
 import { createSpendTokensMethods, type SpendTokensMethods } from './spendTokens';
 import { createIssueReportMethods, type IssueReportMethods } from './issueReport';
+import { createOutlookAuditMethods, type OutlookAuditMethods } from './outlookAudit';
 import {
   createUsageMethods,
   type UsageMethods,
@@ -90,6 +91,7 @@ export type AllMethods = UserMethods &
   TransactionMethods &
   SpendTokensMethods &
   IssueReportMethods &
+  OutlookAuditMethods &
   UsageMethods &
   PromptMethods &
   AgentMethods &
@@ -139,6 +141,7 @@ export function createMethods(
   });
 
   const issueReportMethods = createIssueReportMethods(mongoose);
+  const outlookAuditMethods = createOutlookAuditMethods(mongoose);
   const usageMethods = createUsageMethods(mongoose);
 
   const messageMethods = createMessageMethods(mongoose);
@@ -215,6 +218,7 @@ export function createMethods(
     ...transactionMethods,
     ...spendTokensMethods,
     ...issueReportMethods,
+    ...outlookAuditMethods,
     ...usageMethods,
     ...promptMethods,
     /* Tier 5 */
@@ -253,6 +257,7 @@ export type {
   TxMethods,
   TransactionMethods,
   SpendTokensMethods,
+  OutlookAuditMethods,
   UsageMethods,
   UsageSummaryQueryOptions,
   UsageUserSummary,

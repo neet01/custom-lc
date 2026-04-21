@@ -2,8 +2,10 @@ import { useMemo } from 'react';
 import { MCPIcon, AttachmentIcon, OpenAIMinimalIcon } from '@librechat/client';
 import {
   Bot,
+  BarChart3,
   Brain,
   Bookmark,
+  Mail,
   NotebookPen,
   ArrowRightToLine,
   SlidersHorizontal,
@@ -12,6 +14,7 @@ import {
   Permissions,
   EModelEndpoint,
   PermissionTypes,
+  SystemRoles,
   isParamEndpoint,
   isAgentsEndpoint,
   isAssistantsEndpoint,
@@ -25,7 +28,9 @@ import PanelSwitch from '~/components/SidePanel/Builder/PanelSwitch';
 import Parameters from '~/components/SidePanel/Parameters/Panel';
 import { MemoryPanel } from '~/components/SidePanel/Memories';
 import FilesPanel from '~/components/SidePanel/Files/Panel';
-import { useHasAccess, useMCPServerManager } from '~/hooks';
+import OutlookPanel from '~/components/SidePanel/Outlook/Panel';
+import AdminReportingPanel from '~/components/Nav/SettingsTabs/Admin/Admin';
+import { useAuthContext, useHasAccess, useMCPServerManager } from '~/hooks';
 import { PromptsAccordion } from '~/components/Prompts';
 
 export default function useSideNavLinks({
@@ -36,6 +41,7 @@ export default function useSideNavLinks({
   interfaceConfig,
   endpointsConfig,
   includeHidePanel = true,
+  outlookAIEnabled = false,
 }: {
   hidePanel?: () => void;
   keyProvided: boolean;
@@ -44,6 +50,7 @@ export default function useSideNavLinks({
   interfaceConfig: Partial<TInterfaceConfig>;
   endpointsConfig: TEndpointsConfig;
   includeHidePanel?: boolean;
+  outlookAIEnabled?: boolean;
 }) {
   const hasAccessToPrompts = useHasAccess({
     permissionType: PermissionTypes.PROMPTS,
@@ -77,6 +84,8 @@ export default function useSideNavLinks({
     permissionType: PermissionTypes.MCP_SERVERS,
     permission: Permissions.CREATE,
   });
+  const { user } = useAuthContext();
+  const isAdmin = user?.role === SystemRoles.ADMIN;
   const { availableMCPServers } = useMCPServerManager();
 
   const Links = useMemo(() => {
@@ -146,6 +155,26 @@ export default function useSideNavLinks({
       });
     }
 
+    if (outlookAIEnabled) {
+      links.push({
+        title: 'com_sidepanel_outlook',
+        label: '',
+        icon: Mail,
+        id: 'outlook',
+        Component: OutlookPanel,
+      });
+    }
+
+    if (isAdmin) {
+      links.push({
+        title: 'com_sidepanel_admin_reporting',
+        label: '',
+        icon: BarChart3,
+        id: 'admin-reporting',
+        Component: AdminReportingPanel,
+      });
+    }
+
     links.push({
       title: 'com_sidepanel_attach_files',
       label: '',
@@ -205,6 +234,8 @@ export default function useSideNavLinks({
     interfaceConfig.parameters,
     endpointType,
     hasAccessToBookmarks,
+    outlookAIEnabled,
+    isAdmin,
     availableMCPServers,
     hasAccessToUseMCPSettings,
     hasAccessToCreateMCP,

@@ -858,6 +858,9 @@ export type TStartupConfig = {
   sharePointBaseUrl?: string;
   sharePointPickerGraphScope?: string;
   sharePointPickerSharePointScope?: string;
+  outlookAIEnabled?: boolean;
+  outlookGraphBaseUrl?: string;
+  outlookGraphScopes?: string;
   openidReuseTokens?: boolean;
   allowAccountDeletion: boolean;
   minPasswordLength?: number;

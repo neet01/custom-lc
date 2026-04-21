@@ -113,9 +113,42 @@ describe('OutlookService', () => {
       }),
     );
     const requestedUrl = global.fetch.mock.calls[0][0];
-    expect(requestedUrl.searchParams.get('$filter')).toBe(
-      "inferenceClassification eq 'focused'",
-    );
+    expect(requestedUrl.searchParams.get('$filter')).toBeNull();
+  });
+
+  it('filters other inbox messages in app to avoid complex Graph filter/order queries', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        value: [
+          {
+            id: 'focused-message',
+            subject: 'Internal note',
+            from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+            bodyPreview: 'Focused item',
+            inferenceClassification: 'focused',
+          },
+          {
+            id: 'other-message',
+            subject: 'Vendor note',
+            from: { emailAddress: { name: 'Vendor', address: 'vendor@example.com' } },
+            bodyPreview: 'Other item',
+            inferenceClassification: 'other',
+          },
+        ],
+      }),
+    });
+
+    const result = await OutlookService.listMessages(user, { inboxView: 'other', limit: 10 });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({
+      id: 'other-message',
+      inferenceClassification: 'other',
+    });
+    const requestedUrl = global.fetch.mock.calls[0][0];
+    expect(requestedUrl.searchParams.get('$filter')).toBeNull();
   });
 
   it('deletes a message through Microsoft Graph', async () => {

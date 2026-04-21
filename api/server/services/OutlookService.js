@@ -190,16 +190,20 @@ function getMessageSelect(includeBody = false) {
   return fields.join(',');
 }
 
-function getInboxViewFilter(folder, inboxView) {
+function normalizeInboxView(inboxView) {
+  const normalized = String(inboxView || 'focused').toLowerCase();
+  return ['focused', 'other', 'all'].includes(normalized) ? normalized : 'focused';
+}
+
+function filterMessagesByInboxView(messages, folder, inboxView) {
   const normalizedFolder = String(folder || 'inbox').toLowerCase();
-  const normalizedView = String(inboxView || 'focused').toLowerCase();
+  const normalizedView = normalizeInboxView(inboxView);
   if (normalizedFolder !== 'inbox' || normalizedView === 'all') {
-    return undefined;
+    return messages;
   }
-  if (normalizedView === 'focused' || normalizedView === 'other') {
-    return `inferenceClassification eq '${normalizedView}'`;
-  }
-  return undefined;
+  return messages.filter(
+    (message) => String(message.inferenceClassification || '').toLowerCase() === normalizedView,
+  );
 }
 
 async function listMessages(user, { folder = 'inbox', inboxView = 'focused', limit = 25 } = {}) {
@@ -209,13 +213,14 @@ async function listMessages(user, { folder = 'inbox', inboxView = 'focused', lim
       $top: top,
       $select: getMessageSelect(false),
       $orderby: 'receivedDateTime desc',
-      $filter: getInboxViewFilter(folder, inboxView),
     },
   });
+  const messages = Array.isArray(payload?.value)
+    ? payload.value.map((message) => normalizeMessage(message, false))
+    : [];
+
   return {
-    messages: Array.isArray(payload?.value)
-      ? payload.value.map((message) => normalizeMessage(message, false))
-      : [],
+    messages: filterMessagesByInboxView(messages, folder, inboxView),
   };
 }
 

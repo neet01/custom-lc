@@ -20,7 +20,9 @@ function isOutlookEnabled() {
 }
 
 function normalizeGraphBaseUrl(baseUrl = DEFAULT_GRAPH_BASE_URL) {
-  const trimmed = String(baseUrl || DEFAULT_GRAPH_BASE_URL).trim().replace(/\/+$/, '');
+  const trimmed = String(baseUrl || DEFAULT_GRAPH_BASE_URL)
+    .trim()
+    .replace(/\/+$/, '');
   if (/\/(v1\.0|beta)$/i.test(trimmed)) {
     return trimmed;
   }
@@ -30,7 +32,9 @@ function normalizeGraphBaseUrl(baseUrl = DEFAULT_GRAPH_BASE_URL) {
 function getOutlookConfig() {
   return {
     enabled: isOutlookEnabled(),
-    graphBaseUrl: normalizeGraphBaseUrl(process.env.OUTLOOK_GRAPH_BASE_URL || DEFAULT_GRAPH_BASE_URL),
+    graphBaseUrl: normalizeGraphBaseUrl(
+      process.env.OUTLOOK_GRAPH_BASE_URL || DEFAULT_GRAPH_BASE_URL,
+    ),
     scopes: process.env.OUTLOOK_GRAPH_SCOPES || DEFAULT_SCOPES,
   };
 }
@@ -51,7 +55,10 @@ function assertDelegatedUser(user) {
   }
 
   if (!user?.federatedTokens?.access_token) {
-    throw new OutlookServiceError('No delegated OpenID token is available for Microsoft Graph', 401);
+    throw new OutlookServiceError(
+      'No delegated OpenID token is available for Microsoft Graph',
+      401,
+    );
   }
 }
 
@@ -60,7 +67,10 @@ async function getDelegatedGraphToken(user, scopes = getOutlookConfig().scopes) 
   assertDelegatedUser(user);
   const tokenResponse = await getGraphApiToken(user, user.federatedTokens.access_token, scopes);
   if (!tokenResponse?.access_token) {
-    throw new OutlookServiceError('Microsoft Graph token exchange did not return an access token', 502);
+    throw new OutlookServiceError(
+      'Microsoft Graph token exchange did not return an access token',
+      502,
+    );
   }
   return tokenResponse.access_token;
 }
@@ -158,6 +168,18 @@ function normalizeMessage(message, includeBody = false) {
   };
 }
 
+function getMessageTimestamp(message) {
+  return new Date(message.receivedDateTime || message.sentDateTime || 0).getTime();
+}
+
+function sortMessagesByDateAscending(messages) {
+  return [...messages].sort((a, b) => getMessageTimestamp(a) - getMessageTimestamp(b));
+}
+
+function escapeODataString(value) {
+  return String(value || '').replace(/'/g, "''");
+}
+
 function normalizeCalendarEvent(event) {
   return {
     id: event.id,
@@ -222,7 +244,7 @@ function filterMessagesByInboxView(messages, folder, inboxView) {
 }
 
 async function listMessages(user, { folder = 'inbox', inboxView = 'focused', limit = 25 } = {}) {
-  const top = Math.min(Math.max(Number(limit) || 25, 1), 50);
+  const top = Math.min(Math.max(Number(limit) || 25, 1), 100);
   const payload = await graphRequest(user, getFolderPath(folder), {
     query: {
       $top: top,
@@ -237,6 +259,30 @@ async function listMessages(user, { folder = 'inbox', inboxView = 'focused', lim
   return {
     messages: filterMessagesByInboxView(messages, folder, inboxView),
   };
+}
+
+async function getConversationMessages(user, conversationId, { limit = 25 } = {}) {
+  if (!conversationId) {
+    return [];
+  }
+
+  const top = Math.min(Math.max(Number(limit) || 25, 1), 50);
+  const payload = await graphRequest(user, '/me/messages', {
+    headers: {
+      Prefer: 'outlook.body-content-type="text"',
+    },
+    query: {
+      $top: top,
+      $select: getMessageSelect(true),
+      $filter: `conversationId eq '${escapeODataString(conversationId)}'`,
+    },
+  });
+
+  const messages = Array.isArray(payload?.value)
+    ? payload.value.map((message) => normalizeMessage(message, true))
+    : [];
+
+  return sortMessagesByDateAscending(messages);
 }
 
 async function deleteMessage(user, messageId) {
@@ -254,7 +300,7 @@ async function deleteMessage(user, messageId) {
   };
 }
 
-async function getMessage(user, messageId) {
+async function getMessage(user, messageId, { includeThread = true } = {}) {
   if (!messageId) {
     throw new OutlookServiceError('Message id is required', 400);
   }
@@ -267,14 +313,46 @@ async function getMessage(user, messageId) {
       $select: getMessageSelect(true),
     },
   });
-  return normalizeMessage(payload, true);
+  const message = normalizeMessage(payload, true);
+
+  if (!includeThread || !message.conversationId) {
+    return message;
+  }
+
+  try {
+    const thread = await getConversationMessages(user, message.conversationId);
+    return {
+      ...message,
+      thread,
+      threadMessageCount: thread.length,
+    };
+  } catch (error) {
+    logger.warn('[OutlookService] Conversation thread unavailable for selected message', {
+      status: error?.status,
+      message: error?.message,
+      conversationId: message.conversationId,
+    });
+    return {
+      ...message,
+      thread: [message],
+      threadMessageCount: 1,
+    };
+  }
 }
 
 function shouldFetchCalendarContext(message) {
   if (!isEnabled(process.env.OUTLOOK_AI_INCLUDE_CALENDAR)) {
     return false;
   }
-  const source = `${message.subject || ''}\n${message.body || message.bodyPreview || ''}`;
+  const threadSource = Array.isArray(message.thread)
+    ? message.thread
+        .map(
+          (threadMessage) =>
+            `${threadMessage.subject || ''}\n${threadMessage.body || threadMessage.bodyPreview || ''}`,
+        )
+        .join('\n\n')
+    : '';
+  const source = `${message.subject || ''}\n${message.body || message.bodyPreview || ''}\n${threadSource}`;
   return /\b(meeting|calendar|invite|schedule|availability|available|appointment|call|zoom|teams)\b/i.test(
     source,
   );
@@ -328,11 +406,16 @@ function splitSentences(value) {
 }
 
 function buildLocalInsights(message) {
-  const source = message.body || message.bodyPreview || '';
+  const threadMessages =
+    Array.isArray(message.thread) && message.thread.length > 0 ? message.thread : [message];
+  const source = threadMessages
+    .map((threadMessage) => threadMessage.body || threadMessage.bodyPreview || '')
+    .filter(Boolean)
+    .join('\n\n');
   const sentences = splitSentences(source);
   const summary =
     sentences.length > 0
-      ? truncateText(sentences.slice(0, 3).join(' '), 700)
+      ? truncateText(sentences.slice(0, 4).join(' '), 800)
       : 'No body text was available to summarize.';
 
   const lower = source.toLowerCase();
@@ -341,13 +424,17 @@ function buildLocalInsights(message) {
     suggestedActions.push('Review and answer the explicit question(s) in the email.');
   }
   if (/\b(please|can you|could you|need|request|action required)\b/i.test(source)) {
-    suggestedActions.push('Identify the requested owner, deliverable, and due date before replying.');
+    suggestedActions.push(
+      'Identify the requested owner, deliverable, and due date before replying.',
+    );
   }
   if (/\b(attach|attached|attachment)\b/i.test(source) || message.hasAttachments) {
     suggestedActions.push('Check related attachments before committing to next steps.');
   }
   if (suggestedActions.length === 0) {
-    suggestedActions.push('No obvious action request was detected; consider acknowledging receipt.');
+    suggestedActions.push(
+      'No obvious action request was detected; consider acknowledging receipt.',
+    );
   }
 
   const riskSignals = [];
@@ -371,7 +458,7 @@ function buildLocalInsights(message) {
 }
 
 async function analyzeMessage(user, messageId) {
-  const message = await getMessage(user, messageId);
+  const message = await getMessage(user, messageId, { includeThread: true });
   const calendarEvents = await getCalendarContext(user, message);
   if (OutlookAIService.isModelBackedAIEnabled()) {
     try {
@@ -407,7 +494,7 @@ function buildDraftComment(message, { instructions = '', tone = 'professional' }
 }
 
 async function createReplyDraft(user, messageId, options = {}) {
-  const message = await getMessage(user, messageId);
+  const message = await getMessage(user, messageId, { includeThread: true });
   const calendarEvents = await getCalendarContext(user, message);
   let comment = buildDraftComment(message, options);
 
@@ -427,10 +514,14 @@ async function createReplyDraft(user, messageId, options = {}) {
     }
   }
 
-  const payload = await graphRequest(user, `/me/messages/${encodeURIComponent(messageId)}/createReply`, {
-    method: 'POST',
-    body: { comment },
-  });
+  const payload = await graphRequest(
+    user,
+    `/me/messages/${encodeURIComponent(messageId)}/createReply`,
+    {
+      method: 'POST',
+      body: { comment },
+    },
+  );
 
   if (payload?.id && comment) {
     await graphRequest(user, `/me/messages/${encodeURIComponent(payload.id)}`, {
@@ -474,6 +565,7 @@ function getStatus(user) {
       openidReuseTokens: true,
       delegatedGraphScopes: config.scopes,
     },
+    calendarContextEnabled: isEnabled(process.env.OUTLOOK_AI_INCLUDE_CALENDAR),
   };
 }
 
@@ -482,6 +574,7 @@ module.exports = {
   getOutlookConfig,
   getStatus,
   listMessages,
+  getConversationMessages,
   getMessage,
   deleteMessage,
   analyzeMessage,

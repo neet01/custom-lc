@@ -7,6 +7,8 @@ const { logger } = require('@librechat/data-schemas');
 const DEFAULT_REGION = 'us-gov-west-1';
 const DEFAULT_MAX_TOKENS = 1200;
 const DEFAULT_TEMPERATURE = 0.2;
+const DEFAULT_DRAFT_STYLE =
+  'direct, concise, assertive, and professionally neutral. Avoid excessive warmth, flattery, apologies, hedging, and attention-seeking phrasing.';
 
 let bedrockClient;
 
@@ -24,6 +26,7 @@ function getAIConfig() {
       process.env.OUTLOOK_AI_TEMPERATURE !== undefined
         ? Number(process.env.OUTLOOK_AI_TEMPERATURE)
         : DEFAULT_TEMPERATURE,
+    draftStyle: process.env.OUTLOOK_AI_DRAFT_STYLE || DEFAULT_DRAFT_STYLE,
   };
 }
 
@@ -64,6 +67,14 @@ function compactEmail(message) {
     importance: message.importance,
     hasAttachments: message.hasAttachments,
     body: message.body || message.bodyPreview || '',
+    thread: Array.isArray(message.thread)
+      ? message.thread.slice(0, 12).map((threadMessage) => ({
+          subject: threadMessage.subject,
+          from: threadMessage.from,
+          receivedDateTime: threadMessage.receivedDateTime,
+          body: threadMessage.body || threadMessage.bodyPreview || '',
+        }))
+      : undefined,
   };
 }
 
@@ -151,14 +162,14 @@ async function generateAnalysis({ message, calendarEvents = [] }) {
   ].join(' ');
 
   const prompt = JSON.stringify({
-    task: 'Analyze this email and produce concise action-oriented inbox insights.',
+    task: 'Analyze this email conversation and produce concise action-oriented inbox insights.',
     schema: {
       summary: 'string, 2-4 sentences',
       suggestedActions: ['3-6 concrete action items'],
       riskSignals: ['0-5 urgency, compliance, dependency, or scheduling signals'],
       calendarSignals: ['0-4 signals from calendar context, if provided'],
     },
-    email: compactEmail(message),
+    emailConversation: compactEmail(message),
     calendarEvents: compactCalendarEvents(calendarEvents),
   });
 
@@ -177,23 +188,38 @@ async function generateAnalysis({ message, calendarEvents = [] }) {
   };
 }
 
-async function generateReplyDraft({ message, instructions = '', tone = 'professional', calendarEvents = [] }) {
+async function generateReplyDraft({
+  message,
+  instructions = '',
+  tone = 'professional',
+  calendarEvents = [],
+}) {
   if (!isModelBackedAIEnabled()) {
     return null;
   }
 
+  const config = getAIConfig();
   const system = [
     'You are drafting an Outlook reply for the signed-in user.',
     'Write only the reply body, with no markdown fences and no analysis preamble.',
-    'Be professional, concise, and safe. Do not promise actions the user did not approve.',
+    `Default writing style: ${config.draftStyle}`,
+    'Be clear about ownership, asks, next steps, dates, and blockers.',
+    'Prefer short paragraphs and plain language. Cut filler.',
+    'Do not use phrases like "I hope this email finds you well", "just checking in", "I would be happy to", or "please let me know if you need anything else" unless the user explicitly asks for a softer tone.',
+    'Do not apologize, praise, or express enthusiasm unless the thread context makes it necessary.',
+    'Do not beg for attention or over-explain. Make the ask directly.',
+    'Do not promise actions the user did not approve.',
     'If the email asks for scheduling, use calendar context cautiously and suggest availability windows only when clear.',
   ].join(' ');
 
   const prompt = JSON.stringify({
-    task: 'Draft a reply to this email.',
+    task: 'Draft a reply to this email conversation.',
     tone,
-    userInstructions: instructions || 'Draft a helpful professional response.',
-    email: compactEmail(message),
+    defaultStyle: config.draftStyle,
+    userInstructions:
+      instructions ||
+      'Draft a direct, useful response that answers the thread, states the next step, and avoids unnecessary pleasantries.',
+    emailConversation: compactEmail(message),
     calendarEvents: compactCalendarEvents(calendarEvents),
   });
 
@@ -216,4 +242,5 @@ module.exports = {
   generateReplyDraft,
   logModelFailure,
   parseJsonObject,
+  DEFAULT_DRAFT_STYLE,
 };

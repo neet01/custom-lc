@@ -19,6 +19,8 @@ export type OutlookMessage = {
   isRead: boolean;
   hasAttachments: boolean;
   webLink?: string;
+  thread?: OutlookMessage[];
+  threadMessageCount?: number;
 };
 
 export type OutlookStatusResponse = {
@@ -31,6 +33,7 @@ export type OutlookStatusResponse = {
     openidReuseTokens: boolean;
     delegatedGraphScopes: string;
   };
+  calendarContextEnabled?: boolean;
 };
 
 export type OutlookMessagesParams = {

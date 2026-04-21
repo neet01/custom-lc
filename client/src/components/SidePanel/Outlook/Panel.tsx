@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, startTransition } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, Sparkles, Trash2 } from 'lucide-react';
+import { CalendarDays, Mail, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 import type {
   OutlookAnalyzeResponse,
   OutlookDraftResponse,
@@ -18,6 +18,12 @@ import {
 import { cn } from '~/utils';
 
 type InboxView = 'focused' | 'other' | 'all';
+
+type OutlookConversation = {
+  id: string;
+  latest: OutlookMessage;
+  messages: OutlookMessage[];
+};
 
 function formatSender(message?: OutlookMessage) {
   if (!message?.from) {
@@ -45,6 +51,38 @@ function EmptyState({ title, description }: { title: string; description: string
       <div className="mt-1 text-text-secondary">{description}</div>
     </div>
   );
+}
+
+function getMessageTimestamp(message: OutlookMessage) {
+  return new Date(message.receivedDateTime || message.sentDateTime || 0).getTime();
+}
+
+function groupMessagesByConversation(messages: OutlookMessage[]): OutlookConversation[] {
+  const groups = new Map<string, OutlookMessage[]>();
+  for (const message of messages) {
+    const key = message.conversationId || message.id;
+    groups.set(key, [...(groups.get(key) ?? []), message]);
+  }
+
+  return Array.from(groups.entries())
+    .map(([id, groupMessages]) => {
+      const sorted = [...groupMessages].sort(
+        (a, b) => getMessageTimestamp(b) - getMessageTimestamp(a),
+      );
+      return {
+        id,
+        latest: sorted[0],
+        messages: sorted,
+      };
+    })
+    .sort((a, b) => getMessageTimestamp(b.latest) - getMessageTimestamp(a.latest));
+}
+
+function getThreadMessages(message: OutlookMessage): OutlookMessage[] {
+  if (Array.isArray(message.thread) && message.thread.length > 0) {
+    return [...message.thread].sort((a, b) => getMessageTimestamp(a) - getMessageTimestamp(b));
+  }
+  return [message];
 }
 
 function ViewTabs({
@@ -149,11 +187,12 @@ export default function OutlookPanel() {
     isLoading: messagesLoading,
     refetch,
   } = useOutlookMessagesQuery(
-    { folder: 'inbox', inboxView, limit: 50 },
+    { folder: 'inbox', inboxView, limit: 100 },
     { enabled: mailboxEnabled },
   );
 
   const messages = useMemo(() => messageList?.messages ?? [], [messageList?.messages]);
+  const conversations = useMemo(() => groupMessagesByConversation(messages), [messages]);
 
   const { data: selectedMessage, isLoading: messageLoading } = useOutlookMessageQuery(selectedId, {
     enabled: mailboxEnabled && Boolean(selectedId),
@@ -164,14 +203,17 @@ export default function OutlookPanel() {
   const deleteMutation = useDeleteOutlookMessageMutation();
 
   useEffect(() => {
-    if (messages.length === 0) {
+    if (conversations.length === 0) {
       startTransition(() => setSelectedId(undefined));
       return;
     }
-    if (!selectedId || !messages.some((message) => message.id === selectedId)) {
-      startTransition(() => setSelectedId(messages[0].id));
+    if (
+      !selectedId ||
+      !conversations.some((conversation) => conversation.latest.id === selectedId)
+    ) {
+      startTransition(() => setSelectedId(conversations[0].latest.id));
     }
-  }, [messages, selectedId]);
+  }, [conversations, selectedId]);
 
   useEffect(() => {
     setAnalysis(null);
@@ -211,11 +253,13 @@ export default function OutlookPanel() {
       return;
     }
 
-    const currentIndex = messages.findIndex((message) => message.id === selectedId);
-    const nextMessage = messages[currentIndex + 1] ?? messages[currentIndex - 1];
+    const currentIndex = conversations.findIndex(
+      (conversation) => conversation.latest.id === selectedId,
+    );
+    const nextConversation = conversations[currentIndex + 1] ?? conversations[currentIndex - 1];
     const result = await deleteMutation.mutateAsync(selectedId);
     setStatusMessage(result.message);
-    setSelectedId(nextMessage?.id);
+    setSelectedId(nextConversation?.latest.id);
     queryClient.removeQueries([QueryKeys.outlookMessage, selectedId]);
     await refetch();
   };
@@ -265,6 +309,12 @@ export default function OutlookPanel() {
         <div className="mt-3">
           <ViewTabs active={inboxView} onChange={setInboxView} />
         </div>
+        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-text-secondary">
+          <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+          {status.calendarContextEnabled
+            ? 'Calendar context is used during Analyze/Draft when an email looks scheduling-related.'
+            : 'Calendar context is off. Set OUTLOOK_AI_INCLUDE_CALENDAR=true to include scheduling context.'}
+        </div>
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(240px,34%)_minmax(0,1fr)]">
@@ -272,46 +322,63 @@ export default function OutlookPanel() {
           {messagesLoading && (
             <EmptyState title="Loading messages" description="Fetching recent inbox metadata..." />
           )}
-          {!messagesLoading && messages.length === 0 && (
+          {!messagesLoading && conversations.length === 0 && (
             <EmptyState
               title="No messages found"
               description={`Your ${inboxView === 'all' ? 'inbox' : inboxView} query returned no mail.`}
             />
           )}
-          {messages.map((message) => (
-            <button
-              key={message.id}
-              type="button"
-              className={cn(
-                'block w-full border-b border-border-light px-4 py-3 text-left transition-colors hover:bg-surface-hover',
-                selectedId === message.id && 'bg-surface-active-alt',
-              )}
-              onClick={() => setSelectedId(message.id)}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold">{message.subject}</div>
-                  <div className="truncate text-xs text-text-secondary">{formatSender(message)}</div>
+          {conversations.map((conversation) => {
+            const message = conversation.latest;
+            const threadCount = message.threadMessageCount || conversation.messages.length;
+            return (
+              <button
+                key={conversation.id}
+                type="button"
+                className={cn(
+                  'block w-full border-b border-border-light px-3 py-2 text-left transition-colors hover:bg-surface-hover',
+                  selectedId === message.id && 'bg-surface-active-alt',
+                )}
+                onClick={() => setSelectedId(message.id)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <div className="truncate text-sm font-semibold">{message.subject}</div>
+                      {threadCount > 1 && (
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
+                          <Mail className="h-3 w-3" aria-hidden="true" />
+                          {threadCount}
+                        </span>
+                      )}
+                    </div>
+                    <div className="truncate text-[11px] text-text-secondary">
+                      {formatSender(message)}
+                    </div>
+                  </div>
+                  <div className="whitespace-nowrap text-[11px] text-text-secondary">
+                    {formatDate(message.receivedDateTime)}
+                  </div>
                 </div>
-                <div className="whitespace-nowrap text-[11px] text-text-secondary">
-                  {formatDate(message.receivedDateTime)}
-                </div>
-              </div>
-              <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-secondary">
-                {message.bodyPreview}
-              </p>
-              {message.inferenceClassification && (
-                <span className="mt-2 inline-flex rounded-full bg-surface-tertiary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
-                  {message.inferenceClassification}
-                </span>
-              )}
-            </button>
-          ))}
+                <p className="mt-0.5 line-clamp-1 text-xs leading-4 text-text-secondary">
+                  {message.bodyPreview}
+                </p>
+                {message.inferenceClassification && (
+                  <span className="mt-1 inline-flex rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-text-secondary">
+                    {message.inferenceClassification}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         <div className="flex min-h-0 flex-col overflow-hidden">
           {!selectedId && (
-            <EmptyState title="Select an email" description="Choose a message to inspect or draft against." />
+            <EmptyState
+              title="Select an email"
+              description="Choose a message to inspect or draft against."
+            />
           )}
 
           {selectedId && messageLoading && (
@@ -361,11 +428,41 @@ export default function OutlookPanel() {
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-                <article className="rounded-2xl border border-border-light bg-surface-secondary p-4">
-                  <pre className="max-h-[42vh] overflow-y-auto whitespace-pre-wrap break-words font-sans text-sm leading-6 text-text-primary">
-                    {selectedMessage.body || selectedMessage.bodyPreview || 'No body text available.'}
-                  </pre>
-                </article>
+                <div className="space-y-3">
+                  {getThreadMessages(selectedMessage).map((threadMessage) => (
+                    <article
+                      key={threadMessage.id}
+                      className={cn(
+                        'rounded-2xl border border-border-light bg-surface-secondary p-4',
+                        threadMessage.id === selectedMessage.id &&
+                          'border-blue-500/30 bg-blue-500/5',
+                      )}
+                    >
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-border-light pb-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold">
+                            {formatSender(threadMessage)}
+                          </div>
+                          <div className="text-[11px] text-text-secondary">
+                            {formatDate(
+                              threadMessage.receivedDateTime || threadMessage.sentDateTime,
+                            )}
+                          </div>
+                        </div>
+                        {threadMessage.id === selectedMessage.id && (
+                          <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+                            selected
+                          </span>
+                        )}
+                      </div>
+                      <pre className="max-h-[32vh] overflow-y-auto whitespace-pre-wrap break-words font-sans text-sm leading-6 text-text-primary">
+                        {threadMessage.body ||
+                          threadMessage.bodyPreview ||
+                          'No body text available.'}
+                      </pre>
+                    </article>
+                  ))}
+                </div>
               </div>
 
               <div className="border-t border-border-light bg-surface-primary-alt px-5 py-4">

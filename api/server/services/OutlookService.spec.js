@@ -160,6 +160,75 @@ describe('OutlookService', () => {
     expect(requestedUrl.searchParams.get('$filter')).toBeNull();
   });
 
+  it('loads selected messages with conversation thread context', async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'latest-message',
+          conversationId: 'thread-1',
+          subject: 'Budget follow-up',
+          from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+          receivedDateTime: '2026-04-21T13:00:00Z',
+          body: { content: 'Latest thread note.' },
+          bodyPreview: 'Latest thread note.',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'latest-message',
+              conversationId: 'thread-1',
+              subject: 'Budget follow-up',
+              from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+              receivedDateTime: '2026-04-21T13:00:00Z',
+              body: { content: 'Latest thread note.' },
+            },
+            {
+              id: 'first-message',
+              conversationId: 'thread-1',
+              subject: 'Budget follow-up',
+              from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+              receivedDateTime: '2026-04-21T12:00:00Z',
+              body: { content: 'Original thread note.' },
+            },
+          ],
+        }),
+      });
+
+    const result = await OutlookService.getMessage(user, 'latest-message');
+
+    expect(result.threadMessageCount).toBe(2);
+    expect(result.thread.map((message) => message.id)).toEqual(['first-message', 'latest-message']);
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        pathname: '/v1.0/me/messages',
+      }),
+      expect.any(Object),
+    );
+    const threadUrl = global.fetch.mock.calls[1][0];
+    expect(threadUrl.searchParams.get('$filter')).toBe("conversationId eq 'thread-1'");
+    expect(threadUrl.searchParams.get('$orderby')).toBeNull();
+  });
+
+  it('caps mailbox list requests at 100 messages', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ value: [] }),
+    });
+
+    await OutlookService.listMessages(user, { limit: 250, inboxView: 'all' });
+
+    const requestedUrl = global.fetch.mock.calls[0][0];
+    expect(requestedUrl.searchParams.get('$top')).toBe('100');
+  });
+
   it('deletes a message through Microsoft Graph', async () => {
     global.fetch.mockResolvedValue({
       ok: true,
@@ -189,10 +258,27 @@ describe('OutlookService', () => {
         status: 200,
         json: async () => ({
           id: 'source-message',
+          conversationId: 'thread-1',
           subject: 'Need input',
           from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
           body: { content: 'Can you review this?' },
           bodyPreview: 'Can you review this?',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'source-message',
+              conversationId: 'thread-1',
+              subject: 'Need input',
+              from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+              body: { content: 'Can you review this?' },
+              bodyPreview: 'Can you review this?',
+            },
+          ],
         }),
       })
       .mockResolvedValueOnce({
@@ -221,7 +307,7 @@ describe('OutlookService', () => {
       message: 'Draft reply created. Review it in Outlook before sending.',
     });
     expect(global.fetch).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
         pathname: '/v1.0/me/messages/source-message/createReply',
       }),
@@ -286,10 +372,27 @@ describe('OutlookService', () => {
         status: 200,
         json: async () => ({
           id: 'source-message',
+          conversationId: 'thread-1',
           subject: 'Need input',
           from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
           body: { content: 'Can you review this?' },
           bodyPreview: 'Can you review this?',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'source-message',
+              conversationId: 'thread-1',
+              subject: 'Need input',
+              from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+              body: { content: 'Can you review this?' },
+              bodyPreview: 'Can you review this?',
+            },
+          ],
         }),
       })
       .mockResolvedValueOnce({

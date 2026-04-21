@@ -3,6 +3,7 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 export type OutlookAuditAction =
   | 'mailbox_listed'
   | 'message_viewed'
+  | 'message_deleted'
   | 'message_analyzed'
   | 'draft_created';
 
@@ -33,7 +34,13 @@ const outlookAuditSchema = new Schema<IOutlookAudit>(
     },
     action: {
       type: String,
-      enum: ['mailbox_listed', 'message_viewed', 'message_analyzed', 'draft_created'],
+      enum: [
+        'mailbox_listed',
+        'message_viewed',
+        'message_deleted',
+        'message_analyzed',
+        'draft_created',
+      ],
       required: true,
       index: true,
     },

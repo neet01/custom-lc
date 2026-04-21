@@ -51,6 +51,7 @@ router.get('/messages', async (req, res) => {
   try {
     const result = await OutlookService.listMessages(req.user, {
       folder: req.query.folder,
+      inboxView: req.query.inboxView,
       limit: req.query.limit,
     });
     await recordAudit(req, {
@@ -58,6 +59,7 @@ router.get('/messages', async (req, res) => {
       status: 'success',
       metadata: {
         folder: typeof req.query.folder === 'string' ? req.query.folder : 'inbox',
+        inboxView: typeof req.query.inboxView === 'string' ? req.query.inboxView : 'focused',
         limit: result.messages.length,
       },
     });
@@ -68,6 +70,7 @@ router.get('/messages', async (req, res) => {
       ...getErrorAudit(error),
       metadata: {
         folder: typeof req.query.folder === 'string' ? req.query.folder : 'inbox',
+        inboxView: typeof req.query.inboxView === 'string' ? req.query.inboxView : 'focused',
       },
     });
     handleOutlookError(res, error);
@@ -91,6 +94,25 @@ router.get('/messages/:messageId', async (req, res) => {
   } catch (error) {
     await recordAudit(req, {
       action: 'message_viewed',
+      graphMessageId: req.params.messageId,
+      ...getErrorAudit(error),
+    });
+    handleOutlookError(res, error);
+  }
+});
+
+router.delete('/messages/:messageId', async (req, res) => {
+  try {
+    const result = await OutlookService.deleteMessage(req.user, req.params.messageId);
+    await recordAudit(req, {
+      action: 'message_deleted',
+      status: 'success',
+      graphMessageId: result.messageId,
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'message_deleted',
       graphMessageId: req.params.messageId,
       ...getErrorAudit(error),
     });

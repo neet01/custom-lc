@@ -14,13 +14,15 @@ import { cn } from '~/utils';
 import store from '~/store';
 
 const COLLAPSED_WIDTH = 52;
-const EXPANDED_MIN = 360;
+const EXPANDED_MIN = 420;
+const EXPANDED_DEFAULT = 720;
+const EXPANDED_MAX_RATIO = 0.7;
 const TRANSITION_MS = 300;
 const EASING = 'cubic-bezier(0.2, 0, 0, 1)';
 
 function getInitialWidth(): number {
   const saved = localStorage.getItem('side:width');
-  return saved ? Math.max(Number(saved), EXPANDED_MIN) : EXPANDED_MIN;
+  return saved ? Math.max(Number(saved), EXPANDED_MIN) : EXPANDED_DEFAULT;
 }
 
 /**
@@ -64,7 +66,7 @@ function UnifiedSidebar() {
   const handleResizeStart = useCallback(() => {
     setIsResizing(true);
     document.body.style.userSelect = 'none';
-    const maxWidth = window.innerWidth * 0.4;
+    const maxWidth = window.innerWidth * EXPANDED_MAX_RATIO;
     let rafId: number | null = null;
 
     const move = (e: MouseEvent) => {
@@ -104,7 +106,7 @@ function UnifiedSidebar() {
       const next =
         direction === 'shrink'
           ? Math.max(w - 20, EXPANDED_MIN)
-          : Math.min(w + 20, window.innerWidth * 0.4);
+          : Math.min(w + 20, window.innerWidth * EXPANDED_MAX_RATIO);
       localStorage.setItem('side:width', String(Math.round(next)));
       return next;
     });
@@ -182,7 +184,7 @@ function UnifiedSidebar() {
           style={{
             width: expanded ? sidebarWidth : COLLAPSED_WIDTH,
             minWidth: expanded ? EXPANDED_MIN : COLLAPSED_WIDTH,
-            maxWidth: expanded ? '40%' : COLLAPSED_WIDTH,
+            maxWidth: expanded ? `${EXPANDED_MAX_RATIO * 100}%` : COLLAPSED_WIDTH,
             transition: isResizing
               ? 'none'
               : `width ${TRANSITION_MS}ms ${EASING}, min-width ${TRANSITION_MS}ms ${EASING}, max-width ${TRANSITION_MS}ms ${EASING}`,

@@ -15,6 +15,7 @@ export type OutlookMessage = {
   bodyPreview: string;
   body?: string;
   importance: 'low' | 'normal' | 'high' | string;
+  inferenceClassification?: 'focused' | 'other' | string;
   isRead: boolean;
   hasAttachments: boolean;
   webLink?: string;
@@ -34,6 +35,7 @@ export type OutlookStatusResponse = {
 
 export type OutlookMessagesParams = {
   folder?: 'inbox' | 'drafts' | 'sent' | 'sentitems' | 'all';
+  inboxView?: 'focused' | 'other' | 'all';
   limit?: number;
 };
 
@@ -65,5 +67,10 @@ export type OutlookDraftResponse = {
   subject?: string;
   bodyPreview?: string;
   webLink?: string;
+  message: string;
+};
+
+export type OutlookDeleteResponse = {
+  messageId: string;
   message: string;
 };

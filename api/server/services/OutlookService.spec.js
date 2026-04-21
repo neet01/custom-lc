@@ -82,6 +82,7 @@ describe('OutlookService', () => {
             receivedDateTime: '2026-04-21T12:00:00Z',
             bodyPreview: 'Please review the runway numbers.',
             importance: 'high',
+            inferenceClassification: 'focused',
             isRead: false,
             hasAttachments: true,
             webLink: 'https://outlook.example/message-1',
@@ -98,6 +99,7 @@ describe('OutlookService', () => {
       subject: 'Budget follow-up',
       from: { name: 'Finance', address: 'finance@example.mil' },
       hasAttachments: true,
+      inferenceClassification: 'focused',
     });
     expect(global.fetch).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -108,6 +110,32 @@ describe('OutlookService', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer graph-token',
         }),
+      }),
+    );
+    const requestedUrl = global.fetch.mock.calls[0][0];
+    expect(requestedUrl.searchParams.get('$filter')).toBe(
+      "inferenceClassification eq 'focused'",
+    );
+  });
+
+  it('deletes a message through Microsoft Graph', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+    });
+
+    const result = await OutlookService.deleteMessage(user, 'message-to-delete');
+
+    expect(result).toMatchObject({
+      messageId: 'message-to-delete',
+      message: 'Email moved to Deleted Items.',
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathname: '/v1.0/me/messages/message-to-delete',
+      }),
+      expect.objectContaining({
+        method: 'DELETE',
       }),
     );
   });

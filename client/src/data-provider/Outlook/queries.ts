@@ -8,6 +8,7 @@ import type {
 } from '@tanstack/react-query';
 import type {
   OutlookAnalyzeResponse,
+  OutlookDeleteResponse,
   OutlookDraftRequest,
   OutlookDraftResponse,
   OutlookMessage,
@@ -81,4 +82,12 @@ export const useCreateOutlookDraftMutation = (): UseMutationResult<
   { messageId: string; payload: OutlookDraftRequest }
 > => {
   return useMutation(({ messageId, payload }) => dataService.createOutlookDraft(messageId, payload));
+};
+
+export const useDeleteOutlookMessageMutation = (): UseMutationResult<
+  OutlookDeleteResponse,
+  unknown,
+  string
+> => {
+  return useMutation((messageId: string) => dataService.deleteOutlookMessage(messageId));
 };

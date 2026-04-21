@@ -63,6 +63,10 @@ export function createOutlookDraft(
   return request.post(endpoints.outlookCreateDraft(messageId), payload);
 }
 
+export function deleteOutlookMessage(messageId: string): Promise<o.OutlookDeleteResponse> {
+  return request.delete(endpoints.outlookDeleteMessage(messageId));
+}
+
 export const listSharedLinks = async (
   params: q.SharedLinksListParams,
 ): Promise<q.SharedLinksResponse> => {

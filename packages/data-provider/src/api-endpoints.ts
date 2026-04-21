@@ -85,6 +85,8 @@ export const outlookAnalyzeMessage = (messageId: string) =>
 export const outlookCreateDraft = (messageId: string) =>
   `${outlookMessage(messageId)}/drafts`;
 
+export const outlookDeleteMessage = (messageId: string) => outlookMessage(messageId);
+
 const shareRoot = `${BASE_URL}/api/share`;
 export const shareMessages = (shareId: string) => `${shareRoot}/${shareId}`;
 export const getSharedLink = (conversationId: string) => `${shareRoot}/link/${conversationId}`;

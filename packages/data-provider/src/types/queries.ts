@@ -422,6 +422,7 @@ export type AdminIssuesListResponse = {
 export type OutlookAuditAction =
   | 'mailbox_listed'
   | 'message_viewed'
+  | 'message_deleted'
   | 'message_analyzed'
   | 'draft_created';
 

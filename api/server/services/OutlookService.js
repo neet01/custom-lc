@@ -150,6 +150,7 @@ function normalizeMessage(message, includeBody = false) {
     bodyPreview: message.bodyPreview || '',
     body: includeBody ? message.body?.content || '' : undefined,
     importance: message.importance || 'normal',
+    inferenceClassification: message.inferenceClassification,
     isRead: Boolean(message.isRead),
     hasAttachments: Boolean(message.hasAttachments),
     webLink: message.webLink,
@@ -178,6 +179,7 @@ function getMessageSelect(includeBody = false) {
     'sentDateTime',
     'bodyPreview',
     'importance',
+    'inferenceClassification',
     'isRead',
     'hasAttachments',
     'webLink',
@@ -188,19 +190,47 @@ function getMessageSelect(includeBody = false) {
   return fields.join(',');
 }
 
-async function listMessages(user, { folder = 'inbox', limit = 25 } = {}) {
+function getInboxViewFilter(folder, inboxView) {
+  const normalizedFolder = String(folder || 'inbox').toLowerCase();
+  const normalizedView = String(inboxView || 'focused').toLowerCase();
+  if (normalizedFolder !== 'inbox' || normalizedView === 'all') {
+    return undefined;
+  }
+  if (normalizedView === 'focused' || normalizedView === 'other') {
+    return `inferenceClassification eq '${normalizedView}'`;
+  }
+  return undefined;
+}
+
+async function listMessages(user, { folder = 'inbox', inboxView = 'focused', limit = 25 } = {}) {
   const top = Math.min(Math.max(Number(limit) || 25, 1), 50);
   const payload = await graphRequest(user, getFolderPath(folder), {
     query: {
       $top: top,
       $select: getMessageSelect(false),
       $orderby: 'receivedDateTime desc',
+      $filter: getInboxViewFilter(folder, inboxView),
     },
   });
   return {
     messages: Array.isArray(payload?.value)
       ? payload.value.map((message) => normalizeMessage(message, false))
       : [],
+  };
+}
+
+async function deleteMessage(user, messageId) {
+  if (!messageId) {
+    throw new OutlookServiceError('Message id is required', 400);
+  }
+
+  await graphRequest(user, `/me/messages/${encodeURIComponent(messageId)}`, {
+    method: 'DELETE',
+  });
+
+  return {
+    messageId,
+    message: 'Email moved to Deleted Items.',
   };
 }
 
@@ -347,6 +377,7 @@ module.exports = {
   getStatus,
   listMessages,
   getMessage,
+  deleteMessage,
   analyzeMessage,
   createReplyDraft,
   buildLocalInsights,

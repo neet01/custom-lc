@@ -2,8 +2,8 @@ const { isEnabled } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 const { getGraphApiToken } = require('~/server/services/GraphTokenService');
 
-const DEFAULT_GRAPH_BASE_URL = 'https://graph.microsoft.us';
-const DEFAULT_SCOPES = 'Mail.Read Mail.ReadWrite';
+const DEFAULT_GRAPH_BASE_URL = 'https://graph.microsoft.us/v1.0';
+const DEFAULT_SCOPES = 'https://graph.microsoft.us/.default';
 
 class OutlookServiceError extends Error {
   constructor(message, status = 500, details) {
@@ -18,10 +18,18 @@ function isOutlookEnabled() {
   return isEnabled(process.env.OUTLOOK_AI_ENABLED) || isEnabled(process.env.ENABLE_OUTLOOK_AI);
 }
 
+function normalizeGraphBaseUrl(baseUrl = DEFAULT_GRAPH_BASE_URL) {
+  const trimmed = String(baseUrl || DEFAULT_GRAPH_BASE_URL).trim().replace(/\/+$/, '');
+  if (/\/(v1\.0|beta)$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed}/v1.0`;
+}
+
 function getOutlookConfig() {
   return {
     enabled: isOutlookEnabled(),
-    graphBaseUrl: process.env.OUTLOOK_GRAPH_BASE_URL || DEFAULT_GRAPH_BASE_URL,
+    graphBaseUrl: normalizeGraphBaseUrl(process.env.OUTLOOK_GRAPH_BASE_URL || DEFAULT_GRAPH_BASE_URL),
     scopes: process.env.OUTLOOK_GRAPH_SCOPES || DEFAULT_SCOPES,
   };
 }

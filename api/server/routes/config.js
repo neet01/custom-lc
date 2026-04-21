@@ -169,8 +169,8 @@ router.get('/', async function (req, res) {
       sharePointPickerGraphScope: process.env.SHAREPOINT_PICKER_GRAPH_SCOPE,
       sharePointPickerSharePointScope: process.env.SHAREPOINT_PICKER_SHAREPOINT_SCOPE,
       outlookAIEnabled,
-      outlookGraphBaseUrl: process.env.OUTLOOK_GRAPH_BASE_URL || 'https://graph.microsoft.us',
-      outlookGraphScopes: process.env.OUTLOOK_GRAPH_SCOPES || 'Mail.Read Mail.ReadWrite',
+      outlookGraphBaseUrl: process.env.OUTLOOK_GRAPH_BASE_URL || 'https://graph.microsoft.us/v1.0',
+      outlookGraphScopes: process.env.OUTLOOK_GRAPH_SCOPES || 'https://graph.microsoft.us/.default',
       conversationImportMaxFileSize: process.env.CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES
         ? parseInt(process.env.CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES, 10)
         : 0,

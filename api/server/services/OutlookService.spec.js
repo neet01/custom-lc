@@ -36,7 +36,7 @@ describe('OutlookService', () => {
       OUTLOOK_AI_ENABLED: 'true',
       OPENID_REUSE_TOKENS: 'true',
       OUTLOOK_GRAPH_BASE_URL: 'https://graph.microsoft.us',
-      OUTLOOK_GRAPH_SCOPES: 'Mail.Read Mail.ReadWrite',
+      OUTLOOK_GRAPH_SCOPES: 'https://graph.microsoft.us/.default',
     };
     getGraphApiToken.mockResolvedValue({ access_token: 'graph-token' });
     global.fetch = jest.fn();
@@ -53,8 +53,8 @@ describe('OutlookService', () => {
     expect(status).toMatchObject({
       enabled: true,
       connected: true,
-      graphBaseUrl: 'https://graph.microsoft.us',
-      scopes: 'Mail.Read Mail.ReadWrite',
+      graphBaseUrl: 'https://graph.microsoft.us/v1.0',
+      scopes: 'https://graph.microsoft.us/.default',
     });
     expect(getGraphApiToken).not.toHaveBeenCalled();
   });
@@ -102,7 +102,7 @@ describe('OutlookService', () => {
     expect(global.fetch).toHaveBeenCalledWith(
       expect.objectContaining({
         origin: 'https://graph.microsoft.us',
-        pathname: '/me/mailFolders/inbox/messages',
+        pathname: '/v1.0/me/mailFolders/inbox/messages',
       }),
       expect.objectContaining({
         headers: expect.objectContaining({
@@ -147,7 +147,7 @@ describe('OutlookService', () => {
     });
     expect(global.fetch).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        pathname: '/me/messages/source-message/createReply',
+        pathname: '/v1.0/me/messages/source-message/createReply',
       }),
       expect.objectContaining({
         method: 'POST',

@@ -1,0 +1,219 @@
+const { BedrockRuntimeClient, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
+const { NodeHttpHandler } = require('@smithy/node-http-handler');
+const { HttpsProxyAgent } = require('https-proxy-agent');
+const { isEnabled } = require('@librechat/api');
+const { logger } = require('@librechat/data-schemas');
+
+const DEFAULT_REGION = 'us-gov-west-1';
+const DEFAULT_MAX_TOKENS = 1200;
+const DEFAULT_TEMPERATURE = 0.2;
+
+let bedrockClient;
+
+function getAIConfig() {
+  return {
+    provider: String(process.env.OUTLOOK_AI_PROVIDER || 'local').toLowerCase(),
+    modelId: process.env.OUTLOOK_AI_MODEL_ID,
+    region:
+      process.env.OUTLOOK_AI_BEDROCK_REGION ||
+      process.env.BEDROCK_AWS_DEFAULT_REGION ||
+      process.env.AWS_REGION ||
+      DEFAULT_REGION,
+    maxTokens: Number(process.env.OUTLOOK_AI_MAX_TOKENS) || DEFAULT_MAX_TOKENS,
+    temperature:
+      process.env.OUTLOOK_AI_TEMPERATURE !== undefined
+        ? Number(process.env.OUTLOOK_AI_TEMPERATURE)
+        : DEFAULT_TEMPERATURE,
+  };
+}
+
+function isModelBackedAIEnabled() {
+  const config = getAIConfig();
+  return config.provider === 'bedrock' && Boolean(config.modelId);
+}
+
+function getBedrockClient() {
+  const config = getAIConfig();
+  if (bedrockClient?.config?.region === config.region) {
+    return bedrockClient.client;
+  }
+
+  const clientConfig = { region: config.region };
+  if (process.env.PROXY) {
+    const proxyAgent = new HttpsProxyAgent(process.env.PROXY);
+    clientConfig.requestHandler = new NodeHttpHandler({
+      httpAgent: proxyAgent,
+      httpsAgent: proxyAgent,
+    });
+  }
+
+  bedrockClient = {
+    config: { region: config.region },
+    client: new BedrockRuntimeClient(clientConfig),
+  };
+  return bedrockClient.client;
+}
+
+function compactEmail(message) {
+  return {
+    subject: message.subject,
+    from: message.from,
+    toRecipients: message.toRecipients,
+    ccRecipients: message.ccRecipients,
+    receivedDateTime: message.receivedDateTime,
+    importance: message.importance,
+    hasAttachments: message.hasAttachments,
+    body: message.body || message.bodyPreview || '',
+  };
+}
+
+function compactCalendarEvents(calendarEvents = []) {
+  return calendarEvents.slice(0, 8).map((event) => ({
+    subject: event.subject,
+    start: event.start,
+    end: event.end,
+    location: event.location,
+    organizer: event.organizer,
+    showAs: event.showAs,
+    isOnlineMeeting: event.isOnlineMeeting,
+  }));
+}
+
+function extractText(response) {
+  const content = response?.output?.message?.content;
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  return content
+    .map((part) => part?.text || '')
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function parseJsonObject(value) {
+  const text = String(value || '').trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) {
+      throw new Error('Model response did not contain JSON');
+    }
+    return JSON.parse(match[0]);
+  }
+}
+
+function normalizeStringArray(value, fallback) {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+  const strings = value.map((item) => String(item || '').trim()).filter(Boolean);
+  return strings.length > 0 ? strings : fallback;
+}
+
+async function callBedrock({ system, prompt }) {
+  const config = getAIConfig();
+  if (!config.modelId) {
+    throw new Error('OUTLOOK_AI_MODEL_ID is required for Bedrock-backed Outlook AI');
+  }
+
+  const response = await getBedrockClient().send(
+    new ConverseCommand({
+      modelId: config.modelId,
+      system: [{ text: system }],
+      messages: [
+        {
+          role: 'user',
+          content: [{ text: prompt }],
+        },
+      ],
+      inferenceConfig: {
+        maxTokens: config.maxTokens,
+        temperature: Number.isFinite(config.temperature) ? config.temperature : DEFAULT_TEMPERATURE,
+      },
+    }),
+  );
+
+  return extractText(response);
+}
+
+async function generateAnalysis({ message, calendarEvents = [] }) {
+  if (!isModelBackedAIEnabled()) {
+    return null;
+  }
+
+  const system = [
+    'You are an enterprise email assistant embedded in LibreChat.',
+    'Analyze emails for busy internal users in a regulated environment.',
+    'Do not invent facts. Do not include sensitive raw email text unless necessary.',
+    'Return only valid JSON matching the requested schema.',
+  ].join(' ');
+
+  const prompt = JSON.stringify({
+    task: 'Analyze this email and produce concise action-oriented inbox insights.',
+    schema: {
+      summary: 'string, 2-4 sentences',
+      suggestedActions: ['3-6 concrete action items'],
+      riskSignals: ['0-5 urgency, compliance, dependency, or scheduling signals'],
+      calendarSignals: ['0-4 signals from calendar context, if provided'],
+    },
+    email: compactEmail(message),
+    calendarEvents: compactCalendarEvents(calendarEvents),
+  });
+
+  const raw = await callBedrock({ system, prompt });
+  const parsed = parseJsonObject(raw);
+
+  return {
+    mode: 'bedrock',
+    summary: String(parsed.summary || '').trim() || 'No summary was generated.',
+    suggestedActions: normalizeStringArray(parsed.suggestedActions, [
+      'Review the email and decide whether a reply is needed.',
+    ]),
+    riskSignals: normalizeStringArray(parsed.riskSignals, ['No obvious risk signals detected.']),
+    calendarSignals: normalizeStringArray(parsed.calendarSignals, []),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function generateReplyDraft({ message, instructions = '', tone = 'professional', calendarEvents = [] }) {
+  if (!isModelBackedAIEnabled()) {
+    return null;
+  }
+
+  const system = [
+    'You are drafting an Outlook reply for the signed-in user.',
+    'Write only the reply body, with no markdown fences and no analysis preamble.',
+    'Be professional, concise, and safe. Do not promise actions the user did not approve.',
+    'If the email asks for scheduling, use calendar context cautiously and suggest availability windows only when clear.',
+  ].join(' ');
+
+  const prompt = JSON.stringify({
+    task: 'Draft a reply to this email.',
+    tone,
+    userInstructions: instructions || 'Draft a helpful professional response.',
+    email: compactEmail(message),
+    calendarEvents: compactCalendarEvents(calendarEvents),
+  });
+
+  return callBedrock({ system, prompt });
+}
+
+function logModelFailure(operation, error) {
+  logger.warn('[OutlookAIService] Model-backed Outlook AI failed; falling back safely', {
+    operation,
+    provider: getAIConfig().provider,
+    modelConfigured: Boolean(getAIConfig().modelId),
+    error: error?.message,
+  });
+}
+
+module.exports = {
+  getAIConfig,
+  isModelBackedAIEnabled,
+  generateAnalysis,
+  generateReplyDraft,
+  logModelFailure,
+  parseJsonObject,
+};

@@ -48,6 +48,7 @@ export type OutlookInsights = {
   summary: string;
   suggestedActions: string[];
   riskSignals: string[];
+  calendarSignals?: string[];
   generatedAt: string;
 };
 

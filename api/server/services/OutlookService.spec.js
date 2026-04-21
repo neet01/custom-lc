@@ -6,6 +6,13 @@ jest.mock('~/server/services/GraphTokenService', () => ({
   getGraphApiToken: jest.fn(),
 }));
 
+jest.mock('~/server/services/OutlookAIService', () => ({
+  isModelBackedAIEnabled: jest.fn(() => false),
+  generateAnalysis: jest.fn(),
+  generateReplyDraft: jest.fn(),
+  logModelFailure: jest.fn(),
+}));
+
 jest.mock('@librechat/data-schemas', () => ({
   logger: {
     warn: jest.fn(),
@@ -14,6 +21,7 @@ jest.mock('@librechat/data-schemas', () => ({
 }));
 
 const { getGraphApiToken } = require('~/server/services/GraphTokenService');
+const OutlookAIService = require('~/server/services/OutlookAIService');
 const OutlookService = require('./OutlookService');
 
 const user = {
@@ -31,6 +39,7 @@ describe('OutlookService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    OutlookAIService.isModelBackedAIEnabled.mockReturnValue(false);
     process.env = {
       ...originalEnv,
       OUTLOOK_AI_ENABLED: 'true',
@@ -195,6 +204,11 @@ describe('OutlookService', () => {
           bodyPreview: 'Thanks for reaching out.',
           webLink: 'https://outlook.example/draft-message',
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
       });
 
     const result = await OutlookService.createReplyDraft(user, 'source-message', {
@@ -206,13 +220,105 @@ describe('OutlookService', () => {
       draftId: 'draft-message',
       message: 'Draft reply created. Review it in Outlook before sending.',
     });
-    expect(global.fetch).toHaveBeenLastCalledWith(
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         pathname: '/v1.0/me/messages/source-message/createReply',
       }),
       expect.objectContaining({
         method: 'POST',
         body: expect.stringContaining('Ask for the due date.'),
+      }),
+    );
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        pathname: '/v1.0/me/messages/draft-message',
+      }),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: expect.stringContaining('Ask for the due date.'),
+      }),
+    );
+  });
+
+  it('uses model-backed analysis when Outlook AI is configured', async () => {
+    OutlookAIService.isModelBackedAIEnabled.mockReturnValue(true);
+    OutlookAIService.generateAnalysis.mockResolvedValue({
+      mode: 'bedrock',
+      summary: 'The sender needs a quick decision.',
+      suggestedActions: ['Reply with the decision owner.'],
+      riskSignals: ['Decision deadline appears soon.'],
+      generatedAt: '2026-04-21T00:00:00.000Z',
+    });
+    global.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 'source-message',
+        subject: 'Decision needed',
+        from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+        body: { content: 'Can you decide today?' },
+        bodyPreview: 'Can you decide today?',
+      }),
+    });
+
+    const result = await OutlookService.analyzeMessage(user, 'source-message');
+
+    expect(result.insights).toMatchObject({
+      mode: 'bedrock',
+      summary: 'The sender needs a quick decision.',
+    });
+    expect(OutlookAIService.generateAnalysis).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ subject: 'Decision needed' }),
+      }),
+    );
+  });
+
+  it('uses model-backed draft text and patches the Outlook draft body', async () => {
+    OutlookAIService.isModelBackedAIEnabled.mockReturnValue(true);
+    OutlookAIService.generateReplyDraft.mockResolvedValue(
+      'Thanks for the note. I can review this today and follow up with next steps.',
+    );
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'source-message',
+          subject: 'Need input',
+          from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+          body: { content: 'Can you review this?' },
+          bodyPreview: 'Can you review this?',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          id: 'draft-message',
+          subject: 'RE: Need input',
+          webLink: 'https://outlook.example/draft-message',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      });
+
+    const result = await OutlookService.createReplyDraft(user, 'source-message', {
+      instructions: 'Be helpful.',
+    });
+
+    expect(result.bodyPreview).toContain('I can review this today');
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        pathname: '/v1.0/me/messages/draft-message',
+      }),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: expect.stringContaining('I can review this today'),
       }),
     );
   });

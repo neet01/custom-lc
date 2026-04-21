@@ -1,6 +1,7 @@
 const { isEnabled } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 const { getGraphApiToken } = require('~/server/services/GraphTokenService');
+const OutlookAIService = require('~/server/services/OutlookAIService');
 
 const DEFAULT_GRAPH_BASE_URL = 'https://graph.microsoft.us/v1.0';
 const DEFAULT_SCOPES = 'https://graph.microsoft.us/.default';
@@ -157,6 +158,20 @@ function normalizeMessage(message, includeBody = false) {
   };
 }
 
+function normalizeCalendarEvent(event) {
+  return {
+    id: event.id,
+    subject: event.subject || '(No subject)',
+    start: event.start,
+    end: event.end,
+    location: event.location?.displayName || '',
+    organizer: normalizeEmailAddress(event.organizer),
+    showAs: event.showAs,
+    isOnlineMeeting: Boolean(event.isOnlineMeeting),
+    webLink: event.webLink,
+  };
+}
+
 function getFolderPath(folder = 'inbox') {
   const normalized = String(folder || 'inbox').toLowerCase();
   const folderMap = {
@@ -255,6 +270,43 @@ async function getMessage(user, messageId) {
   return normalizeMessage(payload, true);
 }
 
+function shouldFetchCalendarContext(message) {
+  if (!isEnabled(process.env.OUTLOOK_AI_INCLUDE_CALENDAR)) {
+    return false;
+  }
+  const source = `${message.subject || ''}\n${message.body || message.bodyPreview || ''}`;
+  return /\b(meeting|calendar|invite|schedule|availability|available|appointment|call|zoom|teams)\b/i.test(
+    source,
+  );
+}
+
+async function getCalendarContext(user, message) {
+  if (!shouldFetchCalendarContext(message)) {
+    return [];
+  }
+
+  const now = new Date();
+  const end = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+  try {
+    const payload = await graphRequest(user, '/me/calendarView', {
+      query: {
+        startDateTime: now.toISOString(),
+        endDateTime: end.toISOString(),
+        $top: 10,
+        $orderby: 'start/dateTime',
+        $select: 'id,subject,start,end,location,organizer,showAs,isOnlineMeeting,webLink',
+      },
+    });
+    return Array.isArray(payload?.value) ? payload.value.map(normalizeCalendarEvent) : [];
+  } catch (error) {
+    logger.warn('[OutlookService] Calendar context unavailable for Outlook AI', {
+      status: error?.status,
+      message: error?.message,
+    });
+    return [];
+  }
+}
+
 function truncateText(value, maxLength = 1200) {
   const normalized = String(value || '')
     .replace(/\r/g, '')
@@ -320,6 +372,20 @@ function buildLocalInsights(message) {
 
 async function analyzeMessage(user, messageId) {
   const message = await getMessage(user, messageId);
+  const calendarEvents = await getCalendarContext(user, message);
+  if (OutlookAIService.isModelBackedAIEnabled()) {
+    try {
+      const insights = await OutlookAIService.generateAnalysis({ message, calendarEvents });
+      if (insights) {
+        return {
+          messageId,
+          insights,
+        };
+      }
+    } catch (error) {
+      OutlookAIService.logModelFailure('analyzeMessage', error);
+    }
+  }
   return {
     messageId,
     insights: buildLocalInsights(message),
@@ -342,17 +408,52 @@ function buildDraftComment(message, { instructions = '', tone = 'professional' }
 
 async function createReplyDraft(user, messageId, options = {}) {
   const message = await getMessage(user, messageId);
-  const comment = buildDraftComment(message, options);
+  const calendarEvents = await getCalendarContext(user, message);
+  let comment = buildDraftComment(message, options);
+
+  if (OutlookAIService.isModelBackedAIEnabled()) {
+    try {
+      const generated = await OutlookAIService.generateReplyDraft({
+        message,
+        instructions: options.instructions,
+        tone: options.tone,
+        calendarEvents,
+      });
+      if (generated?.trim()) {
+        comment = generated.trim();
+      }
+    } catch (error) {
+      OutlookAIService.logModelFailure('createReplyDraft', error);
+    }
+  }
+
   const payload = await graphRequest(user, `/me/messages/${encodeURIComponent(messageId)}/createReply`, {
     method: 'POST',
     body: { comment },
   });
 
+  if (payload?.id && comment) {
+    await graphRequest(user, `/me/messages/${encodeURIComponent(payload.id)}`, {
+      method: 'PATCH',
+      body: {
+        body: {
+          contentType: 'Text',
+          content: comment,
+        },
+      },
+    }).catch((error) => {
+      logger.warn('[OutlookService] Failed to patch generated draft body', {
+        status: error?.status,
+        message: error?.message,
+      });
+    });
+  }
+
   return {
     sourceMessageId: messageId,
     draftId: payload?.id,
     subject: payload?.subject,
-    bodyPreview: payload?.bodyPreview,
+    bodyPreview: comment,
     webLink: payload?.webLink,
     message: 'Draft reply created. Review it in Outlook before sending.',
   };

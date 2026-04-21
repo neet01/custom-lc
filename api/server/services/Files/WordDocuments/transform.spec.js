@@ -5,6 +5,7 @@ const {
   inspectWordDocumentBuffer,
   isWordDocumentTransformable,
   transformWordDocumentBuffer,
+  validateWordDocumentBuffer,
 } = require('./transform');
 
 async function createStructuredDocxBuffer() {
@@ -101,6 +102,8 @@ describe('Word document transform service', () => {
     expect(result.filename).toBe('memo-transformed.docx');
     expect(result.summary.replacements[0].occurrences).toBe(1);
     expect(result.summary.appendedText).toBe(true);
+    expect(result.summary.validation.readable).toBe(true);
+    expect(result.summary.validation.checkedParts).toContain('word/document.xml');
 
     const extracted = await mammoth.extractRawText({ buffer: result.buffer });
     expect(extracted.value).toContain('Revenue is 650.');
@@ -129,6 +132,42 @@ describe('Word document transform service', () => {
     const outputZip = await JSZip.loadAsync(result.buffer);
     const documentXml = await outputZip.file('word/document.xml').async('string');
     expect(documentXml).toContain('<w:sectPr>');
+  });
+
+  it('rejects generated output that is not a readable docx package', async () => {
+    await expect(
+      validateWordDocumentBuffer({ buffer: Buffer.from('not a docx') }),
+    ).rejects.toThrow('not a readable DOCX package');
+  });
+
+  it('rejects generated output missing required OpenXML parts', async () => {
+    const zip = new JSZip();
+    zip.file(
+      '[Content_Types].xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>`,
+    );
+    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+    await expect(validateWordDocumentBuffer({ buffer })).rejects.toThrow(
+      'missing required part: _rels/.rels',
+    );
+  });
+
+  it('removes XML-invalid control characters from inserted text', async () => {
+    const inputBuffer = await createStructuredDocxBuffer();
+
+    const result = await transformWordDocumentBuffer({
+      buffer: inputBuffer,
+      sourceFilename: 'memo.docx',
+      appendText: 'Safe text\u0000 with a bad control character.',
+    });
+
+    await expect(validateWordDocumentBuffer({ buffer: result.buffer })).resolves.toEqual(
+      expect.objectContaining({ readable: true }),
+    );
+    const extracted = await mammoth.extractRawText({ buffer: result.buffer });
+    expect(extracted.value).toContain('Safe text with a bad control character.');
   });
 
   it('recognizes supported Word document MIME types', () => {

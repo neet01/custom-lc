@@ -112,6 +112,16 @@ function InsightsCard({ analysis }: { analysis?: OutlookAnalyzeResponse | null }
           </ul>
         </div>
       </div>
+      {insights.calendarSignals != null && insights.calendarSignals.length > 0 && (
+        <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+          <div className="text-xs font-semibold text-text-primary">Calendar context</div>
+          <ul className="mt-1 list-disc space-y-1 pl-4 text-xs leading-5 text-text-secondary">
+            {insights.calendarSignals.map((signal) => (
+              <li key={signal}>{signal}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {insights.mode === 'local-extractive' && (
         <p className="mt-3 text-[11px] leading-4 text-text-secondary">
           This first-pass analysis is local and extractive. It does not send email content through a

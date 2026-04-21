@@ -1,9 +1,10 @@
 const path = require('path');
 const JSZip = require('jszip');
 const mammoth = require('mammoth');
-const { XMLParser, XMLBuilder } = require('fast-xml-parser');
+const { XMLParser, XMLBuilder, XMLValidator } = require('fast-xml-parser');
 
 const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const REQUIRED_DOCX_PARTS = ['[Content_Types].xml', '_rels/.rels', 'word/document.xml'];
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -31,7 +32,7 @@ function normalizeTextInput(value) {
     return undefined;
   }
 
-  return value.replace(/\r\n/g, '\n');
+  return sanitizeXmlText(value).replace(/\r\n/g, '\n');
 }
 
 function normalizeStringList(values) {
@@ -50,9 +51,25 @@ function normalizeReplacementOperations(replaceText) {
   return replaceText
     .map((operation) => ({
       find: String(operation?.find ?? '').trim(),
-      replace: typeof operation?.replace === 'string' ? operation.replace : '',
+      replace: typeof operation?.replace === 'string' ? sanitizeXmlText(operation.replace) : '',
     }))
     .filter((operation) => operation.find.length > 0);
+}
+
+function sanitizeXmlText(value) {
+  return Array.from(String(value ?? ''))
+    .filter((char) => {
+      const codePoint = char.codePointAt(0);
+      return (
+        codePoint === 0x09 ||
+        codePoint === 0x0a ||
+        codePoint === 0x0d ||
+        (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+        (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+        (codePoint >= 0x10000 && codePoint <= 0x10ffff)
+      );
+    })
+    .join('');
 }
 
 function parseParagraphs(text) {
@@ -159,7 +176,7 @@ function getParagraphText(paragraphNode) {
 }
 
 function createTextNodes(text) {
-  const normalized = String(text ?? '').replace(/\r\n/g, '\n');
+  const normalized = sanitizeXmlText(text).replace(/\r\n/g, '\n');
   const parts = normalized.split('\n');
   const nodes = [];
 
@@ -335,6 +352,92 @@ async function inspectWordDocumentBuffer({
   };
 }
 
+function formatXmlValidationError(validation) {
+  if (validation === true) {
+    return undefined;
+  }
+
+  const error = validation?.err;
+  if (!error) {
+    return 'XML is invalid';
+  }
+
+  const location = [
+    error.line ? `line ${error.line}` : null,
+    error.col ? `column ${error.col}` : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+  return [error.msg, location].filter(Boolean).join(' at ');
+}
+
+async function validateXmlPart(zip, partName) {
+  const xml = await zip.file(partName)?.async('string');
+  if (!xml) {
+    throw new Error(`Generated Word document is missing required part: ${partName}`);
+  }
+
+  const validation = XMLValidator.validate(xml);
+  const validationError = formatXmlValidationError(validation);
+  if (validationError) {
+    throw new Error(`Generated Word document contains invalid XML in ${partName}: ${validationError}`);
+  }
+
+  return xml;
+}
+
+function validateDocxEntryNames(zip) {
+  for (const entryName of Object.keys(zip.files)) {
+    const pathSegments = entryName.split('/');
+    if (entryName.startsWith('/') || pathSegments.includes('..') || entryName.includes('\0')) {
+      throw new Error(`Generated Word document contains an unsafe package entry: ${entryName}`);
+    }
+  }
+}
+
+async function validateWordDocumentBuffer({ buffer }) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    throw new Error('Generated Word document buffer is empty');
+  }
+
+  let zip;
+  try {
+    zip = await JSZip.loadAsync(buffer);
+  } catch (error) {
+    throw new Error(`Generated Word document is not a readable DOCX package: ${error.message}`);
+  }
+
+  validateDocxEntryNames(zip);
+
+  for (const partName of REQUIRED_DOCX_PARTS) {
+    if (!zip.file(partName)) {
+      throw new Error(`Generated Word document is missing required part: ${partName}`);
+    }
+  }
+
+  await validateXmlPart(zip, '[Content_Types].xml');
+  await validateXmlPart(zip, '_rels/.rels');
+  const documentXml = await validateXmlPart(zip, 'word/document.xml');
+
+  const documentTree = xmlParser.parse(documentXml);
+  const documentEntry = findEntry(documentTree, 'w:document');
+  const bodyEntry = findEntry(getNodeChildren(documentEntry, 'w:document'), 'w:body');
+  if (!documentEntry || !bodyEntry) {
+    throw new Error('Generated Word document is missing a valid document body');
+  }
+
+  try {
+    await extractRawTextFromDocxBuffer(buffer);
+  } catch (error) {
+    throw new Error(`Generated Word document failed readback validation: ${error.message}`);
+  }
+
+  return {
+    checkedParts: REQUIRED_DOCX_PARTS,
+    readable: true,
+  };
+}
+
 async function transformWordDocumentBuffer({
   buffer,
   sourceFilename,
@@ -355,6 +458,7 @@ async function transformWordDocumentBuffer({
   const normalizedAppendText = normalizeTextInput(appendText);
   const normalizedReplaceText = normalizeReplacementOperations(replaceText);
   const normalizedRedactPhrases = normalizeStringList(redactPhrases);
+  const normalizedRedactionText = sanitizeXmlText(redactionText);
 
   if (
     normalizedReplacementText === undefined &&
@@ -382,7 +486,7 @@ async function transformWordDocumentBuffer({
 
   const state = {
     changed: false,
-    redactionText,
+    redactionText: normalizedRedactionText,
     replacements: normalizedReplaceText.map((operation) => ({
       ...operation,
       occurrences: 0,
@@ -424,6 +528,7 @@ async function transformWordDocumentBuffer({
 
   zip.file('word/document.xml', xmlBuilder.build(documentTree));
   const outputBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+  const validation = await validateWordDocumentBuffer({ buffer: outputBuffer });
   const outputText = await extractRawTextFromDocxBuffer(outputBuffer);
   const outputParagraphs = parseParagraphs(outputText);
 
@@ -440,6 +545,7 @@ async function transformWordDocumentBuffer({
       usedReplacementText: normalizedReplacementText !== undefined,
       prependedText: Boolean(normalizedPrependText?.trim()),
       appendedText: Boolean(normalizedAppendText?.trim()),
+      validation,
     },
   };
 }
@@ -449,4 +555,5 @@ module.exports = {
   inspectWordDocumentBuffer,
   isWordDocumentTransformable,
   transformWordDocumentBuffer,
+  validateWordDocumentBuffer,
 };

@@ -74,6 +74,11 @@ describe('OutlookAIService', () => {
           },
         ],
       },
+      replyMode: 'reply',
+      draftRecipients: {
+        toRecipients: [{ name: 'Ops', address: 'ops@example.mil' }],
+        ccRecipients: [],
+      },
     });
 
     const commandInput = bedrockRuntime.ConverseCommand.mock.calls[0][0];
@@ -87,6 +92,8 @@ describe('OutlookAIService', () => {
     expect(userPrompt.outlookContext.signedInUser.displayName).toBe('User Two');
     expect(userPrompt.identityRules).toContain('Author is signedInUser only.');
     expect(userPrompt.userInstructions).toContain('avoids unnecessary pleasantries');
+    expect(userPrompt.replyMode).toBe('reply');
+    expect(userPrompt.draftRecipients.toRecipients).toHaveLength(1);
   });
 
   it('allows the default draft style to be overridden by environment', async () => {
@@ -106,5 +113,37 @@ describe('OutlookAIService', () => {
 
     expect(systemPrompt).toContain('brief, executive, and firm');
     expect(userPrompt.defaultStyle).toBe('brief, executive, and firm');
+  });
+
+  it('generates meeting invite notes using thread context', async () => {
+    await OutlookAIService.generateMeetingInviteNote({
+      message: {
+        subject: 'License review sync',
+        from: { name: 'Procurement', address: 'procurement@example.mil' },
+        body: 'Please align on open licensing decisions and owners.',
+      },
+      subject: 'Meeting: License review sync',
+      slot: {
+        start: { dateTime: '2026-05-01T15:00:00Z', timeZone: 'UTC' },
+        end: { dateTime: '2026-05-01T15:30:00Z', timeZone: 'UTC' },
+      },
+      instructions: 'Highlight renewal deadline risk.',
+      outlookContext: {
+        signedInUser: {
+          displayName: 'User Two',
+          email: 'user2@example.mil',
+        },
+      },
+    });
+
+    const commandInput = bedrockRuntime.ConverseCommand.mock.calls[0][0];
+    const systemPrompt = commandInput.system.map((part) => part.text).join('\n');
+    const userPrompt = JSON.parse(commandInput.messages[0].content[0].text);
+
+    expect(systemPrompt).toContain('Outlook calendar invite');
+    expect(systemPrompt).toContain('Return plain text only');
+    expect(userPrompt.task).toBe('Generate a meeting invite note from this email context.');
+    expect(userPrompt.subject).toBe('Meeting: License review sync');
+    expect(userPrompt.organizerInstructions).toBe('Highlight renewal deadline risk.');
   });
 });

@@ -70,14 +70,20 @@ export type OutlookAnalyzeResponse = {
 export type OutlookDraftRequest = {
   instructions?: string;
   tone?: 'professional' | 'concise' | string;
+  replyMode?: 'smart' | 'reply' | 'reply_all';
+  replyAll?: boolean;
 };
 
 export type OutlookDraftResponse = {
   sourceMessageId: string;
+  conversationId?: string;
   draftId?: string;
   subject?: string;
   bodyPreview?: string;
   webLink?: string;
+  replyMode?: 'reply' | 'reply_all' | string;
+  toRecipients?: OutlookEmailAddress[];
+  ccRecipients?: OutlookEmailAddress[];
   message: string;
 };
 
@@ -156,6 +162,7 @@ export type OutlookCreateMeetingResponse = {
     };
   };
   attendees: OutlookMeetingAttendee[];
+  meetingNotePreview?: string;
   meetingDraft?: {
     id?: string;
     subject?: string;

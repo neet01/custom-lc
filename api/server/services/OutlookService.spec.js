@@ -10,6 +10,7 @@ jest.mock('~/server/services/OutlookAIService', () => ({
   isModelBackedAIEnabled: jest.fn(() => false),
   generateAnalysis: jest.fn(),
   generateReplyDraft: jest.fn(),
+  generateMeetingInviteNote: jest.fn(),
   logModelFailure: jest.fn(),
 }));
 
@@ -40,6 +41,7 @@ describe('OutlookService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     OutlookAIService.isModelBackedAIEnabled.mockReturnValue(false);
+    OutlookAIService.generateMeetingInviteNote.mockResolvedValue(null);
     process.env = {
       ...originalEnv,
       OUTLOOK_AI_ENABLED: 'true',
@@ -377,7 +379,7 @@ describe('OutlookService', () => {
     });
   });
 
-  it('creates a calendar-backed Teams meeting without sending attendee invites by default', async () => {
+  it('creates a calendar-backed Teams meeting with an AI-generated invite note', async () => {
     const slot = {
       start: { dateTime: '2026-04-23T17:00:00.0000000', timeZone: 'UTC' },
       end: { dateTime: '2026-04-23T17:30:00.0000000', timeZone: 'UTC' },
@@ -441,10 +443,14 @@ describe('OutlookService', () => {
     const result = await OutlookService.createTeamsMeeting(user, 'source-message', {
       slot,
       subject: 'Meeting: Schedule budget review',
+      sendInvites: true,
     });
 
     expect(result.event.onlineMeeting.joinUrl).toBe('https://teams.example/join');
     expect(result.draft).toBeUndefined();
+    expect(result.message).toBe('Teams meeting invite sent to attendees.');
+    expect(result.meetingNotePreview).toContain('Objective: Meeting: Schedule budget review.');
+    expect(result.meetingNotePreview).toContain('Context:');
     expect(result.meetingDraft).toMatchObject({
       id: 'event-1',
       subject: 'Meeting: Schedule budget review',
@@ -463,6 +469,8 @@ describe('OutlookService', () => {
     const eventPayload = JSON.parse(global.fetch.mock.calls[3][1].body);
     expect(eventPayload.onlineMeetingProvider).toBe('teamsForBusiness');
     expect(eventPayload.isOnlineMeeting).toBe(true);
+    expect(eventPayload.body.content).toContain('<strong>Meeting brief:</strong>');
+    expect(eventPayload.body.content).toContain('Objective: Meeting: Schedule budget review.');
     expect(eventPayload.attendees).toEqual([
       {
         type: 'required',
@@ -624,6 +632,39 @@ describe('OutlookService', () => {
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
+        json: async () => ({
+          id: 'draft-message',
+          subject: 'RE: Need input',
+          webLink: 'https://outlook.example/draft-message',
+          toRecipients: [{ emailAddress: { name: 'Ops', address: 'ops@example.mil' } }],
+          ccRecipients: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'draft-message',
+          subject: 'RE: Need input',
+          webLink: 'https://outlook.example/draft-message',
+          toRecipients: [{ emailAddress: { name: 'Ops', address: 'ops@example.mil' } }],
+          ccRecipients: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'draft-message',
+          subject: 'RE: Need input',
+          webLink: 'https://outlook.example/draft-message',
+          toRecipients: [{ emailAddress: { name: 'Ops', address: 'ops@example.mil' } }],
+          ccRecipients: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
         json: async () => ({}),
       });
 
@@ -643,7 +684,16 @@ describe('OutlookService', () => {
       }),
       expect.objectContaining({
         method: 'POST',
-        body: expect.stringContaining('Ask for the due date.'),
+        body: expect.stringContaining('"comment":""'),
+      }),
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      5,
+      expect.objectContaining({
+        pathname: '/v1.0/me/messages/draft-message',
+      }),
+      expect.objectContaining({
+        method: 'GET',
       }),
     );
     expect(global.fetch).toHaveBeenLastCalledWith(
@@ -660,11 +710,20 @@ describe('OutlookService', () => {
   it('uses model-backed analysis when Outlook AI is configured', async () => {
     OutlookAIService.isModelBackedAIEnabled.mockReturnValue(true);
     OutlookAIService.generateAnalysis.mockResolvedValue({
-      mode: 'bedrock',
-      summary: 'The sender needs a quick decision.',
-      suggestedActions: ['Reply with the decision owner.'],
-      riskSignals: ['Decision deadline appears soon.'],
-      generatedAt: '2026-04-21T00:00:00.000Z',
+      insights: {
+        mode: 'bedrock',
+        summary: 'The sender needs a quick decision.',
+        suggestedActions: ['Reply with the decision owner.'],
+        riskSignals: ['Decision deadline appears soon.'],
+        generatedAt: '2026-04-21T00:00:00.000Z',
+      },
+      usage: {
+        input_tokens: 220,
+        output_tokens: 54,
+        total_tokens: 274,
+        model: 'amazon.nova-micro-v1:0',
+        provider: 'bedrock',
+      },
     });
     global.fetch.mockResolvedValue({
       ok: true,
@@ -684,6 +743,17 @@ describe('OutlookService', () => {
       mode: 'bedrock',
       summary: 'The sender needs a quick decision.',
     });
+    expect(result._usage).toEqual([
+      expect.objectContaining({
+        context: 'outlook_analyze',
+        usage: expect.objectContaining({
+          input_tokens: 220,
+          output_tokens: 54,
+          model: 'amazon.nova-micro-v1:0',
+          provider: 'bedrock',
+        }),
+      }),
+    ]);
     expect(OutlookAIService.generateAnalysis).toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.objectContaining({ subject: 'Decision needed' }),
@@ -792,7 +862,16 @@ describe('OutlookService', () => {
   it('uses model-backed draft text and patches the Outlook draft body', async () => {
     OutlookAIService.isModelBackedAIEnabled.mockReturnValue(true);
     OutlookAIService.generateReplyDraft.mockResolvedValue(
-      'Thanks for the note. I can review this today and follow up with next steps.',
+      {
+        draft: 'Thanks for the note. I can review this today and follow up with next steps.',
+        usage: {
+          input_tokens: 180,
+          output_tokens: 40,
+          total_tokens: 220,
+          model: 'amazon.nova-micro-v1:0',
+          provider: 'bedrock',
+        },
+      },
     );
     global.fetch
       .mockResolvedValueOnce({
@@ -842,6 +921,8 @@ describe('OutlookService', () => {
           id: 'draft-message',
           subject: 'RE: Need input',
           webLink: 'https://outlook.example/draft-message',
+          toRecipients: [{ emailAddress: { name: 'Ops', address: 'ops@example.mil' } }],
+          ccRecipients: [],
         }),
       })
       .mockResolvedValueOnce({
@@ -855,6 +936,16 @@ describe('OutlookService', () => {
     });
 
     expect(result.bodyPreview).toContain('I can review this today');
+    expect(result.replyMode).toBe('reply');
+    expect(result._usage).toEqual([
+      expect.objectContaining({
+        context: 'outlook_draft',
+        usage: expect.objectContaining({
+          input_tokens: 180,
+          output_tokens: 40,
+        }),
+      }),
+    ]);
     expect(OutlookAIService.generateReplyDraft).toHaveBeenCalledWith(
       expect.objectContaining({
         outlookContext: expect.objectContaining({
@@ -871,6 +962,137 @@ describe('OutlookService', () => {
       expect.objectContaining({
         method: 'PATCH',
         body: expect.stringContaining('I can review this today'),
+      }),
+    );
+    expect(OutlookAIService.generateReplyDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draftRecipients: expect.objectContaining({
+          toRecipients: expect.any(Array),
+          ccRecipients: expect.any(Array),
+        }),
+        replyMode: 'reply',
+      }),
+    );
+  });
+
+  it('uses reply-all in smart mode and aligns salutation with resolved recipients', async () => {
+    OutlookAIService.isModelBackedAIEnabled.mockReturnValue(true);
+    OutlookAIService.generateReplyDraft.mockResolvedValue({
+      draft: 'Hi John, Jim and Jenny,\n\nI can take this next step.',
+      usage: {
+        input_tokens: 160,
+        output_tokens: 38,
+        total_tokens: 198,
+      },
+    });
+
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'source-message',
+          conversationId: 'thread-1',
+          subject: 'Coordination request',
+          from: { emailAddress: { name: 'John', address: 'john@example.mil' } },
+          toRecipients: [
+            { emailAddress: { name: 'Test User', address: 'test.user@example.mil' } },
+            { emailAddress: { name: 'Jim', address: 'jim@example.mil' } },
+          ],
+          ccRecipients: [{ emailAddress: { name: 'Jenny', address: 'jenny@example.mil' } }],
+          body: { content: 'Can everyone align?' },
+          bodyPreview: 'Can everyone align?',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'source-message',
+              conversationId: 'thread-1',
+              subject: 'Coordination request',
+              from: { emailAddress: { name: 'John', address: 'john@example.mil' } },
+              toRecipients: [
+                { emailAddress: { name: 'Test User', address: 'test.user@example.mil' } },
+                { emailAddress: { name: 'Jim', address: 'jim@example.mil' } },
+              ],
+              ccRecipients: [{ emailAddress: { name: 'Jenny', address: 'jenny@example.mil' } }],
+              body: { content: 'Can everyone align?' },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          id: 'draft-message',
+          subject: 'RE: Coordination request',
+          webLink: 'https://outlook.example/draft-message',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'draft-message',
+          subject: 'RE: Coordination request',
+          webLink: 'https://outlook.example/draft-message',
+          toRecipients: [
+            { emailAddress: { name: 'John', address: 'john@example.mil' } },
+            { emailAddress: { name: 'Jim', address: 'jim@example.mil' } },
+          ],
+          ccRecipients: [{ emailAddress: { name: 'Jenny', address: 'jenny@example.mil' } }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      });
+
+    const result = await OutlookService.createReplyDraft(user, 'source-message', {});
+
+    expect(result.replyMode).toBe('reply_all');
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        pathname: '/v1.0/me/messages/source-message/createReplyAll',
+      }),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    );
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        pathname: '/v1.0/me/messages/draft-message',
+      }),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: expect.stringContaining('Hi John and Jim,'),
+      }),
+    );
+    expect(OutlookAIService.generateReplyDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyMode: 'reply_all',
+        draftRecipients: expect.objectContaining({
+          toRecipients: expect.arrayContaining([
+            expect.objectContaining({ address: 'john@example.mil' }),
+            expect.objectContaining({ address: 'jim@example.mil' }),
+          ]),
+        }),
       }),
     );
   });

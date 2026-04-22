@@ -1,5 +1,6 @@
 const express = require('express');
 const { logger } = require('@librechat/data-schemas');
+const { recordCollectedUsage, getBalanceConfig, getTransactionsConfig } = require('@librechat/api');
 const { requireJwtAuth } = require('~/server/middleware');
 const OutlookService = require('~/server/services/OutlookService');
 const db = require('~/models');
@@ -39,6 +40,92 @@ function handleOutlookError(res, error) {
 
   logger.error('[OutlookRoutes] Unexpected Outlook route error', error);
   return res.status(500).json({ message: 'Outlook request failed' });
+}
+
+function normalizeUsageEntry(entry) {
+  const usage = entry?.usage;
+  if (!usage || typeof usage !== 'object') {
+    return null;
+  }
+
+  const input_tokens = Number(usage.input_tokens ?? usage.inputTokens ?? 0) || 0;
+  const output_tokens = Number(usage.output_tokens ?? usage.outputTokens ?? 0) || 0;
+  const total_tokens =
+    Number(usage.total_tokens ?? usage.totalTokens ?? input_tokens + output_tokens) ||
+    input_tokens + output_tokens;
+
+  if (input_tokens <= 0 && output_tokens <= 0 && total_tokens <= 0) {
+    return null;
+  }
+
+  return {
+    context: entry?.context || 'outlook_message',
+    usage: {
+      input_tokens,
+      output_tokens,
+      total_tokens,
+      model: usage.model,
+      provider: usage.provider,
+    },
+  };
+}
+
+function extractUsageEntries(result) {
+  if (!result || typeof result !== 'object') {
+    return [];
+  }
+  const rawEntries = Array.isArray(result._usage) ? result._usage : [];
+  if (Object.prototype.hasOwnProperty.call(result, '_usage')) {
+    delete result._usage;
+  }
+  return rawEntries.map(normalizeUsageEntry).filter(Boolean);
+}
+
+async function recordOutlookUsage(req, result, { messageId, latencyMs = 0 } = {}) {
+  const usageEntries = extractUsageEntries(result);
+  if (usageEntries.length === 0) {
+    return;
+  }
+
+  const userId = req.user?.id;
+  const conversationId =
+    result?.conversationId || result?.sourceMessageId || `outlook:${messageId || 'mailbox'}`;
+  const balanceConfig = getBalanceConfig(req.config);
+  const transactionsConfig = getTransactionsConfig(req.config);
+
+  for (const entry of usageEntries) {
+    await recordCollectedUsage(
+      {
+        spendTokens: db.spendTokens,
+        spendStructuredTokens: db.spendStructuredTokens,
+        pricing: { getMultiplier: db.getMultiplier, getCacheMultiplier: db.getCacheMultiplier },
+        bulkWriteOps: { insertMany: db.bulkInsertTransactions, updateBalance: db.updateBalance },
+        usagePersistence: { createUsageRecords: db.createUsageRecords },
+      },
+      {
+        user: userId,
+        conversationId: String(conversationId),
+        collectedUsage: [entry.usage],
+        context: entry.context,
+        messageId,
+        requestId: `${messageId || 'outlook'}:${entry.context}`,
+        sessionId: req.sessionID,
+        balance: balanceConfig,
+        transactions: transactionsConfig,
+        model: entry.usage.model || process.env.OUTLOOK_AI_MODEL_ID,
+        provider: entry.usage.provider || process.env.OUTLOOK_AI_PROVIDER || 'bedrock',
+        endpoint: req.baseUrl,
+        source: 'tool',
+        latencyMs,
+      },
+    ).catch((error) => {
+      logger.error('[OutlookRoutes] Failed to persist Outlook model usage', {
+        messageId,
+        context: entry.context,
+        error: error?.message || error,
+      });
+    });
+  }
 }
 
 router.use(requireJwtAuth);
@@ -121,8 +208,13 @@ router.delete('/messages/:messageId', async (req, res) => {
 });
 
 router.post('/messages/:messageId/analyze', async (req, res) => {
+  const startedAt = Date.now();
   try {
     const result = await OutlookService.analyzeMessage(req.user, req.params.messageId);
+    await recordOutlookUsage(req, result, {
+      messageId: result.messageId || req.params.messageId,
+      latencyMs: Date.now() - startedAt,
+    });
     await recordAudit(req, {
       action: 'message_analyzed',
       status: 'success',
@@ -143,8 +235,13 @@ router.post('/messages/:messageId/analyze', async (req, res) => {
 });
 
 router.post('/messages/:messageId/drafts', async (req, res) => {
+  const startedAt = Date.now();
   try {
     const result = await OutlookService.createReplyDraft(req.user, req.params.messageId, req.body);
+    await recordOutlookUsage(req, result, {
+      messageId: result.sourceMessageId || req.params.messageId,
+      latencyMs: Date.now() - startedAt,
+    });
     await recordAudit(req, {
       action: 'draft_created',
       status: 'success',
@@ -199,12 +296,17 @@ router.post('/messages/:messageId/meeting-slots', async (req, res) => {
 });
 
 router.post('/messages/:messageId/meetings', async (req, res) => {
+  const startedAt = Date.now();
   try {
     const result = await OutlookService.createTeamsMeeting(
       req.user,
       req.params.messageId,
       req.body,
     );
+    await recordOutlookUsage(req, result, {
+      messageId: result.sourceMessageId || req.params.messageId,
+      latencyMs: Date.now() - startedAt,
+    });
     await recordAudit(req, {
       action: 'meeting_created',
       status: 'success',

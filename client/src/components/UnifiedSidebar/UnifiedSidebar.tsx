@@ -4,7 +4,7 @@ import { useRecoilState } from 'recoil';
 import { useForm } from 'react-hook-form';
 import { useMediaQuery } from '@librechat/client';
 import type { ChatFormValues } from '~/common';
-import { ChatContext, ChatFormProvider, ActivePanelProvider } from '~/Providers';
+import { ChatContext, ChatFormProvider } from '~/Providers';
 import useUnifiedSidebarLinks from '~/hooks/Nav/useUnifiedSidebarLinks';
 import { useChatHelpers, useLocalize } from '~/hooks';
 import SidePanelNav from '~/components/SidePanel/Nav';
@@ -149,12 +149,10 @@ function UnifiedSidebar() {
           inert={!expanded ? '' : undefined}
         >
           <SidebarChatProvider>
-            <ActivePanelProvider>
-              <ExpandedPanel links={links} onCollapse={handleCollapse} />
-              <nav className="min-h-0 flex-1 overflow-hidden bg-surface-primary-alt">
-                <SidePanelNav links={links} />
-              </nav>
-            </ActivePanelProvider>
+            <ExpandedPanel links={links} onCollapse={handleCollapse} />
+            <nav className="min-h-0 flex-1 overflow-hidden bg-surface-primary-alt">
+              <SidePanelNav links={links} />
+            </nav>
           </SidebarChatProvider>
         </div>
         <div
@@ -178,29 +176,27 @@ function UnifiedSidebar() {
 
   return (
     <SidebarChatProvider>
-      <ActivePanelProvider>
-        <aside
-          className="relative flex h-full flex-shrink-0 overflow-hidden"
-          style={{
-            width: expanded ? sidebarWidth : COLLAPSED_WIDTH,
-            minWidth: expanded ? EXPANDED_MIN : COLLAPSED_WIDTH,
-            maxWidth: expanded ? `${EXPANDED_MAX_RATIO * 100}%` : COLLAPSED_WIDTH,
-            transition: isResizing
-              ? 'none'
-              : `width ${TRANSITION_MS}ms ${EASING}, min-width ${TRANSITION_MS}ms ${EASING}, max-width ${TRANSITION_MS}ms ${EASING}`,
-          }}
-          aria-label={localize('com_nav_control_panel')}
-        >
-          <Sidebar
-            links={links}
-            expanded={expanded}
-            onCollapse={handleCollapse}
-            onExpand={handleExpand}
-            onResizeStart={handleResizeStart}
-            onResizeKeyboard={handleResizeKeyboard}
-          />
-        </aside>
-      </ActivePanelProvider>
+      <aside
+        className="relative flex h-full flex-shrink-0 overflow-hidden"
+        style={{
+          width: expanded ? sidebarWidth : COLLAPSED_WIDTH,
+          minWidth: expanded ? EXPANDED_MIN : COLLAPSED_WIDTH,
+          maxWidth: expanded ? `${EXPANDED_MAX_RATIO * 100}%` : COLLAPSED_WIDTH,
+          transition: isResizing
+            ? 'none'
+            : `width ${TRANSITION_MS}ms ${EASING}, min-width ${TRANSITION_MS}ms ${EASING}, max-width ${TRANSITION_MS}ms ${EASING}`,
+        }}
+        aria-label={localize('com_nav_control_panel')}
+      >
+        <Sidebar
+          links={links}
+          expanded={expanded}
+          onCollapse={handleCollapse}
+          onExpand={handleExpand}
+          onResizeStart={handleResizeStart}
+          onResizeKeyboard={handleResizeKeyboard}
+        />
+      </aside>
     </SidebarChatProvider>
   );
 }

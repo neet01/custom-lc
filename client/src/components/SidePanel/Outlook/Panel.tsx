@@ -522,8 +522,8 @@ function MeetingSchedulerCard({
         <>
           <div className="mt-2 text-xs text-text-secondary">
             Proposed {slots.suggestions.length} slot(s) for {slots.attendees.length} attendee(s).
-            Pick one to prepare a Teams meeting draft with attendees on your calendar. Invites are
-            not sent automatically.
+            Pick one to schedule a Teams meeting from this thread. You will confirm before Outlook
+            sends invites.
           </div>
           {slots.suggestions.length === 0 && (
             <p className="mt-2 text-xs text-red-500">
@@ -553,8 +553,8 @@ function MeetingSchedulerCard({
                   </div>
                 )}
                 <ActionButton
-                  label="Prepare meeting draft"
-                  loadingLabel="Preparing..."
+                  label="Schedule Meeting"
+                  loadingLabel="Scheduling..."
                   className="mt-2 bg-amber-600 text-white hover:bg-amber-700"
                   onClick={() => onCreate(slot)}
                   isLoading={isCreating}
@@ -579,6 +579,16 @@ function MeetingSchedulerCard({
               Open Teams meeting
             </a>
           )}
+          {result.meetingNotePreview && (
+            <div className="mt-3 rounded-lg border border-green-500/20 bg-green-500/10 p-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-green-800 dark:text-green-200">
+                Invite note
+              </div>
+              <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-text-secondary">
+                {result.meetingNotePreview}
+              </p>
+            </div>
+          )}
           {(result.meetingDraft?.webLink || result.event?.webLink) && (
             <a
               className="ml-3 mt-2 inline-block text-xs font-medium text-green-700 hover:underline dark:text-green-300"
@@ -586,7 +596,7 @@ function MeetingSchedulerCard({
               target="_blank"
               rel="noreferrer"
             >
-              Open meeting draft
+              Open calendar event
             </a>
           )}
         </div>
@@ -935,7 +945,7 @@ export default function OutlookPanel() {
       return;
     }
     const confirmed = window.confirm(
-      'Prepare an Outlook meeting draft from this slot? You can review it before sending invites.',
+      'Schedule this Teams meeting now? This will send an Outlook invite to the selected attendees.',
     );
     if (!confirmed) {
       return;
@@ -951,12 +961,12 @@ export default function OutlookPanel() {
         attendees: meetingSlots.attendees,
         instructions: draftInstructions,
         createReplyDraft: false,
-        sendInvites: false,
+        sendInvites: true,
       },
     });
     setMeetingResultByMessage((current) => ({ ...current, [selectedId]: result }));
     markActionSuccess('meetingCreate');
-    showToast({ message: 'Meeting draft prepared.', severity: 'success' });
+    showToast({ message: 'Meeting scheduled and invites sent.', severity: 'success' });
   };
 
   const handleDelete = async () => {
@@ -1435,7 +1445,7 @@ export default function OutlookPanel() {
                           )}
                           {createMeetingMutation.error != null && (
                             <p className="mt-2 text-xs text-red-500">
-                              Unable to create Teams meeting.
+                              Unable to schedule Teams meeting.
                             </p>
                           )}
                           {!status.meetingSchedulingEnabled && (

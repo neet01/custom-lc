@@ -146,6 +146,27 @@ function extractText(response) {
     .trim();
 }
 
+function extractUsage(response, fallback = {}) {
+  const usage = response?.usage ?? {};
+  const inputTokens = Number(usage.inputTokens ?? usage.input_tokens ?? 0) || 0;
+  const outputTokens = Number(usage.outputTokens ?? usage.output_tokens ?? 0) || 0;
+  const totalTokens =
+    Number(usage.totalTokens ?? usage.total_tokens ?? inputTokens + outputTokens) ||
+    inputTokens + outputTokens;
+
+  if (inputTokens <= 0 && outputTokens <= 0 && totalTokens <= 0) {
+    return null;
+  }
+
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    model: fallback.model,
+    provider: fallback.provider,
+  };
+}
+
 function parseJsonObject(value) {
   const text = String(value || '').trim();
   try {
@@ -190,7 +211,13 @@ async function callBedrock({ system, prompt }) {
     }),
   );
 
-  return extractText(response);
+  return {
+    text: extractText(response),
+    usage: extractUsage(response, {
+      model: config.modelId,
+      provider: config.provider,
+    }),
+  };
 }
 
 async function generateAnalysis({ message, calendarEvents = [], outlookContext = {} }) {
@@ -221,19 +248,22 @@ async function generateAnalysis({ message, calendarEvents = [], outlookContext =
     calendarEvents: compactCalendarEvents(calendarEvents),
   });
 
-  const raw = await callBedrock({ system, prompt });
-  const parsed = parseJsonObject(raw);
+  const response = await callBedrock({ system, prompt });
+  const parsed = parseJsonObject(response.text);
 
   return {
-    mode: 'bedrock',
-    summary: String(parsed.summary || '').trim() || 'No summary was generated.',
-    suggestedActions: normalizeStringArray(parsed.suggestedActions, [
-      'Review the email and decide whether a reply is needed.',
-    ]),
-    riskSignals: normalizeStringArray(parsed.riskSignals, ['No obvious risk signals detected.']),
-    calendarSignals: normalizeStringArray(parsed.calendarSignals, []),
-    identitySignals: normalizeStringArray(parsed.identitySignals, []),
-    generatedAt: new Date().toISOString(),
+    insights: {
+      mode: 'bedrock',
+      summary: String(parsed.summary || '').trim() || 'No summary was generated.',
+      suggestedActions: normalizeStringArray(parsed.suggestedActions, [
+        'Review the email and decide whether a reply is needed.',
+      ]),
+      riskSignals: normalizeStringArray(parsed.riskSignals, ['No obvious risk signals detected.']),
+      calendarSignals: normalizeStringArray(parsed.calendarSignals, []),
+      identitySignals: normalizeStringArray(parsed.identitySignals, []),
+      generatedAt: new Date().toISOString(),
+    },
+    usage: response.usage,
   };
 }
 
@@ -243,6 +273,8 @@ async function generateReplyDraft({
   tone = 'professional',
   calendarEvents = [],
   outlookContext = {},
+  draftRecipients = {},
+  replyMode = 'reply',
 }) {
   if (!isModelBackedAIEnabled()) {
     return null;
@@ -265,6 +297,10 @@ async function generateReplyDraft({
     'Do not beg for attention or over-explain. Make the ask directly.',
     'Do not promise actions the user did not approve.',
     'If the email asks for scheduling, use calendar context cautiously and suggest availability windows only when clear.',
+    'Recipient alignment is mandatory: draft text must match the actual draft recipients list.',
+    'If there is exactly one draft recipient, address only that person in the salutation.',
+    'If there are multiple recipients, use a group salutation that matches the recipient set (for example "Hi all,").',
+    'Never mention names that are not present in draft recipients.',
   ].join(' ');
 
   const prompt = JSON.stringify({
@@ -280,12 +316,71 @@ async function generateReplyDraft({
       'Use participant job titles and relationship context when available, but do not invent missing hierarchy.',
       'If signedInUser should not be the responder, say so briefly and explain what needs clarification.',
     ],
+    replyMode,
+    draftRecipients: {
+      toRecipients: Array.isArray(draftRecipients.toRecipients) ? draftRecipients.toRecipients : [],
+      ccRecipients: Array.isArray(draftRecipients.ccRecipients) ? draftRecipients.ccRecipients : [],
+    },
     emailConversation: compactEmail(message),
     outlookContext: compactOutlookContext(outlookContext),
     calendarEvents: compactCalendarEvents(calendarEvents),
   });
 
-  return callBedrock({ system, prompt });
+  const response = await callBedrock({ system, prompt });
+  return {
+    draft: response.text,
+    usage: response.usage,
+  };
+}
+
+async function generateMeetingInviteNote({
+  message,
+  subject,
+  slot,
+  instructions = '',
+  calendarEvents = [],
+  outlookContext = {},
+}) {
+  if (!isModelBackedAIEnabled()) {
+    return null;
+  }
+
+  const system = [
+    'You are drafting the body text for an Outlook calendar invite.',
+    'Write a practical, concise meeting brief with direct language.',
+    'Do not invent facts, owners, or decisions that are not grounded in the thread context.',
+    'Return plain text only, no markdown, no JSON, no code fences.',
+    'Structure should include objective, agenda bullets, and prep/decisions when relevant.',
+  ].join(' ');
+
+  const prompt = JSON.stringify({
+    task: 'Generate a meeting invite note from this email context.',
+    outputFormat: 'plain_text',
+    constraints: {
+      maxLength: 1200,
+      style: 'direct, concise, neutral, and businesslike',
+      include: [
+        'Objective',
+        'Agenda (2-5 bullets)',
+        'Prep/decisions needed (when relevant)',
+      ],
+    },
+    subject,
+    scheduledSlot: slot,
+    organizerInstructions: instructions || undefined,
+    emailConversation: compactEmail(message),
+    outlookContext: compactOutlookContext(outlookContext),
+    calendarEvents: compactCalendarEvents(calendarEvents),
+  });
+
+  const response = await callBedrock({ system, prompt });
+  const text = String(response.text || '')
+    .replace(/\r/g, '')
+    .trim();
+  return {
+    note: text || null,
+    usage: response.usage,
+  };
 }
 
 function logModelFailure(operation, error) {
@@ -302,6 +397,7 @@ module.exports = {
   isModelBackedAIEnabled,
   generateAnalysis,
   generateReplyDraft,
+  generateMeetingInviteNote,
   logModelFailure,
   parseJsonObject,
   DEFAULT_DRAFT_STYLE,

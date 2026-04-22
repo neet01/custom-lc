@@ -37,6 +37,41 @@ class OutlookServiceError extends Error {
   }
 }
 
+function normalizeOutlookUsage(usage) {
+  if (!usage || typeof usage !== 'object') {
+    return null;
+  }
+
+  const inputTokens = Number(usage.input_tokens ?? usage.inputTokens ?? 0) || 0;
+  const outputTokens = Number(usage.output_tokens ?? usage.outputTokens ?? 0) || 0;
+  const totalTokens =
+    Number(usage.total_tokens ?? usage.totalTokens ?? inputTokens + outputTokens) ||
+    inputTokens + outputTokens;
+
+  if (inputTokens <= 0 && outputTokens <= 0 && totalTokens <= 0) {
+    return null;
+  }
+
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    model: usage.model,
+    provider: usage.provider,
+  };
+}
+
+function buildOutlookUsageEntry({ context, usage }) {
+  const normalizedUsage = normalizeOutlookUsage(usage);
+  if (!normalizedUsage) {
+    return null;
+  }
+  return {
+    context,
+    usage: normalizedUsage,
+  };
+}
+
 function isOutlookEnabled() {
   return isEnabled(process.env.OUTLOOK_AI_ENABLED) || isEnabled(process.env.ENABLE_OUTLOOK_AI);
 }
@@ -1181,13 +1216,104 @@ function formatDateTimeForDraft(value) {
   }).format(date);
 }
 
-function buildMeetingBody({ message, instructions }) {
-  const details = String(instructions || '').trim();
+function formatPlainTextAsHtmlParagraphs(value) {
+  const normalized = String(value || '').replace(/\r/g, '').trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br/>')}</p>`)
+    .join('');
+}
+
+function buildLocalMeetingInviteNote({ message, subject, slot, instructions }) {
+  const insights = buildLocalInsights(message);
+  const lines = [];
+  lines.push(`Objective: ${subject}.`);
+  const scheduledStart = formatDateTimeForDraft(slot?.start);
+  if (scheduledStart) {
+    lines.push(`Scheduled time: ${scheduledStart}.`);
+  }
+  lines.push(`Context: ${truncateText(insights.summary, 700)}`);
+
+  const suggestedActions = Array.isArray(insights.suggestedActions)
+    ? insights.suggestedActions.slice(0, 4)
+    : [];
+  if (suggestedActions.length > 0) {
+    lines.push('Agenda:');
+    suggestedActions.forEach((action, index) => {
+      lines.push(`${index + 1}. ${truncateText(action, 220)}`);
+    });
+  }
+
+  const organizerNote = truncateText(String(instructions || '').trim(), 500);
+  if (organizerNote) {
+    lines.push(`Organizer note: ${organizerNote}`);
+  }
+
+  return lines.join('\n');
+}
+
+async function generateMeetingInviteNote({
+  message,
+  subject,
+  slot,
+  instructions,
+  calendarEvents,
+  outlookContext,
+}) {
+  if (
+    OutlookAIService.isModelBackedAIEnabled() &&
+    typeof OutlookAIService.generateMeetingInviteNote === 'function'
+  ) {
+    try {
+      const generated = await OutlookAIService.generateMeetingInviteNote({
+        message,
+        subject,
+        slot,
+        instructions,
+        calendarEvents,
+        outlookContext,
+      });
+
+      const generatedNote =
+        typeof generated === 'string'
+          ? generated
+          : typeof generated?.note === 'string'
+            ? generated.note
+            : '';
+
+      if (generatedNote?.trim()) {
+        return {
+          note: truncateText(generatedNote, 1400),
+          usage: normalizeOutlookUsage(generated?.usage),
+        };
+      }
+    } catch (error) {
+      OutlookAIService.logModelFailure('createTeamsMeeting.meetingNote', error);
+    }
+  }
+
+  return {
+    note: buildLocalMeetingInviteNote({
+      message,
+      subject,
+      slot,
+      instructions,
+    }),
+    usage: null,
+  };
+}
+
+function buildMeetingBody({ message, meetingNote }) {
   const threadSubject = stripReplyPrefix(message.subject);
   return [
     '<p>Meeting scheduled from the Outlook thread.</p>',
     threadSubject ? `<p><strong>Source thread:</strong> ${escapeHtml(threadSubject)}</p>` : '',
-    details ? `<p><strong>Notes:</strong> ${escapeHtml(details)}</p>` : '',
+    meetingNote
+      ? `<p><strong>Meeting brief:</strong></p>${formatPlainTextAsHtmlParagraphs(meetingNote)}`
+      : '',
   ]
     .filter(Boolean)
     .join('');
@@ -1217,11 +1343,23 @@ async function createTeamsMeeting(user, messageId, options = {}) {
 
   const slot = normalizeMeetingTimeSlot(options.slot);
   const subject = buildMeetingSubject(message, options.subject);
+  const calendarEvents = await getCalendarContext(user, message);
+  const meetingNoteResult = await generateMeetingInviteNote({
+    message,
+    subject,
+    slot,
+    instructions: options.instructions,
+    calendarEvents,
+    outlookContext,
+  });
+  const meetingNote = meetingNoteResult.note;
+  const sendInvites = options.sendInvites === true;
+
   const eventPayload = {
     subject,
     body: {
       contentType: 'HTML',
-      content: buildMeetingBody({ message, instructions: options.instructions }),
+      content: buildMeetingBody({ message, meetingNote }),
     },
     start: slot.start,
     end: slot.end,
@@ -1251,7 +1389,7 @@ async function createTeamsMeeting(user, messageId, options = {}) {
       event,
       subject,
       slot,
-      sentInvites: options.sendInvites === true,
+      sentInvites: sendInvites,
     });
     draft = await graphRequest(user, `/me/messages/${encodeURIComponent(messageId)}/createReply`, {
       method: 'POST',
@@ -1275,10 +1413,17 @@ async function createTeamsMeeting(user, messageId, options = {}) {
     }
   }
 
+  const meetingUsageEntry = buildOutlookUsageEntry({
+    context: 'outlook_meeting',
+    usage: meetingNoteResult.usage,
+  });
+
   return {
     sourceMessageId: messageId,
+    conversationId: message.conversationId || `outlook:${messageId}`,
     event,
     attendees,
+    meetingNotePreview: meetingNote,
     meetingDraft: {
       id: event.id,
       subject: event.subject,
@@ -1292,11 +1437,12 @@ async function createTeamsMeeting(user, messageId, options = {}) {
         }
       : undefined,
     message:
-      options.sendInvites === true
+      sendInvites
         ? 'Teams meeting invite sent to attendees.'
         : shouldCreateReplyDraft
           ? 'Teams meeting draft prepared. Review it in Outlook and optionally send your companion reply draft.'
           : 'Teams meeting draft prepared. Review it in Outlook and send when ready.',
+    ...(meetingUsageEntry ? { _usage: [meetingUsageEntry] } : {}),
   };
 }
 
@@ -1380,15 +1526,25 @@ async function analyzeMessage(user, messageId) {
   ]);
   if (OutlookAIService.isModelBackedAIEnabled()) {
     try {
-      const insights = await OutlookAIService.generateAnalysis({
+      const generated = await OutlookAIService.generateAnalysis({
         message,
         calendarEvents,
         outlookContext,
       });
-      if (insights) {
+      if (generated) {
+        const generatedInsights =
+          generated?.insights && typeof generated.insights === 'object'
+            ? generated.insights
+            : generated;
+        const usageEntry = buildOutlookUsageEntry({
+          context: 'outlook_analyze',
+          usage: generated?.usage,
+        });
         return {
           messageId,
-          insights,
+          conversationId: message.conversationId || `outlook:${messageId}`,
+          insights: generatedInsights,
+          ...(usageEntry ? { _usage: [usageEntry] } : {}),
         };
       }
     } catch (error) {
@@ -1397,6 +1553,7 @@ async function analyzeMessage(user, messageId) {
   }
   return {
     messageId,
+    conversationId: message.conversationId || `outlook:${messageId}`,
     insights: buildLocalInsights(message),
   };
 }
@@ -1415,13 +1572,170 @@ function buildDraftComment(message, { instructions = '', tone = 'professional' }
   return `${opener}${nextStep}\n\nBest,`;
 }
 
+function normalizeReplyMode(options = {}) {
+  const mode = String(options.replyMode || '').trim().toLowerCase();
+  if (mode === 'reply' || mode === 'reply_all' || mode === 'smart') {
+    return mode;
+  }
+  if (options.replyAll === true) {
+    return 'reply_all';
+  }
+  if (options.replyAll === false) {
+    return 'reply';
+  }
+  return 'smart';
+}
+
+function getSignedInEmailSet(outlookContext = {}) {
+  const emails = [
+    outlookContext?.signedInUser?.email,
+    outlookContext?.signedInUser?.userPrincipalName,
+  ]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+  return new Set(emails);
+}
+
+function shouldUseReplyAll(message, outlookContext = {}) {
+  const signedInEmails = getSignedInEmailSet(outlookContext);
+  const nonSignedToRecipients = (message.toRecipients || []).filter((recipient) => {
+    const address = String(recipient?.address || '')
+      .trim()
+      .toLowerCase();
+    return address && !signedInEmails.has(address);
+  });
+  const hasNonSignedCc = (message.ccRecipients || []).some((recipient) => {
+    const address = String(recipient?.address || '')
+      .trim()
+      .toLowerCase();
+    return address && !signedInEmails.has(address);
+  });
+
+  return nonSignedToRecipients.length > 1 || hasNonSignedCc;
+}
+
+function resolveReplyMode(message, outlookContext, options = {}) {
+  const requestedMode = normalizeReplyMode(options);
+  if (requestedMode === 'smart') {
+    return shouldUseReplyAll(message, outlookContext) ? 'reply_all' : 'reply';
+  }
+  return requestedMode;
+}
+
+function normalizeDraftRecipients(payload) {
+  return {
+    toRecipients: Array.isArray(payload?.toRecipients)
+      ? payload.toRecipients.map(normalizeEmailAddress)
+      : [],
+    ccRecipients: Array.isArray(payload?.ccRecipients)
+      ? payload.ccRecipients.map(normalizeEmailAddress)
+      : [],
+  };
+}
+
+function resolveDraftRecipientName(recipient) {
+  const name = String(recipient?.name || '').trim();
+  if (name && !name.includes('@')) {
+    return name;
+  }
+  const address = String(recipient?.address || '').trim();
+  if (!address.includes('@')) {
+    return address || 'there';
+  }
+  const local = address.split('@')[0] || 'there';
+  return local
+    .replace(/[._-]+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function buildExpectedSalutation(toRecipients = []) {
+  const names = [];
+  const seen = new Set();
+  for (const recipient of toRecipients) {
+    const resolved = resolveDraftRecipientName(recipient);
+    const key = resolved.toLowerCase();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    names.push(resolved);
+  }
+
+  if (names.length === 0) {
+    return null;
+  }
+  if (names.length === 1) {
+    return `Hi ${names[0]},`;
+  }
+  if (names.length === 2) {
+    return `Hi ${names[0]} and ${names[1]},`;
+  }
+  if (names.length === 3) {
+    return `Hi ${names[0]}, ${names[1]}, and ${names[2]},`;
+  }
+  return 'Hi all,';
+}
+
+function alignDraftSalutation(comment, toRecipients = []) {
+  const expectedSalutation = buildExpectedSalutation(toRecipients);
+  const text = String(comment || '').replace(/\r/g, '').trim();
+  if (!expectedSalutation || !text) {
+    return text;
+  }
+
+  const lines = text.split('\n');
+  const greetingPattern =
+    /^\s*(hi|hello|hey|good\s+(morning|afternoon|evening))\b[\s\S]*?(,|$)\s*$/i;
+  const firstContentIndex = lines.findIndex((line) => line.trim().length > 0);
+
+  if (firstContentIndex === -1) {
+    return expectedSalutation;
+  }
+
+  if (greetingPattern.test(lines[firstContentIndex])) {
+    lines[firstContentIndex] = expectedSalutation;
+    return lines.join('\n').trim();
+  }
+
+  return `${expectedSalutation}\n\n${text}`;
+}
+
 async function createReplyDraft(user, messageId, options = {}) {
   const message = await getMessage(user, messageId, { includeThread: true });
   const [calendarEvents, outlookContext] = await Promise.all([
     getCalendarContext(user, message),
     getOutlookAIContext(user, message),
   ]);
+  const replyMode = resolveReplyMode(message, outlookContext, options);
+  const replyAction = replyMode === 'reply_all' ? 'createReplyAll' : 'createReply';
+  const draftPayload = await graphRequest(
+    user,
+    `/me/messages/${encodeURIComponent(messageId)}/${replyAction}`,
+    {
+      method: 'POST',
+      body: { comment: '' },
+    },
+  );
+  let draftDetails = draftPayload;
+  if (draftPayload?.id) {
+    try {
+      draftDetails = await graphRequest(user, `/me/messages/${encodeURIComponent(draftPayload.id)}`, {
+        query: {
+          $select: 'id,subject,webLink,toRecipients,ccRecipients',
+        },
+        suppressErrorLog: true,
+      });
+    } catch (error) {
+      logger.warn('[OutlookService] Failed to fetch draft recipients after draft creation', {
+        status: error?.status,
+        message: error?.message,
+      });
+    }
+  }
+  const draftRecipients = normalizeDraftRecipients(draftDetails);
   let comment = buildDraftComment(message, options);
+  let generatedUsage = null;
 
   if (OutlookAIService.isModelBackedAIEnabled()) {
     try {
@@ -1431,26 +1745,27 @@ async function createReplyDraft(user, messageId, options = {}) {
         tone: options.tone,
         calendarEvents,
         outlookContext,
+        draftRecipients,
+        replyMode,
       });
-      if (generated?.trim()) {
-        comment = generated.trim();
+      const generatedDraft =
+        typeof generated === 'string'
+          ? generated
+          : typeof generated?.draft === 'string'
+            ? generated.draft
+            : '';
+      generatedUsage = normalizeOutlookUsage(generated?.usage);
+      if (generatedDraft?.trim()) {
+        comment = generatedDraft.trim();
       }
     } catch (error) {
       OutlookAIService.logModelFailure('createReplyDraft', error);
     }
   }
+  comment = alignDraftSalutation(comment, draftRecipients.toRecipients);
 
-  const payload = await graphRequest(
-    user,
-    `/me/messages/${encodeURIComponent(messageId)}/createReply`,
-    {
-      method: 'POST',
-      body: { comment },
-    },
-  );
-
-  if (payload?.id && comment) {
-    await graphRequest(user, `/me/messages/${encodeURIComponent(payload.id)}`, {
+  if (draftPayload?.id && comment) {
+    await graphRequest(user, `/me/messages/${encodeURIComponent(draftPayload.id)}`, {
       method: 'PATCH',
       body: {
         body: {
@@ -1466,13 +1781,23 @@ async function createReplyDraft(user, messageId, options = {}) {
     });
   }
 
+  const draftUsageEntry = buildOutlookUsageEntry({
+    context: 'outlook_draft',
+    usage: generatedUsage,
+  });
+
   return {
     sourceMessageId: messageId,
-    draftId: payload?.id,
-    subject: payload?.subject,
+    conversationId: message.conversationId || `outlook:${messageId}`,
+    draftId: draftPayload?.id,
+    subject: draftDetails?.subject || draftPayload?.subject,
     bodyPreview: comment,
-    webLink: payload?.webLink,
+    webLink: draftDetails?.webLink || draftPayload?.webLink,
+    replyMode,
+    toRecipients: draftRecipients.toRecipients,
+    ccRecipients: draftRecipients.ccRecipients,
     message: 'Draft reply created. Review it in Outlook before sending.',
+    ...(draftUsageEntry ? { _usage: [draftUsageEntry] } : {}),
   };
 }
 

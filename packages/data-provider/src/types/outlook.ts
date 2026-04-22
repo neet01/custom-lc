@@ -130,6 +130,7 @@ export type OutlookCreateMeetingRequest = {
   attendees?: OutlookMeetingAttendee[];
   instructions?: string;
   createReplyDraft?: boolean;
+  sendInvites?: boolean;
 };
 
 export type OutlookCreateMeetingResponse = {

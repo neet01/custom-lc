@@ -8,6 +8,10 @@ const DEFAULT_SCOPES = 'https://graph.microsoft.us/.default';
 const USER_PROFILE_SELECT =
   'id,displayName,mail,userPrincipalName,jobTitle,department,officeLocation';
 const DEFAULT_MEETING_DURATION_MINUTES = 30;
+const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+const DEFAULT_WORKDAY_START = '09:00:00';
+const DEFAULT_WORKDAY_END = '17:00:00';
+const DEFAULT_WORKING_TIME_ZONE = 'Eastern Standard Time';
 
 class OutlookServiceError extends Error {
   constructor(message, status = 500, details) {
@@ -518,8 +522,8 @@ async function getCurrentUserManager(user) {
   }
 }
 
-async function getMailboxContext(user) {
-  if (!getOutlookConfig().includeMailboxSettings) {
+async function getMailboxContext(user, { force = false } = {}) {
+  if (!force && !getOutlookConfig().includeMailboxSettings) {
     return undefined;
   }
 
@@ -743,6 +747,83 @@ function buildDateTimeRange(days = 14) {
   };
 }
 
+function normalizeGraphTime(value, fallback) {
+  const match = String(value || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) {
+    return fallback;
+  }
+  const hours = Math.min(Math.max(Number(match[1]), 0), 23);
+  const minutes = Math.min(Math.max(Number(match[2]), 0), 59);
+  const seconds = Math.min(Math.max(Number(match[3] || 0), 0), 59);
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':');
+}
+
+function formatGraphDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getUtcDayName(date) {
+  return [
+    'sunday',
+    'monday',
+    'tuesday',
+    'wednesday',
+    'thursday',
+    'friday',
+    'saturday',
+  ][date.getUTCDay()];
+}
+
+function getWorkingHoursConfig(mailboxSettings) {
+  const workingHours = mailboxSettings?.workingHours;
+  return {
+    daysOfWeek:
+      Array.isArray(workingHours?.daysOfWeek) && workingHours.daysOfWeek.length > 0
+        ? workingHours.daysOfWeek.map((day) => String(day).toLowerCase())
+        : DEFAULT_WORKING_DAYS,
+    startTime: normalizeGraphTime(
+      process.env.OUTLOOK_AI_WORKDAY_START || workingHours?.startTime,
+      DEFAULT_WORKDAY_START,
+    ),
+    endTime: normalizeGraphTime(
+      process.env.OUTLOOK_AI_WORKDAY_END || workingHours?.endTime,
+      DEFAULT_WORKDAY_END,
+    ),
+    timeZone:
+      process.env.OUTLOOK_AI_WORKING_HOURS_TIME_ZONE ||
+      workingHours?.timeZone ||
+      mailboxSettings?.timeZone ||
+      DEFAULT_WORKING_TIME_ZONE,
+  };
+}
+
+function buildWorkingHourTimeSlots(days = 14, mailboxSettings) {
+  const normalizedDays = normalizePositiveInteger(days, 14, { min: 1, max: 30 });
+  const workingHours = getWorkingHoursConfig(mailboxSettings);
+  const slots = [];
+  const startDate = new Date();
+
+  for (let offset = 1; slots.length < normalizedDays && offset <= normalizedDays + 14; offset++) {
+    const date = new Date(startDate.getTime() + offset * 24 * 60 * 60 * 1000);
+    if (!workingHours.daysOfWeek.includes(getUtcDayName(date))) {
+      continue;
+    }
+    const graphDate = formatGraphDate(date);
+    slots.push({
+      start: {
+        dateTime: `${graphDate}T${workingHours.startTime}`,
+        timeZone: workingHours.timeZone,
+      },
+      end: {
+        dateTime: `${graphDate}T${workingHours.endTime}`,
+        timeZone: workingHours.timeZone,
+      },
+    });
+  }
+
+  return slots.length > 0 ? slots : [buildDateTimeRange(days)];
+}
+
 function normalizeMeetingTimeSlot(slot) {
   if (!slot?.start?.dateTime || !slot?.end?.dateTime) {
     throw new OutlookServiceError('A meeting time slot with start and end is required', 400);
@@ -789,7 +870,9 @@ async function proposeMeetingSlots(user, messageId, options = {}) {
   }
 
   const duration = buildMeetingDuration(options.durationMinutes);
-  const window = buildDateTimeRange(options.days);
+  const mailboxSettings =
+    outlookContext.mailboxSettings || (await getMailboxContext(user, { force: true }));
+  const timeSlots = buildWorkingHourTimeSlots(options.days, mailboxSettings);
   const maxCandidates = normalizePositiveInteger(options.maxCandidates, 5, { min: 1, max: 10 });
 
   const payload = await graphRequest(user, '/me/findMeetingTimes', {
@@ -804,7 +887,7 @@ async function proposeMeetingSlots(user, messageId, options = {}) {
       })),
       timeConstraint: {
         activityDomain: 'work',
-        timeslots: [window],
+        timeslots: timeSlots,
       },
       meetingDuration: duration.isoDuration,
       maxCandidates,
@@ -862,13 +945,16 @@ function buildMeetingBody({ message, instructions }) {
     .join('');
 }
 
-function buildMeetingDraftComment({ event, subject, slot }) {
+function buildMeetingDraftComment({ event, subject, slot, sentInvites = false }) {
   const joinUrl = event.onlineMeeting?.joinUrl || event.webLink;
   const start = formatDateTimeForDraft(slot.start);
+  const action = sentInvites ? 'I scheduled' : 'I prepared a Teams meeting for';
   return [
-    `I scheduled ${subject}${start ? ` for ${start}` : ''}.`,
+    `${action} ${subject}${start ? ` for ${start}` : ''}.`,
     joinUrl ? `\n\nTeams link: ${joinUrl}` : '',
-    '\n\nSee the calendar invite for details.',
+    sentInvites
+      ? '\n\nSee the calendar invite for details.'
+      : '\n\nPlease review the proposed time and Teams link.',
   ].join('');
 }
 
@@ -891,17 +977,20 @@ async function createTeamsMeeting(user, messageId, options = {}) {
     },
     start: slot.start,
     end: slot.end,
-    attendees: attendees.map((attendee) => ({
+    allowNewTimeProposals: true,
+    isOnlineMeeting: true,
+    onlineMeetingProvider: 'teamsForBusiness',
+  };
+
+  if (options.sendInvites === true) {
+    eventPayload.attendees = attendees.map((attendee) => ({
       type: 'required',
       emailAddress: {
         name: attendee.name,
         address: attendee.address,
       },
-    })),
-    allowNewTimeProposals: true,
-    isOnlineMeeting: true,
-    onlineMeetingProvider: 'teamsForBusiness',
-  };
+    }));
+  }
 
   const event = normalizeOnlineMeetingEvent(
     await graphRequest(user, '/me/events', {
@@ -912,7 +1001,12 @@ async function createTeamsMeeting(user, messageId, options = {}) {
 
   let draft;
   if (options.createReplyDraft !== false) {
-    const comment = buildMeetingDraftComment({ event, subject, slot });
+    const comment = buildMeetingDraftComment({
+      event,
+      subject,
+      slot,
+      sentInvites: options.sendInvites === true,
+    });
     draft = await graphRequest(user, `/me/messages/${encodeURIComponent(messageId)}/createReply`, {
       method: 'POST',
       body: { comment },
@@ -946,7 +1040,10 @@ async function createTeamsMeeting(user, messageId, options = {}) {
           webLink: draft.webLink,
         }
       : undefined,
-    message: 'Teams meeting created. Review the calendar invite and reply draft before sending.',
+    message:
+      options.sendInvites === true
+        ? 'Teams meeting invite sent. Review the reply draft before sending.'
+        : 'Teams meeting created on your calendar only. Review and send the reply draft when ready.',
   };
 }
 

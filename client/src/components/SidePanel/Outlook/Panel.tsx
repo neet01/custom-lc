@@ -250,7 +250,8 @@ function MeetingSchedulerCard({
         <>
           <div className="mt-2 text-xs text-text-secondary">
             Proposed {slots.suggestions.length} slot(s) for {slots.attendees.length} attendee(s).
-            Pick one to create a calendar-backed Teams meeting.
+            Pick one to create a Teams meeting on your calendar and prepare a reply draft. Invites
+            are not sent automatically.
           </div>
           {slots.suggestions.length === 0 && (
             <p className="mt-2 text-xs text-red-500">
@@ -280,7 +281,7 @@ function MeetingSchedulerCard({
                   onClick={() => onCreate(slot)}
                   disabled={isCreating}
                 >
-                  {isCreating ? 'Creating...' : 'Create Teams meeting'}
+                  {isCreating ? 'Preparing...' : 'Prepare Teams draft'}
                 </button>
               </div>
             ))}
@@ -436,7 +437,7 @@ export default function OutlookPanel() {
       return;
     }
     const confirmed = window.confirm(
-      'Create a calendar-backed Teams meeting for this slot and prepare a reply draft?',
+      'Create a Teams meeting on your calendar and prepare a reply draft? This will not send invites automatically.',
     );
     if (!confirmed) {
       return;
@@ -452,6 +453,7 @@ export default function OutlookPanel() {
         attendees: meetingSlots.attendees,
         instructions: draftInstructions,
         createReplyDraft: true,
+        sendInvites: false,
       },
     });
     setMeetingResultByMessage((current) => ({ ...current, [selectedId]: result }));
@@ -678,9 +680,9 @@ export default function OutlookPanel() {
                 </div>
               </div>
 
-              <div className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-border-light bg-surface-primary-alt px-5 py-4">
-                <div className="rounded-2xl border border-border-light bg-surface-primary p-4 shadow-sm">
-                  <div className="sticky top-0 z-[1] -mx-4 -mt-4 rounded-t-2xl border-b border-border-light bg-surface-primary px-4 py-4">
+              <div className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-border-light bg-surface-primary-alt px-5 py-0">
+                <div className="my-4 rounded-2xl border border-border-light bg-surface-primary p-4 shadow-sm">
+                  <div className="sticky top-0 z-[1] -mx-4 -mt-4 border-b border-border-light bg-surface-primary px-4 py-4 shadow-sm">
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"

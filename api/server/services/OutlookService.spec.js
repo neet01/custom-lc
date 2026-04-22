@@ -298,6 +298,19 @@ describe('OutlookService', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          timeZone: 'Pacific Standard Time',
+          workingHours: {
+            daysOfWeek: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+            startTime: '08:30:00.0000000',
+            endTime: '16:30:00.0000000',
+            timeZone: { name: 'Pacific Standard Time' },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
           meetingTimeSuggestions: [
             {
               confidence: 90,
@@ -327,9 +340,18 @@ describe('OutlookService', () => {
         body: expect.stringContaining('finance@example.mil'),
       }),
     );
+    const requestBody = JSON.parse(global.fetch.mock.calls[4][1].body);
+    expect(requestBody.timeConstraint.timeslots[0].start).toMatchObject({
+      dateTime: expect.stringContaining('T08:30:00'),
+      timeZone: 'Pacific Standard Time',
+    });
+    expect(requestBody.timeConstraint.timeslots[0].end).toMatchObject({
+      dateTime: expect.stringContaining('T16:30:00'),
+      timeZone: 'Pacific Standard Time',
+    });
   });
 
-  it('creates a calendar-backed Teams meeting only after a slot is confirmed', async () => {
+  it('creates a calendar-backed Teams meeting without sending attendee invites by default', async () => {
     const slot = {
       start: { dateTime: '2026-04-23T17:00:00.0000000', timeZone: 'UTC' },
       end: { dateTime: '2026-04-23T17:30:00.0000000', timeZone: 'UTC' },
@@ -421,7 +443,10 @@ describe('OutlookService', () => {
         body: expect.stringContaining('"isOnlineMeeting":true'),
       }),
     );
-    expect(global.fetch.mock.calls[3][1].body).toContain('teamsForBusiness');
+    const eventPayload = JSON.parse(global.fetch.mock.calls[3][1].body);
+    expect(eventPayload.onlineMeetingProvider).toBe('teamsForBusiness');
+    expect(eventPayload.isOnlineMeeting).toBe(true);
+    expect(eventPayload.attendees).toBeUndefined();
   });
 
   it('creates a reply draft without sending mail', async () => {

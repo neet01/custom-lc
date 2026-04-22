@@ -210,12 +210,39 @@ describe('OutlookService', () => {
             },
           ],
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'draft-message',
+              conversationId: 'thread-1',
+              subject: 'RE: Budget follow-up',
+              toRecipients: [
+                { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+              ],
+              ccRecipients: [{ emailAddress: { name: 'Ops', address: 'ops@example.mil' } }],
+              bodyPreview: 'Draft response preview',
+              isDraft: true,
+              createdDateTime: '2026-04-21T13:10:00Z',
+              lastModifiedDateTime: '2026-04-21T13:12:00Z',
+              webLink: 'https://outlook.example/draft-message',
+            },
+          ],
+        }),
       });
 
     const result = await OutlookService.getMessage(user, 'latest-message');
 
     expect(result.threadMessageCount).toBe(2);
     expect(result.thread.map((message) => message.id)).toEqual(['first-message', 'latest-message']);
+    expect(result.draftReplyCount).toBe(1);
+    expect(result.draftReplies.map((message) => message.id)).toEqual(['draft-message']);
+    expect(result.draftReplies[0].toRecipients).toEqual([
+      { name: 'Finance', address: 'finance@example.mil' },
+    ]);
     expect(result.body).toBe('Latest thread note.');
     expect(result.bodyHtml).toContain('vendor.test/logo.png');
     expect(result.thread[0].body).toBe('Original thread note.');
@@ -228,9 +255,17 @@ describe('OutlookService', () => {
     );
     expect(global.fetch.mock.calls[0][1].headers.Prefer).toBe('outlook.body-content-type="html"');
     expect(global.fetch.mock.calls[1][1].headers.Prefer).toBe('outlook.body-content-type="html"');
+    expect(global.fetch.mock.calls[2][1].headers.Prefer).toBe('outlook.body-content-type="html"');
     const threadUrl = global.fetch.mock.calls[1][0];
-    expect(threadUrl.searchParams.get('$filter')).toBe("conversationId eq 'thread-1'");
+    expect(threadUrl.searchParams.get('$filter')).toBe(
+      "conversationId eq 'thread-1' and isDraft eq false",
+    );
     expect(threadUrl.searchParams.get('$orderby')).toBeNull();
+    const draftUrl = global.fetch.mock.calls[2][0];
+    expect(draftUrl.searchParams.get('$filter')).toBe(
+      "conversationId eq 'thread-1' and isDraft eq true",
+    );
+    expect(draftUrl.searchParams.get('$orderby')).toBe('lastModifiedDateTime desc');
   });
 
   it('caps mailbox list requests at 100 messages', async () => {
@@ -305,6 +340,13 @@ describe('OutlookService', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          value: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
           id: 'me',
           displayName: 'Test User',
           mail: 'test.user@example.mil',
@@ -368,7 +410,7 @@ describe('OutlookService', () => {
         }),
       }),
     );
-    const requestBody = JSON.parse(global.fetch.mock.calls[4][1].body);
+    const requestBody = JSON.parse(global.fetch.mock.calls[5][1].body);
     expect(requestBody.timeConstraint.timeslots[0].start).toMatchObject({
       dateTime: expect.stringContaining('T08:30:00'),
       timeZone: 'Pacific Standard Time',
@@ -419,6 +461,13 @@ describe('OutlookService', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          value: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
           id: 'me',
           displayName: 'Test User',
           mail: 'test.user@example.mil',
@@ -457,7 +506,7 @@ describe('OutlookService', () => {
       webLink: 'https://outlook.example/event-1',
     });
     expect(global.fetch).toHaveBeenNthCalledWith(
-      4,
+      5,
       expect.objectContaining({
         pathname: '/v1.0/me/events',
       }),
@@ -466,7 +515,7 @@ describe('OutlookService', () => {
         body: expect.stringContaining('"isOnlineMeeting":true'),
       }),
     );
-    const eventPayload = JSON.parse(global.fetch.mock.calls[3][1].body);
+    const eventPayload = JSON.parse(global.fetch.mock.calls[4][1].body);
     expect(eventPayload.onlineMeetingProvider).toBe('teamsForBusiness');
     expect(eventPayload.isOnlineMeeting).toBe(true);
     expect(eventPayload.body.content).toContain('<strong>Meeting brief:</strong>');
@@ -480,7 +529,7 @@ describe('OutlookService', () => {
         },
       },
     ]);
-    expect(global.fetch).toHaveBeenCalledTimes(4);
+    expect(global.fetch).toHaveBeenCalledTimes(5);
   });
 
   it('reduces meeting confidence when the suggested time has tentative conflicts', async () => {
@@ -513,6 +562,13 @@ describe('OutlookService', () => {
               body: { content: 'Can we find time?' },
             },
           ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [],
         }),
       })
       .mockResolvedValueOnce({
@@ -611,6 +667,13 @@ describe('OutlookService', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          value: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
           id: 'me',
           displayName: 'Test User',
           mail: 'test.user@example.mil',
@@ -678,7 +741,7 @@ describe('OutlookService', () => {
       message: 'Draft reply created. Review it in Outlook before sending.',
     });
     expect(global.fetch).toHaveBeenNthCalledWith(
-      4,
+      5,
       expect.objectContaining({
         pathname: '/v1.0/me/messages/source-message/createReply',
       }),
@@ -688,7 +751,7 @@ describe('OutlookService', () => {
       }),
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
-      5,
+      6,
       expect.objectContaining({
         pathname: '/v1.0/me/messages/draft-message',
       }),
@@ -906,6 +969,13 @@ describe('OutlookService', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          value: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
           id: 'me',
           displayName: 'Test User',
           mail: 'test.user@example.mil',
@@ -1028,6 +1098,13 @@ describe('OutlookService', () => {
         ok: true,
         status: 200,
         json: async () => ({
+          value: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
           id: 'me',
           displayName: 'Test User',
           mail: 'test.user@example.mil',
@@ -1067,7 +1144,7 @@ describe('OutlookService', () => {
 
     expect(result.replyMode).toBe('reply_all');
     expect(global.fetch).toHaveBeenNthCalledWith(
-      4,
+      5,
       expect.objectContaining({
         pathname: '/v1.0/me/messages/source-message/createReplyAll',
       }),

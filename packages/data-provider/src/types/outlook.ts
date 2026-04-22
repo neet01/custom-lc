@@ -12,6 +12,8 @@ export type OutlookMessage = {
   ccRecipients?: OutlookEmailAddress[];
   receivedDateTime?: string;
   sentDateTime?: string;
+  createdDateTime?: string;
+  lastModifiedDateTime?: string;
   bodyPreview: string;
   body?: string;
   bodyHtml?: string;
@@ -19,10 +21,13 @@ export type OutlookMessage = {
   importance: 'low' | 'normal' | 'high' | string;
   inferenceClassification?: 'focused' | 'other' | string;
   isRead: boolean;
+  isDraft?: boolean;
   hasAttachments: boolean;
   webLink?: string;
   thread?: OutlookMessage[];
   threadMessageCount?: number;
+  draftReplies?: OutlookMessage[];
+  draftReplyCount?: number;
 };
 
 export type OutlookStatusResponse = {

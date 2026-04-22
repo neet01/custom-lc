@@ -77,6 +77,7 @@ const NavIconButton = memo(function NavIconButton({
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
+      const opensMainWorkspace = link.id === 'outlook';
       if (link.onClick) {
         link.onClick(e);
         return;
@@ -87,6 +88,10 @@ const NavIconButton = memo(function NavIconButton({
       }
       if (!isActive) {
         setActive(link.id);
+      }
+      if (opensMainWorkspace) {
+        onCollapse?.();
+        return;
       }
       if (!expanded) {
         onExpand?.();

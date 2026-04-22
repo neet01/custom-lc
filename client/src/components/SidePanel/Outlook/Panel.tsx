@@ -272,6 +272,16 @@ function getMessageTimestamp(message: OutlookMessage) {
   return new Date(message.receivedDateTime || message.sentDateTime || 0).getTime();
 }
 
+function getDraftTimestamp(message: OutlookMessage) {
+  return new Date(
+    message.lastModifiedDateTime ||
+      message.createdDateTime ||
+      message.receivedDateTime ||
+      message.sentDateTime ||
+      0,
+  ).getTime();
+}
+
 function groupMessagesByConversation(messages: OutlookMessage[]): OutlookConversation[] {
   const groups = new Map<string, OutlookMessage[]>();
   for (const message of messages) {
@@ -298,6 +308,23 @@ function getThreadMessages(message: OutlookMessage): OutlookMessage[] {
     return [...message.thread].sort((a, b) => getMessageTimestamp(a) - getMessageTimestamp(b));
   }
   return [message];
+}
+
+function getDraftReplies(message: OutlookMessage): OutlookMessage[] {
+  if (Array.isArray(message.draftReplies) && message.draftReplies.length > 0) {
+    return [...message.draftReplies].sort((a, b) => getDraftTimestamp(b) - getDraftTimestamp(a));
+  }
+  return [];
+}
+
+function formatRecipients(recipients?: OutlookMessage['toRecipients']) {
+  if (!Array.isArray(recipients) || recipients.length === 0) {
+    return '';
+  }
+  return recipients
+    .map((recipient) => recipient?.name || recipient?.address)
+    .filter(Boolean)
+    .join(', ');
 }
 
 function ViewTabs({
@@ -697,6 +724,14 @@ export default function OutlookPanel() {
   const { data: selectedMessage, isLoading: messageLoading } = useOutlookMessageQuery(selectedId, {
     enabled: mailboxEnabled && Boolean(selectedId),
   });
+  const threadMessages = useMemo(
+    () => (selectedMessage ? getThreadMessages(selectedMessage) : []),
+    [selectedMessage],
+  );
+  const draftReplies = useMemo(
+    () => (selectedMessage ? getDraftReplies(selectedMessage) : []),
+    [selectedMessage],
+  );
 
   const analyzeMutation = useAnalyzeOutlookMessageMutation();
   const draftMutation = useCreateOutlookDraftMutation();
@@ -1286,7 +1321,7 @@ export default function OutlookPanel() {
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
                   <div className="space-y-3">
-                    {getThreadMessages(selectedMessage).map((threadMessage) => (
+                    {threadMessages.map((threadMessage) => (
                       <motion.article
                         layout
                         initial={{ opacity: 0, y: 4 }}
@@ -1319,6 +1354,67 @@ export default function OutlookPanel() {
                         <EmailBody message={threadMessage} />
                       </motion.article>
                     ))}
+
+                    {draftReplies.length > 0 && (
+                      <section className="space-y-2 pt-1">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                          Draft replies (not sent)
+                        </div>
+                        {draftReplies.map((draftMessage) => {
+                          const toLine = formatRecipients(draftMessage.toRecipients);
+                          const ccLine = formatRecipients(draftMessage.ccRecipients);
+                          return (
+                            <article
+                              key={draftMessage.id}
+                              className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4"
+                            >
+                              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-border-light pb-2">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-semibold">
+                                    {draftMessage.subject || 'Draft reply'}
+                                  </div>
+                                  <div className="text-[11px] text-text-secondary">
+                                    Updated{' '}
+                                    {formatDate(
+                                      draftMessage.lastModifiedDateTime ||
+                                        draftMessage.createdDateTime ||
+                                        draftMessage.sentDateTime ||
+                                        draftMessage.receivedDateTime,
+                                    )}
+                                  </div>
+                                </div>
+                                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                                  Draft
+                                </span>
+                              </div>
+                              {toLine ? (
+                                <div className="text-xs text-text-secondary">
+                                  To: <span className="text-text-primary">{toLine}</span>
+                                </div>
+                              ) : null}
+                              {ccLine ? (
+                                <div className="mt-0.5 text-xs text-text-secondary">
+                                  Cc: <span className="text-text-primary">{ccLine}</span>
+                                </div>
+                              ) : null}
+                              <p className="mt-2 line-clamp-2 text-xs leading-5 text-text-secondary">
+                                {draftMessage.bodyPreview || 'Draft content preview unavailable.'}
+                              </p>
+                              {draftMessage.webLink ? (
+                                <a
+                                  className="mt-2 inline-block text-xs font-medium text-blue-600 hover:underline dark:text-blue-300"
+                                  href={draftMessage.webLink}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Open draft in Outlook
+                                </a>
+                              ) : null}
+                            </article>
+                          );
+                        })}
+                      </section>
+                    )}
                   </div>
                 </div>
 

@@ -22,30 +22,12 @@ import {
 } from '~/hooks';
 import { useGetConvoIdQuery, useGetStartupConfig, useGetEndpointsQuery } from '~/data-provider';
 import { ToolCallsMapProvider, useActivePanel } from '~/Providers';
+import OutlookPanel from '~/components/SidePanel/Outlook/Panel';
 import ChatView from '~/components/Chat/ChatView';
 import { NotificationSeverity } from '~/common';
 import useAuthRedirect from './useAuthRedirect';
 import temporaryStore from '~/store/temporary';
 import store from '~/store';
-
-function InboxQueryPlaceholder() {
-  return (
-    <div className="flex h-full w-full items-center justify-center bg-presentation px-6">
-      <div className="w-full max-w-3xl rounded-3xl border border-border-light bg-surface-primary p-8 shadow-sm">
-        <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-          Outlook workspace
-        </div>
-        <h2 className="mt-2 text-2xl font-semibold text-text-primary">
-          Chat area hidden for inbox-first mode
-        </h2>
-        <p className="mt-3 text-sm leading-6 text-text-secondary">
-          We removed the default LibreChat conversation pane while Outlook is active. This space is
-          now reserved for the upcoming natural-language inbox querying experience.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 export default function ChatRoute() {
   const { data: startupConfig } = useGetStartupConfig();
@@ -238,7 +220,11 @@ export default function ChatRoute() {
   }
 
   if (activePanel === 'outlook') {
-    return <InboxQueryPlaceholder />;
+    return (
+      <div className="h-full w-full overflow-hidden">
+        <OutlookPanel />
+      </div>
+    );
   }
 
   return (

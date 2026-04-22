@@ -4,7 +4,7 @@ import { useRecoilState } from 'recoil';
 import { useForm } from 'react-hook-form';
 import { useMediaQuery } from '@librechat/client';
 import type { ChatFormValues } from '~/common';
-import { ChatContext, ChatFormProvider } from '~/Providers';
+import { ChatContext, ChatFormProvider, useActivePanel } from '~/Providers';
 import useUnifiedSidebarLinks from '~/hooks/Nav/useUnifiedSidebarLinks';
 import { useChatHelpers, useLocalize } from '~/hooks';
 import SidePanelNav from '~/components/SidePanel/Nav';
@@ -45,6 +45,7 @@ function UnifiedSidebar() {
   const localize = useLocalize();
   const isSmallScreen = useMediaQuery('(max-width: 768px)');
   const [expanded, setExpanded] = useRecoilState(store.sidebarExpanded);
+  const { active: activePanel } = useActivePanel();
   const [sidebarWidth, setSidebarWidth] = useState(getInitialWidth);
   const [isResizing, setIsResizing] = useState(false);
   const resizeHandlers = useRef<{ move: (e: MouseEvent) => void; up: () => void } | null>(null);
@@ -120,6 +121,12 @@ function UnifiedSidebar() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (activePanel === 'outlook' && expanded) {
+      setExpanded(false);
+    }
+  }, [activePanel, expanded, setExpanded]);
 
   useEffect(() => {
     if (!isSmallScreen || !expanded) {

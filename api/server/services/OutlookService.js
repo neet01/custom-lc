@@ -238,10 +238,13 @@ function normalizeMessage(message, includeBody = false) {
       : undefined,
     receivedDateTime: message.receivedDateTime,
     sentDateTime: message.sentDateTime,
+    createdDateTime: message.createdDateTime,
+    lastModifiedDateTime: message.lastModifiedDateTime,
     bodyPreview: message.bodyPreview || '',
     importance: message.importance || 'normal',
     inferenceClassification: message.inferenceClassification,
     isRead: Boolean(message.isRead),
+    isDraft: Boolean(message.isDraft),
     hasAttachments: Boolean(message.hasAttachments),
     webLink: message.webLink,
     bodyContentType,
@@ -351,7 +354,7 @@ function getFolderPath(folder = 'inbox') {
   return folderMap[normalized] || folderMap.inbox;
 }
 
-function getMessageSelect(includeBody = false) {
+function getMessageSelect(includeBody = false, includeRecipients = includeBody) {
   const fields = [
     'id',
     'conversationId',
@@ -359,6 +362,9 @@ function getMessageSelect(includeBody = false) {
     'from',
     'receivedDateTime',
     'sentDateTime',
+    'createdDateTime',
+    'lastModifiedDateTime',
+    'isDraft',
     'bodyPreview',
     'importance',
     'inferenceClassification',
@@ -366,8 +372,11 @@ function getMessageSelect(includeBody = false) {
     'hasAttachments',
     'webLink',
   ];
+  if (includeRecipients) {
+    fields.push('toRecipients', 'ccRecipients');
+  }
   if (includeBody) {
-    fields.push('body', 'toRecipients', 'ccRecipients');
+    fields.push('body');
   }
   return fields.join(',');
 }
@@ -419,7 +428,7 @@ async function getConversationMessages(user, conversationId, { limit = 25 } = {}
     query: {
       $top: top,
       $select: getMessageSelect(true),
-      $filter: `conversationId eq '${escapeODataString(conversationId)}'`,
+      $filter: `conversationId eq '${escapeODataString(conversationId)}' and isDraft eq false`,
     },
   });
 
@@ -428,6 +437,41 @@ async function getConversationMessages(user, conversationId, { limit = 25 } = {}
     : [];
 
   return sortMessagesByDateAscending(messages);
+}
+
+function getDraftTimestamp(message) {
+  return new Date(
+    message.lastModifiedDateTime ||
+      message.createdDateTime ||
+      message.receivedDateTime ||
+      message.sentDateTime ||
+      0,
+  ).getTime();
+}
+
+async function getConversationDraftReplies(user, conversationId, { limit = 10 } = {}) {
+  if (!conversationId) {
+    return [];
+  }
+
+  const top = Math.min(Math.max(Number(limit) || 10, 1), 25);
+  const payload = await graphRequest(user, '/me/messages', {
+    headers: {
+      Prefer: 'outlook.body-content-type="html"',
+    },
+    query: {
+      $top: top,
+      $select: getMessageSelect(false, true),
+      $orderby: 'lastModifiedDateTime desc',
+      $filter: `conversationId eq '${escapeODataString(conversationId)}' and isDraft eq true`,
+    },
+  });
+
+  const drafts = Array.isArray(payload?.value)
+    ? payload.value.map((message) => normalizeMessage(message, false))
+    : [];
+
+  return drafts.sort((a, b) => getDraftTimestamp(b) - getDraftTimestamp(a));
 }
 
 async function deleteMessage(user, messageId) {
@@ -465,11 +509,16 @@ async function getMessage(user, messageId, { includeThread = true } = {}) {
   }
 
   try {
-    const thread = await getConversationMessages(user, message.conversationId);
+    const [thread, draftReplies] = await Promise.all([
+      getConversationMessages(user, message.conversationId),
+      getConversationDraftReplies(user, message.conversationId),
+    ]);
     return {
       ...message,
       thread,
       threadMessageCount: thread.length,
+      draftReplies,
+      draftReplyCount: draftReplies.length,
     };
   } catch (error) {
     logger.warn('[OutlookService] Conversation thread unavailable for selected message', {
@@ -481,6 +530,8 @@ async function getMessage(user, messageId, { includeThread = true } = {}) {
       ...message,
       thread: [message],
       threadMessageCount: 1,
+      draftReplies: [],
+      draftReplyCount: 0,
     };
   }
 }

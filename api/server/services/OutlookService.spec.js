@@ -475,6 +475,100 @@ describe('OutlookService', () => {
     expect(global.fetch).toHaveBeenCalledTimes(4);
   });
 
+  it('reduces meeting confidence when the suggested time has tentative conflicts', async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'source-message',
+          conversationId: 'thread-1',
+          subject: 'Schedule budget review',
+          from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+          toRecipients: [{ emailAddress: { name: 'Test User', address: 'test.user@example.mil' } }],
+          body: { content: 'Can we find time?' },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'source-message',
+              conversationId: 'thread-1',
+              subject: 'Schedule budget review',
+              from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+              toRecipients: [
+                { emailAddress: { name: 'Test User', address: 'test.user@example.mil' } },
+              ],
+              body: { content: 'Can we find time?' },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          timeZone: 'Pacific Standard Time',
+          workingHours: {
+            daysOfWeek: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+            startTime: '08:30:00.0000000',
+            endTime: '16:30:00.0000000',
+            timeZone: { name: 'Pacific Standard Time' },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          meetingTimeSuggestions: [
+            {
+              confidence: 100,
+              organizerAvailability: 'tentative',
+              attendeeAvailability: [
+                {
+                  attendee: {
+                    emailAddress: { name: 'Finance', address: 'finance@example.mil' },
+                    type: 'required',
+                  },
+                  availability: 'tentative',
+                },
+              ],
+              meetingTimeSlot: {
+                start: { dateTime: '2026-04-23T17:00:00.0000000', timeZone: 'UTC' },
+                end: { dateTime: '2026-04-23T17:30:00.0000000', timeZone: 'UTC' },
+              },
+              suggestionReason: 'Suggested because everyone is free.',
+            },
+          ],
+        }),
+      });
+
+    const result = await OutlookService.proposeMeetingSlots(user, 'source-message', {
+      durationMinutes: 30,
+    });
+
+    expect(result.suggestions).toHaveLength(1);
+    expect(result.suggestions[0]).toMatchObject({
+      confidence: 65,
+      confidenceReason: expect.stringContaining('organizer is tentatively busy'),
+    });
+    expect(result.suggestions[0].confidenceReason).toContain('1 attendee has tentative conflicts');
+  });
+
   it('creates a reply draft without sending mail', async () => {
     global.fetch
       .mockResolvedValueOnce({

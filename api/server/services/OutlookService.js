@@ -12,6 +12,10 @@ const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'fri
 const DEFAULT_WORKDAY_START = '09:00:00';
 const DEFAULT_WORKDAY_END = '17:00:00';
 const DEFAULT_WORKING_TIME_ZONE = 'Eastern Standard Time';
+const TENTATIVE_ATTENDEE_CONFIDENCE_PENALTY = 15;
+const TENTATIVE_ORGANIZER_CONFIDENCE_PENALTY = 20;
+const MAX_TENTATIVE_ATTENDEE_PENALTY = 45;
+const MIN_MEETING_CONFIDENCE = 5;
 const WINDOWS_TO_IANA_TIME_ZONE = {
   UTC: 'UTC',
   'Eastern Standard Time': 'America/New_York',
@@ -1009,14 +1013,83 @@ function normalizeMeetingTimeSlot(slot) {
 
 function normalizeMeetingSuggestion(suggestion, index) {
   const slot = normalizeMeetingTimeSlot(suggestion.meetingTimeSlot);
+  const { confidence, confidenceReason } =
+    adjustSuggestionConfidenceForTentativeConflicts(suggestion);
   return {
     id: `slot-${index + 1}`,
-    confidence: suggestion.confidence,
+    confidence,
+    confidenceReason,
     organizerAvailability: suggestion.organizerAvailability,
     suggestionReason: suggestion.suggestionReason,
     attendeeAvailability: suggestion.attendeeAvailability,
     start: slot.start,
     end: slot.end,
+  };
+}
+
+function normalizeAvailability(availability) {
+  return String(availability || '')
+    .trim()
+    .toLowerCase();
+}
+
+function isTentativeAvailability(availability) {
+  const normalized = normalizeAvailability(availability);
+  return (
+    normalized === 'tentative' ||
+    normalized === 'tentativelybusy' ||
+    normalized === 'tentatively_busy' ||
+    normalized === 'tentatively-busy'
+  );
+}
+
+function countTentativeAttendeeConflicts(attendeeAvailability) {
+  if (!Array.isArray(attendeeAvailability)) {
+    return 0;
+  }
+  return attendeeAvailability.reduce((count, attendee) => {
+    return isTentativeAvailability(attendee?.availability) ? count + 1 : count;
+  }, 0);
+}
+
+function adjustSuggestionConfidenceForTentativeConflicts(suggestion) {
+  const baseConfidence = Number(suggestion?.confidence);
+  const hasBaseConfidence = Number.isFinite(baseConfidence);
+  const tentativeAttendeeCount = countTentativeAttendeeConflicts(suggestion?.attendeeAvailability);
+  const organizerTentative = isTentativeAvailability(suggestion?.organizerAvailability);
+
+  if (!hasBaseConfidence || (!organizerTentative && tentativeAttendeeCount === 0)) {
+    return {
+      confidence: hasBaseConfidence ? baseConfidence : undefined,
+      confidenceReason: undefined,
+    };
+  }
+
+  const attendeePenalty = Math.min(
+    MAX_TENTATIVE_ATTENDEE_PENALTY,
+    tentativeAttendeeCount * TENTATIVE_ATTENDEE_CONFIDENCE_PENALTY,
+  );
+  const organizerPenalty = organizerTentative ? TENTATIVE_ORGANIZER_CONFIDENCE_PENALTY : 0;
+  const adjustedConfidence = Math.max(
+    MIN_MEETING_CONFIDENCE,
+    Math.round(baseConfidence - attendeePenalty - organizerPenalty),
+  );
+
+  const reasons = [];
+  if (organizerTentative) {
+    reasons.push('organizer is tentatively busy');
+  }
+  if (tentativeAttendeeCount > 0) {
+    reasons.push(
+      `${tentativeAttendeeCount} attendee${tentativeAttendeeCount === 1 ? '' : 's'} ${
+        tentativeAttendeeCount === 1 ? 'has' : 'have'
+      } tentative conflicts`,
+    );
+  }
+
+  return {
+    confidence: adjustedConfidence,
+    confidenceReason: `Confidence reduced because ${reasons.join(' and ')}.`,
   };
 }
 

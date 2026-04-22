@@ -99,6 +99,7 @@ export type OutlookMeetingAttendee = {
 export type OutlookMeetingSlot = {
   id: string;
   confidence?: number;
+  confidenceReason?: string;
   organizerAvailability?: string;
   suggestionReason?: string;
   attendeeAvailability?: unknown[];

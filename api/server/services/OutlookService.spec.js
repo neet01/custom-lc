@@ -171,7 +171,10 @@ describe('OutlookService', () => {
           subject: 'Budget follow-up',
           from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
           receivedDateTime: '2026-04-21T13:00:00Z',
-          body: { content: 'Latest thread note.' },
+          body: {
+            contentType: 'html',
+            content: '<div><strong>Latest</strong> thread note.<img src="https://vendor.test/logo.png"></div>',
+          },
           bodyPreview: 'Latest thread note.',
         }),
       })
@@ -186,7 +189,10 @@ describe('OutlookService', () => {
               subject: 'Budget follow-up',
               from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
               receivedDateTime: '2026-04-21T13:00:00Z',
-              body: { content: 'Latest thread note.' },
+              body: {
+                contentType: 'html',
+                content: '<div><strong>Latest</strong> thread note.</div>',
+              },
             },
             {
               id: 'first-message',
@@ -194,7 +200,10 @@ describe('OutlookService', () => {
               subject: 'Budget follow-up',
               from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
               receivedDateTime: '2026-04-21T12:00:00Z',
-              body: { content: 'Original thread note.' },
+              body: {
+                contentType: 'html',
+                content: '<p>Original&nbsp;thread note.</p>',
+              },
             },
           ],
         }),
@@ -204,6 +213,9 @@ describe('OutlookService', () => {
 
     expect(result.threadMessageCount).toBe(2);
     expect(result.thread.map((message) => message.id)).toEqual(['first-message', 'latest-message']);
+    expect(result.body).toBe('Latest thread note.');
+    expect(result.bodyHtml).toContain('vendor.test/logo.png');
+    expect(result.thread[0].body).toBe('Original thread note.');
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -211,6 +223,8 @@ describe('OutlookService', () => {
       }),
       expect.any(Object),
     );
+    expect(global.fetch.mock.calls[0][1].headers.Prefer).toBe('outlook.body-content-type="html"');
+    expect(global.fetch.mock.calls[1][1].headers.Prefer).toBe('outlook.body-content-type="html"');
     const threadUrl = global.fetch.mock.calls[1][0];
     expect(threadUrl.searchParams.get('$filter')).toBe("conversationId eq 'thread-1'");
     expect(threadUrl.searchParams.get('$orderby')).toBeNull();
@@ -320,6 +334,14 @@ describe('OutlookService', () => {
               },
               suggestionReason: 'Suggested because everyone is free.',
             },
+            {
+              confidence: 90,
+              meetingTimeSlot: {
+                start: { dateTime: '2026-04-24T02:00:00.0000000', timeZone: 'UTC' },
+                end: { dateTime: '2026-04-24T02:30:00.0000000', timeZone: 'UTC' },
+              },
+              suggestionReason: 'Late slot should be filtered out.',
+            },
           ],
         }),
       });
@@ -338,6 +360,9 @@ describe('OutlookService', () => {
       expect.objectContaining({
         method: 'POST',
         body: expect.stringContaining('finance@example.mil'),
+        headers: expect.objectContaining({
+          Prefer: 'outlook.timezone="Pacific Standard Time"',
+        }),
       }),
     );
     const requestBody = JSON.parse(global.fetch.mock.calls[4][1].body);

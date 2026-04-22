@@ -12,6 +12,17 @@ const DEFAULT_WORKING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'fri
 const DEFAULT_WORKDAY_START = '09:00:00';
 const DEFAULT_WORKDAY_END = '17:00:00';
 const DEFAULT_WORKING_TIME_ZONE = 'Eastern Standard Time';
+const WINDOWS_TO_IANA_TIME_ZONE = {
+  UTC: 'UTC',
+  'Eastern Standard Time': 'America/New_York',
+  'Central Standard Time': 'America/Chicago',
+  'Mountain Standard Time': 'America/Denver',
+  'Pacific Standard Time': 'America/Los_Angeles',
+  'Alaskan Standard Time': 'America/Anchorage',
+  'Hawaiian Standard Time': 'Pacific/Honolulu',
+  'US Eastern Standard Time': 'America/Indianapolis',
+  'US Mountain Standard Time': 'America/Phoenix',
+};
 
 class OutlookServiceError extends Error {
   constructor(message, status = 500, details) {
@@ -170,6 +181,11 @@ function normalizeDirectoryUser(profile, fallback = {}) {
 }
 
 function normalizeMessage(message, includeBody = false) {
+  const bodyContent = includeBody ? message.body?.content || '' : undefined;
+  const bodyContentType = includeBody
+    ? String(message.body?.contentType || 'text').toLowerCase()
+    : undefined;
+  const isHtmlBody = bodyContentType === 'html';
   return {
     id: message.id,
     conversationId: message.conversationId,
@@ -184,13 +200,44 @@ function normalizeMessage(message, includeBody = false) {
     receivedDateTime: message.receivedDateTime,
     sentDateTime: message.sentDateTime,
     bodyPreview: message.bodyPreview || '',
-    body: includeBody ? message.body?.content || '' : undefined,
     importance: message.importance || 'normal',
     inferenceClassification: message.inferenceClassification,
     isRead: Boolean(message.isRead),
     hasAttachments: Boolean(message.hasAttachments),
     webLink: message.webLink,
+    bodyContentType,
+    bodyHtml: includeBody && isHtmlBody ? bodyContent : undefined,
+    body: includeBody ? normalizeEmailBodyText(bodyContent, bodyContentType) : undefined,
   };
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'");
+}
+
+function normalizeEmailBodyText(content, contentType = 'text') {
+  const raw = String(content || '');
+  if (String(contentType || '').toLowerCase() !== 'html') {
+    return raw;
+  }
+
+  return decodeHtmlEntities(
+    raw
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<\/(p|div|tr|li|h[1-6]|table|section|article|br)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' '),
+  ).trim();
 }
 
 function getMessageTimestamp(message) {
@@ -328,7 +375,7 @@ async function getConversationMessages(user, conversationId, { limit = 25 } = {}
   const top = Math.min(Math.max(Number(limit) || 25, 1), 50);
   const payload = await graphRequest(user, '/me/messages', {
     headers: {
-      Prefer: 'outlook.body-content-type="text"',
+      Prefer: 'outlook.body-content-type="html"',
     },
     query: {
       $top: top,
@@ -366,7 +413,7 @@ async function getMessage(user, messageId, { includeThread = true } = {}) {
 
   const payload = await graphRequest(user, `/me/messages/${encodeURIComponent(messageId)}`, {
     headers: {
-      Prefer: 'outlook.body-content-type="text"',
+      Prefer: 'outlook.body-content-type="html"',
     },
     query: {
       $select: getMessageSelect(true),
@@ -797,6 +844,128 @@ function getWorkingHoursConfig(mailboxSettings) {
   };
 }
 
+function getIanaTimeZone(timeZone) {
+  const normalized = String(timeZone || '').trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return WINDOWS_TO_IANA_TIME_ZONE[normalized] || normalized;
+}
+
+function parseGraphDateTimeParts(value) {
+  const match = String(value || '').match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{1,2}):(\d{2})(?::(\d{2}))?/,
+  );
+  if (!match) {
+    return null;
+  }
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hours: Number(match[4]),
+    minutes: Number(match[5]),
+    seconds: Number(match[6] || 0),
+    date: `${match[1]}-${match[2]}-${match[3]}`,
+  };
+}
+
+function getDayNameFromDateParts(parts) {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  return getUtcDayName(date);
+}
+
+function getTimeMinutes(parts) {
+  return parts.hours * 60 + parts.minutes;
+}
+
+function getUtcInstantFromGraphDateTime(value) {
+  const parts = parseGraphDateTimeParts(value);
+  if (!parts) {
+    return null;
+  }
+  return new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day, parts.hours, parts.minutes, parts.seconds),
+  );
+}
+
+function getDateTimePartsInTimeZone(date, timeZone) {
+  const ianaTimeZone = getIanaTimeZone(timeZone);
+  if (!ianaTimeZone || Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  try {
+    const values = Object.fromEntries(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: ianaTimeZone,
+        hour12: false,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+        .formatToParts(date)
+        .filter((part) => part.type !== 'literal')
+        .map((part) => [part.type, part.value]),
+    );
+
+    return {
+      year: Number(values.year),
+      month: Number(values.month),
+      day: Number(values.day),
+      hours: Number(values.hour === '24' ? '0' : values.hour),
+      minutes: Number(values.minute),
+      seconds: Number(values.second),
+      date: `${values.year}-${values.month}-${values.day}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getComparableDateTimeParts(value, targetTimeZone) {
+  const sourceTimeZone = String(value?.timeZone || '').trim();
+  if (!value?.dateTime) {
+    return null;
+  }
+  if (
+    sourceTimeZone &&
+    targetTimeZone &&
+    sourceTimeZone.toLowerCase() === String(targetTimeZone).toLowerCase()
+  ) {
+    return parseGraphDateTimeParts(value.dateTime);
+  }
+  if (sourceTimeZone.toUpperCase() === 'UTC') {
+    const date = getUtcInstantFromGraphDateTime(value.dateTime);
+    return date ? getDateTimePartsInTimeZone(date, targetTimeZone) : null;
+  }
+  return parseGraphDateTimeParts(value.dateTime);
+}
+
+function isMeetingSlotInsideWorkingHours(slot, workingHours) {
+  const start = getComparableDateTimeParts(slot.start, workingHours.timeZone);
+  const end = getComparableDateTimeParts(slot.end, workingHours.timeZone);
+  if (!start || !end || start.date !== end.date) {
+    return false;
+  }
+
+  const startMinutes = getTimeMinutes(start);
+  const endMinutes = getTimeMinutes(end);
+  const workStartMinutes = getTimeMinutes(parseGraphDateTimeParts(`2000-01-01T${workingHours.startTime}`));
+  const workEndMinutes = getTimeMinutes(parseGraphDateTimeParts(`2000-01-01T${workingHours.endTime}`));
+  const dayName = getDayNameFromDateParts(start);
+
+  return (
+    workingHours.daysOfWeek.includes(dayName) &&
+    startMinutes >= workStartMinutes &&
+    endMinutes <= workEndMinutes &&
+    endMinutes > startMinutes
+  );
+}
+
 function buildWorkingHourTimeSlots(days = 14, mailboxSettings) {
   const normalizedDays = normalizePositiveInteger(days, 14, { min: 1, max: 30 });
   const workingHours = getWorkingHoursConfig(mailboxSettings);
@@ -872,11 +1041,15 @@ async function proposeMeetingSlots(user, messageId, options = {}) {
   const duration = buildMeetingDuration(options.durationMinutes);
   const mailboxSettings =
     outlookContext.mailboxSettings || (await getMailboxContext(user, { force: true }));
+  const workingHours = getWorkingHoursConfig(mailboxSettings);
   const timeSlots = buildWorkingHourTimeSlots(options.days, mailboxSettings);
   const maxCandidates = normalizePositiveInteger(options.maxCandidates, 5, { min: 1, max: 10 });
 
   const payload = await graphRequest(user, '/me/findMeetingTimes', {
     method: 'POST',
+    headers: {
+      Prefer: `outlook.timezone="${workingHours.timeZone}"`,
+    },
     body: {
       attendees: attendees.map((attendee) => ({
         type: 'required',
@@ -890,13 +1063,16 @@ async function proposeMeetingSlots(user, messageId, options = {}) {
         timeslots: timeSlots,
       },
       meetingDuration: duration.isoDuration,
-      maxCandidates,
+      maxCandidates: Math.max(maxCandidates, 10),
       returnSuggestionReasons: true,
     },
   });
 
   const suggestions = Array.isArray(payload?.meetingTimeSuggestions)
-    ? payload.meetingTimeSuggestions.map(normalizeMeetingSuggestion)
+    ? payload.meetingTimeSuggestions
+        .map(normalizeMeetingSuggestion)
+        .filter((suggestion) => isMeetingSlotInsideWorkingHours(suggestion, workingHours))
+        .slice(0, maxCandidates)
     : [];
 
   return {
@@ -904,6 +1080,7 @@ async function proposeMeetingSlots(user, messageId, options = {}) {
     subject: buildMeetingSubject(message, options.subject),
     attendees,
     durationMinutes: duration.minutes,
+    workingHours,
     emptySuggestionsReason: payload?.emptySuggestionsReason,
     suggestions,
   };

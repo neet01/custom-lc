@@ -14,6 +14,8 @@ export type OutlookMessage = {
   sentDateTime?: string;
   bodyPreview: string;
   body?: string;
+  bodyHtml?: string;
+  bodyContentType?: 'text' | 'html' | string;
   importance: 'low' | 'normal' | 'high' | string;
   inferenceClassification?: 'focused' | 'other' | string;
   isRead: boolean;
@@ -117,6 +119,12 @@ export type OutlookMeetingSlotsResponse = {
   subject: string;
   attendees: OutlookMeetingAttendee[];
   durationMinutes: number;
+  workingHours?: {
+    daysOfWeek: string[];
+    startTime: string;
+    endTime: string;
+    timeZone: string;
+  };
   emptySuggestionsReason?: string;
   suggestions: OutlookMeetingSlot[];
 };

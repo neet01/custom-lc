@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, startTransition } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import DOMPurify from 'dompurify';
 import { CalendarDays, CalendarPlus, Mail, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 import type {
   OutlookAnalyzeResponse,
@@ -159,6 +160,107 @@ function ViewTabs({
           {tab.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+function sanitizeEmailHtml(html: string, loadRemoteImages: boolean) {
+  const sanitizer = DOMPurify();
+  const sanitized = sanitizer.sanitize(html, {
+    ADD_ATTR: ['target', 'rel', 'referrerpolicy', 'loading'],
+    FORBID_TAGS: [
+      'base',
+      'button',
+      'embed',
+      'form',
+      'iframe',
+      'input',
+      'link',
+      'meta',
+      'object',
+      'script',
+      'select',
+      'textarea',
+    ],
+  });
+
+  if (typeof window === 'undefined') {
+    return { html: sanitized, blockedImageCount: 0 };
+  }
+
+  const document = new DOMParser().parseFromString(sanitized, 'text/html');
+  let blockedImageCount = 0;
+
+  document.querySelectorAll('a[href]').forEach((link) => {
+    link.setAttribute('target', '_blank');
+    link.setAttribute('rel', 'noreferrer noopener');
+  });
+
+  document.querySelectorAll('img[src]').forEach((image) => {
+    const src = image.getAttribute('src') || '';
+    const isRemoteImage = /^https?:\/\//i.test(src);
+    const isInlineImage = /^cid:/i.test(src);
+
+    if ((isRemoteImage && !loadRemoteImages) || isInlineImage) {
+      blockedImageCount += 1;
+      const placeholder = document.createElement('span');
+      placeholder.className =
+        'cortex-email-image-placeholder';
+      placeholder.textContent = isInlineImage ? 'Inline image unavailable' : 'Remote image blocked';
+      image.replaceWith(placeholder);
+      return;
+    }
+
+    image.setAttribute('loading', 'lazy');
+    image.setAttribute('referrerpolicy', 'no-referrer');
+    image.removeAttribute('width');
+    image.removeAttribute('height');
+  });
+
+  return {
+    html: document.body.innerHTML,
+    blockedImageCount,
+  };
+}
+
+function EmailBody({ message }: { message: OutlookMessage }) {
+  const [loadRemoteImages, setLoadRemoteImages] = useState(false);
+  const sanitized = useMemo(
+    () => sanitizeEmailHtml(message.bodyHtml || '', loadRemoteImages),
+    [message.bodyHtml, loadRemoteImages],
+  );
+
+  if (!message.bodyHtml) {
+    return (
+      <pre className="max-h-[32vh] overflow-y-auto whitespace-pre-wrap break-words font-sans text-sm leading-6 text-text-primary">
+        {message.body || message.bodyPreview || 'No body text available.'}
+      </pre>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {sanitized.blockedImageCount > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+          <span>
+            {sanitized.blockedImageCount} image{sanitized.blockedImageCount === 1 ? '' : 's'}{' '}
+            blocked for privacy.
+          </span>
+          {!loadRemoteImages && (
+            <button
+              type="button"
+              className="rounded-lg border border-amber-500/30 px-2 py-1 font-semibold hover:bg-amber-500/10"
+              onClick={() => setLoadRemoteImages(true)}
+            >
+              Load remote images
+            </button>
+          )}
+        </div>
+      )}
+      <div
+        className="max-h-[46vh] overflow-y-auto rounded-xl bg-white p-4 text-sm leading-6 text-gray-950 shadow-inner dark:bg-white dark:text-gray-950 [&_.cortex-email-image-placeholder]:my-2 [&_.cortex-email-image-placeholder]:inline-block [&_.cortex-email-image-placeholder]:rounded-lg [&_.cortex-email-image-placeholder]:border [&_.cortex-email-image-placeholder]:border-dashed [&_.cortex-email-image-placeholder]:border-gray-300 [&_.cortex-email-image-placeholder]:bg-gray-50 [&_.cortex-email-image-placeholder]:px-3 [&_.cortex-email-image-placeholder]:py-2 [&_.cortex-email-image-placeholder]:text-xs [&_.cortex-email-image-placeholder]:text-gray-500 [&_a]:text-blue-700 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-gray-300 [&_blockquote]:pl-3 [&_img]:h-auto [&_img]:max-w-full [&_table]:max-w-full [&_table]:border-collapse"
+        dangerouslySetInnerHTML={{ __html: sanitized.html }}
+      />
     </div>
   );
 }
@@ -670,11 +772,7 @@ export default function OutlookPanel() {
                           </span>
                         )}
                       </div>
-                      <pre className="max-h-[32vh] overflow-y-auto whitespace-pre-wrap break-words font-sans text-sm leading-6 text-text-primary">
-                        {threadMessage.body ||
-                          threadMessage.bodyPreview ||
-                          'No body text available.'}
-                      </pre>
+                      <EmailBody message={threadMessage} />
                     </article>
                   ))}
                 </div>

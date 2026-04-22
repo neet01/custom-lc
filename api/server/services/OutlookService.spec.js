@@ -1173,4 +1173,114 @@ describe('OutlookService', () => {
       }),
     );
   });
+
+  it('expands reply-all recipients using thread participants when Graph draft is incomplete', async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'source-message',
+          conversationId: 'thread-1',
+          subject: 'Vendor alignment',
+          from: { emailAddress: { name: 'John', address: 'john@example.mil' } },
+          toRecipients: [{ emailAddress: { name: 'Test User', address: 'test.user@example.mil' } }],
+          body: { content: 'Can we align quickly?' },
+          bodyPreview: 'Can we align quickly?',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'source-message',
+              conversationId: 'thread-1',
+              subject: 'Vendor alignment',
+              from: { emailAddress: { name: 'John', address: 'john@example.mil' } },
+              toRecipients: [
+                { emailAddress: { name: 'Test User', address: 'test.user@example.mil' } },
+              ],
+              body: { content: 'Can we align quickly?' },
+            },
+            {
+              id: 'older-message',
+              conversationId: 'thread-1',
+              subject: 'Vendor alignment',
+              from: { emailAddress: { name: 'Test User', address: 'test.user@example.mil' } },
+              toRecipients: [
+                { emailAddress: { name: 'John', address: 'john@example.mil' } },
+                { emailAddress: { name: 'Jim', address: 'jim@example.mil' } },
+              ],
+              ccRecipients: [{ emailAddress: { name: 'Jenny', address: 'jenny@example.mil' } }],
+              body: { content: 'Sharing attendees.' },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          id: 'draft-message',
+          subject: 'RE: Vendor alignment',
+          webLink: 'https://outlook.example/draft-message',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'draft-message',
+          subject: 'RE: Vendor alignment',
+          webLink: 'https://outlook.example/draft-message',
+          toRecipients: [{ emailAddress: { name: 'John', address: 'john@example.mil' } }],
+          ccRecipients: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      });
+
+    const result = await OutlookService.createReplyDraft(user, 'source-message', {
+      replyMode: 'smart',
+    });
+
+    expect(result.replyMode).toBe('reply_all');
+    expect(result.toRecipients).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ address: 'john@example.mil' }),
+        expect.objectContaining({ address: 'jim@example.mil' }),
+      ]),
+    );
+    expect(result.ccRecipients).toEqual(
+      expect.arrayContaining([expect.objectContaining({ address: 'jenny@example.mil' })]),
+    );
+
+    const patchBody = JSON.parse(global.fetch.mock.calls[6][1].body);
+    const toAddresses = patchBody.toRecipients.map((recipient) => recipient.emailAddress.address);
+    const ccAddresses = patchBody.ccRecipients.map((recipient) => recipient.emailAddress.address);
+    expect(toAddresses).toEqual(expect.arrayContaining(['john@example.mil', 'jim@example.mil']));
+    expect(ccAddresses).toEqual(expect.arrayContaining(['jenny@example.mil']));
+  });
 });

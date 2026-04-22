@@ -1649,20 +1649,22 @@ function getSignedInEmailSet(outlookContext = {}) {
 
 function shouldUseReplyAll(message, outlookContext = {}) {
   const signedInEmails = getSignedInEmailSet(outlookContext);
-  const nonSignedToRecipients = (message.toRecipients || []).filter((recipient) => {
-    const address = String(recipient?.address || '')
-      .trim()
-      .toLowerCase();
-    return address && !signedInEmails.has(address);
-  });
-  const hasNonSignedCc = (message.ccRecipients || []).some((recipient) => {
-    const address = String(recipient?.address || '')
-      .trim()
-      .toLowerCase();
-    return address && !signedInEmails.has(address);
-  });
+  const participants =
+    Array.isArray(outlookContext?.participants) && outlookContext.participants.length > 0
+      ? outlookContext.participants
+      : collectThreadParticipants(message);
 
-  return nonSignedToRecipients.length > 1 || hasNonSignedCc;
+  const nonSignedParticipants = new Set();
+  for (const participant of participants) {
+    const address = String(participant?.address || '')
+      .trim()
+      .toLowerCase();
+    if (!address || !address.includes('@') || signedInEmails.has(address)) {
+      continue;
+    }
+    nonSignedParticipants.add(address);
+  }
+  return nonSignedParticipants.size > 1;
 }
 
 function resolveReplyMode(message, outlookContext, options = {}) {
@@ -1682,6 +1684,87 @@ function normalizeDraftRecipients(payload) {
       ? payload.ccRecipients.map(normalizeEmailAddress)
       : [],
   };
+}
+
+function normalizeDraftRecipient(recipient) {
+  const address = String(recipient?.address || '')
+    .trim()
+    .toLowerCase();
+  if (!address || !address.includes('@')) {
+    return null;
+  }
+  const name = String(recipient?.name || '').trim();
+  return {
+    name: name || address,
+    address,
+  };
+}
+
+function dedupeDraftRecipients(recipients = []) {
+  const deduped = new Map();
+  for (const recipient of recipients) {
+    const normalized = normalizeDraftRecipient(recipient);
+    if (!normalized) {
+      continue;
+    }
+    const existing = deduped.get(normalized.address);
+    if (!existing || (!existing.name && normalized.name)) {
+      deduped.set(normalized.address, normalized);
+    }
+  }
+  return Array.from(deduped.values());
+}
+
+function mergeReplyAllRecipientsFromThread(message, outlookContext, draftRecipients) {
+  const signedInEmails = getSignedInEmailSet(outlookContext);
+  const participants =
+    Array.isArray(outlookContext?.participants) && outlookContext.participants.length > 0
+      ? outlookContext.participants
+      : collectThreadParticipants(message);
+  const threadToRecipients = [];
+  const threadCcRecipients = [];
+
+  const sender = normalizeDraftRecipient(message?.from);
+  if (sender && !signedInEmails.has(sender.address)) {
+    threadToRecipients.push(sender);
+  }
+
+  for (const participant of participants) {
+    const normalized = normalizeDraftRecipient(participant);
+    if (!normalized || signedInEmails.has(normalized.address)) {
+      continue;
+    }
+    const roles = Array.isArray(participant?.roles) ? participant.roles : [];
+    if (roles.includes('from') || roles.includes('to')) {
+      threadToRecipients.push(normalized);
+    } else {
+      threadCcRecipients.push(normalized);
+    }
+  }
+
+  const mergedToRecipients = dedupeDraftRecipients([
+    ...(draftRecipients?.toRecipients || []),
+    ...threadToRecipients,
+  ]);
+  const mergedToRecipientSet = new Set(mergedToRecipients.map((recipient) => recipient.address));
+  const mergedCcRecipients = dedupeDraftRecipients([
+    ...(draftRecipients?.ccRecipients || []),
+    ...threadCcRecipients,
+  ]).filter((recipient) => !mergedToRecipientSet.has(recipient.address));
+
+  return {
+    toRecipients: mergedToRecipients,
+    ccRecipients: mergedCcRecipients,
+  };
+}
+
+function toGraphRecipients(recipients = []) {
+  return recipients.map((recipient) => ({
+    emailAddress: {
+      name: recipient.name || recipient.address,
+      address: recipient.address,
+    },
+  }));
 }
 
 function resolveDraftRecipientName(recipient) {
@@ -1784,7 +1867,10 @@ async function createReplyDraft(user, messageId, options = {}) {
       });
     }
   }
-  const draftRecipients = normalizeDraftRecipients(draftDetails);
+  let draftRecipients = normalizeDraftRecipients(draftDetails);
+  if (replyMode === 'reply_all') {
+    draftRecipients = mergeReplyAllRecipientsFromThread(message, outlookContext, draftRecipients);
+  }
   let comment = buildDraftComment(message, options);
   let generatedUsage = null;
 
@@ -1816,14 +1902,20 @@ async function createReplyDraft(user, messageId, options = {}) {
   comment = alignDraftSalutation(comment, draftRecipients.toRecipients);
 
   if (draftPayload?.id && comment) {
+    const patchPayload = {
+      body: {
+        contentType: 'Text',
+        content: comment,
+      },
+    };
+    if (replyMode === 'reply_all' && draftRecipients.toRecipients.length > 0) {
+      patchPayload.toRecipients = toGraphRecipients(draftRecipients.toRecipients);
+      patchPayload.ccRecipients = toGraphRecipients(draftRecipients.ccRecipients);
+    }
+
     await graphRequest(user, `/me/messages/${encodeURIComponent(draftPayload.id)}`, {
       method: 'PATCH',
-      body: {
-        body: {
-          contentType: 'Text',
-          content: comment,
-        },
-      },
+      body: patchPayload,
     }).catch((error) => {
       logger.warn('[OutlookService] Failed to patch generated draft body', {
         status: error?.status,

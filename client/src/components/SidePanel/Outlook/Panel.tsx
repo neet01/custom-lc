@@ -11,6 +11,8 @@ import {
   ChevronDown,
   Loader2,
   Mail,
+  MessageSquareText,
+  Minimize2,
   RefreshCw,
   Sparkles,
   Trash2,
@@ -625,6 +627,7 @@ export default function OutlookPanel() {
   const [inboxView, setInboxView] = useState<InboxView>('focused');
   const [densityMode, setDensityMode] = useState<DensityMode>(loadDensityMode);
   const [actionSuccess, setActionSuccess] = useState<Record<string, boolean>>({});
+  const [mailboxControlsOpen, setMailboxControlsOpen] = useState(false);
   const [analysisByMessage, setAnalysisByMessage] =
     useState<Record<string, OutlookAnalyzeResponse>>(loadCachedAnalysis);
   const [draftResultByMessage, setDraftResultByMessage] = useState<
@@ -640,7 +643,8 @@ export default function OutlookPanel() {
   const [pendingDeleteBatches, setPendingDeleteBatches] = useState<PendingDeleteBatch[]>([]);
   const [optimisticallyHiddenIds, setOptimisticallyHiddenIds] = useState<string[]>([]);
   const [nowMs, setNowMs] = useState(Date.now());
-  const [actionRailScrolled, setActionRailScrolled] = useState(false);
+  const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
+  const [assistantPanelScrolled, setAssistantPanelScrolled] = useState(false);
   const [draftInstructions, setDraftInstructions] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const successTimerRef = useRef<Record<string, number>>({});
@@ -674,6 +678,7 @@ export default function OutlookPanel() {
   const allVisibleSelected =
     visibleConversationIds.length > 0 &&
     visibleConversationIds.every((messageId) => selectedDeleteIdSet.has(messageId));
+  const inboxViewLabel = inboxView.charAt(0).toUpperCase() + inboxView.slice(1);
   const analysis = selectedId ? analysisByMessage[selectedId] : null;
   const draftResult = selectedId ? draftResultByMessage[selectedId] : null;
   const meetingSlots = selectedId ? meetingSlotsByMessage[selectedId] : null;
@@ -704,7 +709,8 @@ export default function OutlookPanel() {
 
   useEffect(() => {
     setStatusMessage('');
-    setActionRailScrolled(false);
+    setAssistantPanelScrolled(false);
+    setAssistantPanelOpen(false);
   }, [inboxView, selectedId]);
 
   useEffect(() => {
@@ -1024,11 +1030,11 @@ export default function OutlookPanel() {
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-surface-primary text-text-primary">
       <div className="border-b border-border-light px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
             <h2 className="text-base font-semibold">AI Inbox</h2>
-            <p className="text-xs text-text-secondary">
-              Delegated Outlook access via Microsoft Graph
+            <p className="truncate text-xs text-text-secondary">
+              Focus: email content first. AI tools open on demand.
             </p>
           </div>
           <ActionButton
@@ -1042,61 +1048,87 @@ export default function OutlookPanel() {
             isSuccess={actionSuccess.refresh}
           />
         </div>
-        <div className="mt-3">
-          <ViewTabs active={inboxView} onChange={setInboxView} />
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-border-light bg-surface-secondary p-0.5">
-            <button
-              type="button"
-              className={cn(
-                'rounded-md px-2 py-1 text-[11px] font-semibold transition-colors',
-                densityMode === 'comfortable'
-                  ? 'bg-surface-primary text-text-primary shadow-sm'
-                  : 'text-text-secondary hover:bg-surface-hover',
-              )}
-              onClick={() => setDensityMode('comfortable')}
-            >
-              Comfortable
-            </button>
-            <button
-              type="button"
-              className={cn(
-                'rounded-md px-2 py-1 text-[11px] font-semibold transition-colors',
-                densityMode === 'compact'
-                  ? 'bg-surface-primary text-text-primary shadow-sm'
-                  : 'text-text-secondary hover:bg-surface-hover',
-              )}
-              onClick={() => setDensityMode('compact')}
-            >
-              Compact
-            </button>
-          </div>
+        <div className="mt-2">
           <button
             type="button"
-            className="rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold hover:bg-surface-hover disabled:opacity-60"
-            onClick={toggleSelectVisible}
-            disabled={visibleConversationIds.length === 0}
+            className="inline-flex items-center gap-2 rounded-lg border border-border-light px-2.5 py-1.5 text-[11px] font-semibold transition-colors hover:bg-surface-hover"
+            onClick={() => setMailboxControlsOpen((current) => !current)}
           >
-            {allVisibleSelected ? 'Clear visible selection' : 'Select visible'}
-          </button>
-          {selectedDeleteIds.length > 0 && (
-            <ActionButton
-              label={`Delete selected (${selectedDeleteIds.length})`}
-              loadingLabel="Deleting selected..."
-              successLabel="Queued"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 px-2.5 py-1 text-[11px] font-semibold text-red-600 hover:bg-red-500/10 disabled:opacity-60 dark:text-red-300"
-              onClick={handleBulkDelete}
-              icon={Trash2}
-              isSuccess={actionSuccess.delete}
+            <span>Mailbox controls</span>
+            <span className="rounded bg-surface-secondary px-1.5 py-0.5 text-[10px]">
+              {inboxViewLabel}
+            </span>
+            <ChevronDown
+              className={cn(
+                'h-3.5 w-3.5 transition-transform duration-150',
+                mailboxControlsOpen ? 'rotate-180' : 'rotate-0',
+              )}
+              aria-hidden="true"
             />
-          )}
+          </button>
         </div>
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-text-secondary">
-          <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
-          {status.calendarContextEnabled
-            ? 'Calendar context is used during Analyze/Draft when an email looks scheduling-related.'
-            : 'Calendar context is off. Set OUTLOOK_AI_INCLUDE_CALENDAR=true to include scheduling context.'}
+        <div
+          className={cn(
+            'overflow-hidden transition-[max-height,opacity] duration-200',
+            mailboxControlsOpen ? 'mt-2 max-h-80 opacity-100' : 'max-h-0 opacity-0',
+          )}
+        >
+          <div className="space-y-2 rounded-xl border border-border-light bg-surface-secondary p-2">
+            <ViewTabs active={inboxView} onChange={setInboxView} />
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-lg border border-border-light bg-surface-primary p-0.5">
+                <button
+                  type="button"
+                  className={cn(
+                    'rounded-md px-2 py-1 text-[11px] font-semibold transition-colors',
+                    densityMode === 'comfortable'
+                      ? 'bg-surface-primary-alt text-text-primary shadow-sm'
+                      : 'text-text-secondary hover:bg-surface-hover',
+                  )}
+                  onClick={() => setDensityMode('comfortable')}
+                >
+                  Comfortable
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    'rounded-md px-2 py-1 text-[11px] font-semibold transition-colors',
+                    densityMode === 'compact'
+                      ? 'bg-surface-primary-alt text-text-primary shadow-sm'
+                      : 'text-text-secondary hover:bg-surface-hover',
+                  )}
+                  onClick={() => setDensityMode('compact')}
+                >
+                  Compact
+                </button>
+              </div>
+              <button
+                type="button"
+                className="rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold hover:bg-surface-hover disabled:opacity-60"
+                onClick={toggleSelectVisible}
+                disabled={visibleConversationIds.length === 0}
+              >
+                {allVisibleSelected ? 'Clear visible selection' : 'Select visible'}
+              </button>
+              {selectedDeleteIds.length > 0 && (
+                <ActionButton
+                  label={`Delete selected (${selectedDeleteIds.length})`}
+                  loadingLabel="Deleting selected..."
+                  successLabel="Queued"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 px-2.5 py-1 text-[11px] font-semibold text-red-600 hover:bg-red-500/10 disabled:opacity-60 dark:text-red-300"
+                  onClick={handleBulkDelete}
+                  icon={Trash2}
+                  isSuccess={actionSuccess.delete}
+                />
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
+              <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+              {status.calendarContextEnabled
+                ? 'Calendar context is enabled for scheduling analysis.'
+                : 'Calendar context is disabled.'}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1200,7 +1232,7 @@ export default function OutlookPanel() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.18, ease: 'easeOut' }}
-                className="flex min-h-0 flex-1 flex-col overflow-hidden"
+                className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
               >
                 <div className="border-b border-border-light px-5 py-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1280,131 +1312,171 @@ export default function OutlookPanel() {
                   </div>
                 </div>
 
-                <div
-                  className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-border-light bg-surface-primary-alt px-5 py-0"
-                  onScroll={(event) => setActionRailScrolled(event.currentTarget.scrollTop > 4)}
-                >
-                  <div className="my-4 rounded-2xl border border-border-light bg-surface-primary p-4 shadow-sm">
-                    <div
-                      className={cn(
-                        'sticky top-0 z-[2] -mx-4 -mt-4 border-b border-border-light bg-surface-primary px-4 py-4',
-                        actionRailScrolled && 'shadow-sm',
-                      )}
+                <div className="pointer-events-none absolute bottom-4 right-4 z-10 flex w-[420px] max-w-[calc(100%-2rem)] flex-col items-end">
+                  {!assistantPanelOpen && (
+                    <button
+                      type="button"
+                      className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border-light bg-surface-primary px-4 py-2 text-xs font-semibold shadow-lg transition-colors hover:bg-surface-hover"
+                      onClick={() => {
+                        setAssistantPanelScrolled(false);
+                        setAssistantPanelOpen(true);
+                      }}
                     >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <ActionButton
-                          label={analysis ? 'Refresh analysis' : 'Analyze email'}
-                          loadingLabel="Analyzing..."
-                          successLabel="Done"
-                          className="bg-blue-600 text-white hover:bg-blue-700"
-                          onClick={handleAnalyze}
-                          isLoading={analyzeMutation.isLoading}
-                          isSuccess={actionSuccess.analyze}
-                          icon={Sparkles}
-                        />
-                        <ActionButton
-                          label="Create reply draft"
-                          loadingLabel="Creating draft..."
-                          successLabel="Draft ready"
-                          className="border border-border-light hover:bg-surface-hover"
-                          onClick={handleDraft}
-                          isLoading={draftMutation.isLoading}
-                          isSuccess={actionSuccess.draft}
-                        />
-                        <ActionButton
-                          label={meetingSlots ? 'Refresh meeting times' : 'Find meeting times'}
-                          loadingLabel="Finding times..."
-                          successLabel="Times ready"
-                          className="border border-amber-500/30 text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
-                          onClick={handleFindMeetingSlots}
-                          isLoading={meetingSlotsMutation.isLoading}
-                          isSuccess={actionSuccess.meetingSlots}
-                          disabled={!status.meetingSchedulingEnabled}
-                          icon={CalendarPlus}
-                        />
-                      </div>
+                      <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
+                      AI assistant
+                    </button>
+                  )}
 
-                      <textarea
-                        className="mt-3 max-h-32 min-h-20 w-full resize-y rounded-xl border border-border-light bg-surface-primary p-3 text-sm outline-none focus:border-blue-500"
-                        placeholder="Optional drafting guidance, e.g. ask for budget owner and due date..."
-                        value={draftInstructions}
-                        onChange={(event) => setDraftInstructions(event.target.value)}
-                      />
-                      <div className="mt-2 h-3 bg-surface-primary" />
-                    </div>
-
-                    {analyzeMutation.error != null && (
-                      <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
-                        <span>Unable to analyze this email.</span>
-                        <button type="button" className="underline" onClick={handleAnalyze}>
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                    {draftMutation.error != null && (
-                      <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
-                        <span>Unable to create a draft reply.</span>
-                        <button type="button" className="underline" onClick={handleDraft}>
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                    {deleteMutation.error != null && (
-                      <p className="mt-2 text-xs text-red-500">Unable to delete this email.</p>
-                    )}
-                    {meetingSlotsMutation.error != null && (
-                      <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
-                        <span>Unable to find meeting times.</span>
-                        <button
-                          type="button"
-                          className="underline"
-                          onClick={handleFindMeetingSlots}
+                  {assistantPanelOpen && (
+                    <div className="pointer-events-auto w-full overflow-hidden rounded-2xl border border-border-light bg-surface-primary shadow-2xl">
+                      <div
+                        className="max-h-[72vh] overflow-y-auto"
+                        onScroll={(event) =>
+                          setAssistantPanelScrolled(event.currentTarget.scrollTop > 4)
+                        }
+                      >
+                        <div
+                          className={cn(
+                            'sticky top-0 z-[2] border-b border-border-light bg-surface-primary px-4 py-3',
+                            assistantPanelScrolled && 'shadow-sm',
+                          )}
                         >
-                          Retry
-                        </button>
+                          <div className="flex items-center justify-between">
+                            <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                              AI assistant
+                            </div>
+                            <button
+                              type="button"
+                              className="rounded-md border border-border-light p-1.5 transition-colors hover:bg-surface-hover"
+                              onClick={() => {
+                                setAssistantPanelScrolled(false);
+                                setAssistantPanelOpen(false);
+                              }}
+                              aria-label="Minimize AI assistant panel"
+                            >
+                              <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <ActionButton
+                              label={analysis ? 'Refresh analysis' : 'Analyze email'}
+                              loadingLabel="Analyzing..."
+                              successLabel="Done"
+                              className="bg-blue-600 text-white hover:bg-blue-700"
+                              onClick={handleAnalyze}
+                              isLoading={analyzeMutation.isLoading}
+                              isSuccess={actionSuccess.analyze}
+                              icon={Sparkles}
+                            />
+                            <ActionButton
+                              label="Create reply draft"
+                              loadingLabel="Creating draft..."
+                              successLabel="Draft ready"
+                              className="border border-border-light hover:bg-surface-hover"
+                              onClick={handleDraft}
+                              isLoading={draftMutation.isLoading}
+                              isSuccess={actionSuccess.draft}
+                            />
+                            <ActionButton
+                              label={meetingSlots ? 'Refresh meeting times' : 'Find meeting times'}
+                              loadingLabel="Finding times..."
+                              successLabel="Times ready"
+                              className="border border-amber-500/30 text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
+                              onClick={handleFindMeetingSlots}
+                              isLoading={meetingSlotsMutation.isLoading}
+                              isSuccess={actionSuccess.meetingSlots}
+                              disabled={!status.meetingSchedulingEnabled}
+                              icon={CalendarPlus}
+                            />
+                          </div>
+
+                          <textarea
+                            className="mt-3 max-h-32 min-h-20 w-full resize-y rounded-xl border border-border-light bg-surface-primary p-3 text-sm outline-none focus:border-blue-500"
+                            placeholder="Optional drafting guidance, e.g. ask for budget owner and due date..."
+                            value={draftInstructions}
+                            onChange={(event) => setDraftInstructions(event.target.value)}
+                          />
+                        </div>
+
+                        <div className="space-y-3 px-4 pb-4 pt-3">
+                          {analyzeMutation.error != null && (
+                            <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+                              <span>Unable to analyze this email.</span>
+                              <button type="button" className="underline" onClick={handleAnalyze}>
+                                Retry
+                              </button>
+                            </div>
+                          )}
+                          {draftMutation.error != null && (
+                            <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+                              <span>Unable to create a draft reply.</span>
+                              <button type="button" className="underline" onClick={handleDraft}>
+                                Retry
+                              </button>
+                            </div>
+                          )}
+                          {deleteMutation.error != null && (
+                            <p className="mt-2 text-xs text-red-500">
+                              Unable to delete this email.
+                            </p>
+                          )}
+                          {meetingSlotsMutation.error != null && (
+                            <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+                              <span>Unable to find meeting times.</span>
+                              <button
+                                type="button"
+                                className="underline"
+                                onClick={handleFindMeetingSlots}
+                              >
+                                Retry
+                              </button>
+                            </div>
+                          )}
+                          {createMeetingMutation.error != null && (
+                            <p className="mt-2 text-xs text-red-500">
+                              Unable to create Teams meeting.
+                            </p>
+                          )}
+                          {!status.meetingSchedulingEnabled && (
+                            <p className="mt-2 text-xs text-text-secondary">
+                              Meeting scheduling is disabled. Set
+                              OUTLOOK_AI_ENABLE_MEETING_SCHEDULING=true.
+                            </p>
+                          )}
+
+                          <CollapsiblePanel title="AI Inbox insights" defaultOpen>
+                            {analyzeMutation.isLoading && !analysis && (
+                              <div className="h-24 animate-pulse rounded-xl bg-surface-secondary" />
+                            )}
+                            <InsightsCard analysis={analysis} />
+                          </CollapsiblePanel>
+                          <CollapsiblePanel title="Meeting scheduler" defaultOpen>
+                            {meetingSlotsMutation.isLoading && !meetingSlots && (
+                              <div className="h-16 animate-pulse rounded-xl bg-surface-secondary" />
+                            )}
+                            <MeetingSchedulerCard
+                              slots={meetingSlots}
+                              result={meetingResult}
+                              onCreate={handleCreateMeeting}
+                              isCreating={createMeetingMutation.isLoading}
+                            />
+                          </CollapsiblePanel>
+
+                          {draftResult && (
+                            <CollapsiblePanel title="Reply draft" defaultOpen>
+                              <DraftResultCard draftResult={draftResult} />
+                            </CollapsiblePanel>
+                          )}
+                          {draftMutation.isLoading && !draftResult && (
+                            <CollapsiblePanel title="Reply draft" defaultOpen>
+                              <div className="h-16 animate-pulse rounded-xl bg-surface-secondary" />
+                            </CollapsiblePanel>
+                          )}
+                        </div>
                       </div>
-                    )}
-                    {createMeetingMutation.error != null && (
-                      <p className="mt-2 text-xs text-red-500">Unable to create Teams meeting.</p>
-                    )}
-                    {!status.meetingSchedulingEnabled && (
-                      <p className="mt-2 text-xs text-text-secondary">
-                        Meeting scheduling is disabled. Set
-                        OUTLOOK_AI_ENABLE_MEETING_SCHEDULING=true.
-                      </p>
-                    )}
-
-                    <div className="mt-3 space-y-3">
-                      <CollapsiblePanel title="AI Inbox insights" defaultOpen>
-                        {analyzeMutation.isLoading && !analysis && (
-                          <div className="h-24 animate-pulse rounded-xl bg-surface-secondary" />
-                        )}
-                        <InsightsCard analysis={analysis} />
-                      </CollapsiblePanel>
-                      <CollapsiblePanel title="Meeting scheduler" defaultOpen>
-                        {meetingSlotsMutation.isLoading && !meetingSlots && (
-                          <div className="h-16 animate-pulse rounded-xl bg-surface-secondary" />
-                        )}
-                        <MeetingSchedulerCard
-                          slots={meetingSlots}
-                          result={meetingResult}
-                          onCreate={handleCreateMeeting}
-                          isCreating={createMeetingMutation.isLoading}
-                        />
-                      </CollapsiblePanel>
-
-                      {draftResult && (
-                        <CollapsiblePanel title="Reply draft" defaultOpen>
-                          <DraftResultCard draftResult={draftResult} />
-                        </CollapsiblePanel>
-                      )}
-                      {draftMutation.isLoading && !draftResult && (
-                        <CollapsiblePanel title="Reply draft" defaultOpen>
-                          <div className="h-16 animate-pulse rounded-xl bg-surface-secondary" />
-                        </CollapsiblePanel>
-                      )}
                     </div>
-                  </div>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -1412,7 +1484,7 @@ export default function OutlookPanel() {
         </div>
       </div>
       {pendingDeleteBatches.length > 0 && (
-        <div className="pointer-events-none absolute bottom-4 right-4 z-20 flex w-[340px] max-w-[calc(100%-2rem)] flex-col gap-2">
+        <div className="pointer-events-none absolute bottom-4 left-4 z-20 flex w-[340px] max-w-[calc(100%-2rem)] flex-col gap-2">
           {pendingDeleteBatches.map((batch) => {
             const secondsLeft = Math.max(1, Math.ceil((batch.expiresAt - nowMs) / 1000));
             return (

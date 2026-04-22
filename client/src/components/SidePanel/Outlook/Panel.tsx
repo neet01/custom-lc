@@ -30,6 +30,27 @@ type OutlookConversation = {
   messages: OutlookMessage[];
 };
 
+const OUTLOOK_ANALYSIS_CACHE_KEY = 'cortex.outlook.analysisByMessage';
+
+function loadCachedAnalysis() {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(OUTLOOK_ANALYSIS_CACHE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, OutlookAnalyzeResponse>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function formatSender(message?: OutlookMessage) {
   if (!message?.from) {
     return 'Unknown sender';
@@ -300,10 +321,18 @@ export default function OutlookPanel() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [inboxView, setInboxView] = useState<InboxView>('focused');
-  const [analysis, setAnalysis] = useState<OutlookAnalyzeResponse | null>(null);
-  const [draftResult, setDraftResult] = useState<OutlookDraftResponse | null>(null);
-  const [meetingSlots, setMeetingSlots] = useState<OutlookMeetingSlotsResponse | null>(null);
-  const [meetingResult, setMeetingResult] = useState<OutlookCreateMeetingResponse | null>(null);
+  const [analysisByMessage, setAnalysisByMessage] = useState<
+    Record<string, OutlookAnalyzeResponse>
+  >(loadCachedAnalysis);
+  const [draftResultByMessage, setDraftResultByMessage] = useState<
+    Record<string, OutlookDraftResponse>
+  >({});
+  const [meetingSlotsByMessage, setMeetingSlotsByMessage] = useState<
+    Record<string, OutlookMeetingSlotsResponse>
+  >({});
+  const [meetingResultByMessage, setMeetingResultByMessage] = useState<
+    Record<string, OutlookCreateMeetingResponse>
+  >({});
   const [draftInstructions, setDraftInstructions] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
 
@@ -321,6 +350,10 @@ export default function OutlookPanel() {
 
   const messages = useMemo(() => messageList?.messages ?? [], [messageList?.messages]);
   const conversations = useMemo(() => groupMessagesByConversation(messages), [messages]);
+  const analysis = selectedId ? analysisByMessage[selectedId] : null;
+  const draftResult = selectedId ? draftResultByMessage[selectedId] : null;
+  const meetingSlots = selectedId ? meetingSlotsByMessage[selectedId] : null;
+  const meetingResult = selectedId ? meetingResultByMessage[selectedId] : null;
 
   const { data: selectedMessage, isLoading: messageLoading } = useOutlookMessageQuery(selectedId, {
     enabled: mailboxEnabled && Boolean(selectedId),
@@ -346,20 +379,23 @@ export default function OutlookPanel() {
   }, [conversations, selectedId]);
 
   useEffect(() => {
-    setAnalysis(null);
-    setDraftResult(null);
-    setMeetingSlots(null);
-    setMeetingResult(null);
-    setDraftInstructions('');
     setStatusMessage('');
   }, [selectedId, inboxView]);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(OUTLOOK_ANALYSIS_CACHE_KEY, JSON.stringify(analysisByMessage));
+    } catch {
+      // Best-effort cache only; Outlook remains usable if storage is blocked or quota-limited.
+    }
+  }, [analysisByMessage]);
 
   const handleAnalyze = async () => {
     if (!selectedId) {
       return;
     }
     const result = await analyzeMutation.mutateAsync(selectedId);
-    setAnalysis(result);
+    setAnalysisByMessage((current) => ({ ...current, [selectedId]: result }));
   };
 
   const handleDraft = async () => {
@@ -373,7 +409,7 @@ export default function OutlookPanel() {
         tone: 'professional',
       },
     });
-    setDraftResult(result);
+    setDraftResultByMessage((current) => ({ ...current, [selectedId]: result }));
   };
 
   const handleFindMeetingSlots = async () => {
@@ -387,8 +423,12 @@ export default function OutlookPanel() {
         maxCandidates: 5,
       },
     });
-    setMeetingSlots(result);
-    setMeetingResult(null);
+    setMeetingSlotsByMessage((current) => ({ ...current, [selectedId]: result }));
+    setMeetingResultByMessage((current) => {
+      const next = { ...current };
+      delete next[selectedId];
+      return next;
+    });
   };
 
   const handleCreateMeeting = async (slot: OutlookMeetingSlot) => {
@@ -414,7 +454,7 @@ export default function OutlookPanel() {
         createReplyDraft: true,
       },
     });
-    setMeetingResult(result);
+    setMeetingResultByMessage((current) => ({ ...current, [selectedId]: result }));
   };
 
   const handleDelete = async () => {
@@ -638,42 +678,54 @@ export default function OutlookPanel() {
                 </div>
               </div>
 
-              <div className="border-t border-border-light bg-surface-primary-alt px-5 py-4">
+              <div className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-border-light bg-surface-primary-alt px-5 py-4">
                 <div className="rounded-2xl border border-border-light bg-surface-primary p-4 shadow-sm">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
-                      onClick={handleAnalyze}
-                      disabled={analyzeMutation.isLoading}
-                    >
-                      {analyzeMutation.isLoading ? 'Analyzing...' : 'Analyze email'}
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-lg border border-border-light px-3 py-2 text-xs font-semibold hover:bg-surface-hover disabled:opacity-60"
-                      onClick={handleDraft}
-                      disabled={draftMutation.isLoading}
-                    >
-                      {draftMutation.isLoading ? 'Creating draft...' : 'Create reply draft'}
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-500/10 disabled:opacity-60 dark:text-amber-300"
-                      onClick={handleFindMeetingSlots}
-                      disabled={meetingSlotsMutation.isLoading || !status.meetingSchedulingEnabled}
-                    >
-                      <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
-                      {meetingSlotsMutation.isLoading ? 'Finding times...' : 'Find meeting times'}
-                    </button>
-                  </div>
+                  <div className="sticky top-0 z-[1] -mx-4 -mt-4 rounded-t-2xl border-b border-border-light bg-surface-primary px-4 py-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                        onClick={handleAnalyze}
+                        disabled={analyzeMutation.isLoading}
+                      >
+                        {analyzeMutation.isLoading
+                          ? 'Analyzing...'
+                          : analysis
+                            ? 'Refresh analysis'
+                            : 'Analyze email'}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-border-light px-3 py-2 text-xs font-semibold hover:bg-surface-hover disabled:opacity-60"
+                        onClick={handleDraft}
+                        disabled={draftMutation.isLoading}
+                      >
+                        {draftMutation.isLoading ? 'Creating draft...' : 'Create reply draft'}
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-500/10 disabled:opacity-60 dark:text-amber-300"
+                        onClick={handleFindMeetingSlots}
+                        disabled={
+                          meetingSlotsMutation.isLoading || !status.meetingSchedulingEnabled
+                        }
+                      >
+                        <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                        {meetingSlotsMutation.isLoading
+                          ? 'Finding times...'
+                          : meetingSlots
+                            ? 'Refresh meeting times'
+                            : 'Find meeting times'}
+                      </button>
+                    </div>
 
-                  <textarea
-                    className="mt-3 max-h-32 min-h-20 w-full resize-y rounded-xl border border-border-light bg-surface-primary p-3 text-sm outline-none focus:border-blue-500"
-                    placeholder="Optional drafting guidance, e.g. ask for budget owner and due date..."
-                    value={draftInstructions}
-                    onChange={(event) => setDraftInstructions(event.target.value)}
-                  />
+                    <textarea
+                      className="mt-3 max-h-32 min-h-20 w-full resize-y rounded-xl border border-border-light bg-surface-primary p-3 text-sm outline-none focus:border-blue-500"
+                      placeholder="Optional drafting guidance, e.g. ask for budget owner and due date..."
+                      value={draftInstructions}
+                      onChange={(event) => setDraftInstructions(event.target.value)}
+                    />
+                  </div>
 
                   {analyzeMutation.error != null && (
                     <p className="mt-2 text-xs text-red-500">Unable to analyze this email.</p>

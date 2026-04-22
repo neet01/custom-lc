@@ -50,7 +50,29 @@ describe('OutlookAIService', () => {
       message: {
         subject: 'Timeline request',
         from: { name: 'Ops', address: 'ops@example.mil' },
+        toRecipients: [{ name: 'User Two', address: 'user2@example.mil' }],
         body: 'Can you take this on?',
+      },
+      outlookContext: {
+        signedInUser: {
+          displayName: 'User Two',
+          email: 'user2@example.mil',
+          jobTitle: 'Program Manager',
+        },
+        participants: [
+          {
+            name: 'Ops',
+            address: 'ops@example.mil',
+            relationshipToSignedInUser: 'internal_user',
+            profile: { jobTitle: 'Director of Ops', department: 'Operations' },
+          },
+          {
+            name: 'User Two',
+            address: 'user2@example.mil',
+            relationshipToSignedInUser: 'signed_in_user',
+            profile: { jobTitle: 'Program Manager', department: 'Engineering' },
+          },
+        ],
       },
     });
 
@@ -61,6 +83,9 @@ describe('OutlookAIService', () => {
     expect(systemPrompt).toContain('Default writing style');
     expect(systemPrompt).toContain('direct, concise, assertive');
     expect(systemPrompt).toContain('Do not beg for attention');
+    expect(systemPrompt).toContain('only person you are allowed to write as');
+    expect(userPrompt.outlookContext.signedInUser.displayName).toBe('User Two');
+    expect(userPrompt.identityRules).toContain('Author is signedInUser only.');
     expect(userPrompt.userInstructions).toContain('avoids unnecessary pleasantries');
   });
 

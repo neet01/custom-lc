@@ -79,13 +79,16 @@ export const outlookMessages = (params: o.OutlookMessagesParams = {}) =>
 export const outlookMessage = (messageId: string) =>
   `${outlookRoot}/messages/${encodeURIComponent(messageId)}`;
 
-export const outlookAnalyzeMessage = (messageId: string) =>
-  `${outlookMessage(messageId)}/analyze`;
+export const outlookAnalyzeMessage = (messageId: string) => `${outlookMessage(messageId)}/analyze`;
 
-export const outlookCreateDraft = (messageId: string) =>
-  `${outlookMessage(messageId)}/drafts`;
+export const outlookCreateDraft = (messageId: string) => `${outlookMessage(messageId)}/drafts`;
 
 export const outlookDeleteMessage = (messageId: string) => outlookMessage(messageId);
+
+export const outlookMeetingSlots = (messageId: string) =>
+  `${outlookMessage(messageId)}/meeting-slots`;
+
+export const outlookCreateMeeting = (messageId: string) => `${outlookMessage(messageId)}/meetings`;
 
 const shareRoot = `${BASE_URL}/api/share`;
 export const shareMessages = (shareId: string) => `${shareRoot}/${shareId}`;

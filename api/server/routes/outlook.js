@@ -170,4 +170,61 @@ router.post('/messages/:messageId/drafts', async (req, res) => {
   }
 });
 
+router.post('/messages/:messageId/meeting-slots', async (req, res) => {
+  try {
+    const result = await OutlookService.proposeMeetingSlots(
+      req.user,
+      req.params.messageId,
+      req.body,
+    );
+    await recordAudit(req, {
+      action: 'meeting_slots_proposed',
+      status: 'success',
+      graphMessageId: result.messageId,
+      metadata: {
+        attendeeCount: result.attendees.length,
+        suggestionCount: result.suggestions.length,
+        durationMinutes: result.durationMinutes,
+      },
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'meeting_slots_proposed',
+      graphMessageId: req.params.messageId,
+      ...getErrorAudit(error),
+    });
+    handleOutlookError(res, error);
+  }
+});
+
+router.post('/messages/:messageId/meetings', async (req, res) => {
+  try {
+    const result = await OutlookService.createTeamsMeeting(
+      req.user,
+      req.params.messageId,
+      req.body,
+    );
+    await recordAudit(req, {
+      action: 'meeting_created',
+      status: 'success',
+      graphMessageId: result.sourceMessageId,
+      graphDraftId: result.draft?.id,
+      metadata: {
+        graphEventId: result.event?.id,
+        attendeeCount: result.attendees.length,
+        hasTeamsJoinUrl: Boolean(result.event?.onlineMeeting?.joinUrl),
+      },
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'meeting_created',
+      graphMessageId: req.params.messageId,
+      ...getErrorAudit(error),
+    });
+    handleOutlookError(res, error);
+  }
+});
+
 module.exports = router;

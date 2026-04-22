@@ -1,19 +1,24 @@
 import { useEffect, useMemo, useState, startTransition } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { CalendarDays, Mail, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
+import { CalendarDays, CalendarPlus, Mail, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 import type {
   OutlookAnalyzeResponse,
+  OutlookCreateMeetingResponse,
   OutlookDraftResponse,
+  OutlookMeetingSlotsResponse,
+  OutlookMeetingSlot,
   OutlookMessage,
 } from 'librechat-data-provider';
 import { QueryKeys } from 'librechat-data-provider';
 import {
   useAnalyzeOutlookMessageMutation,
   useCreateOutlookDraftMutation,
+  useCreateOutlookMeetingMutation,
   useDeleteOutlookMessageMutation,
   useOutlookMessageQuery,
   useOutlookMessagesQuery,
   useOutlookStatusQuery,
+  useProposeOutlookMeetingSlotsMutation,
 } from '~/data-provider';
 import { cn } from '~/utils';
 
@@ -42,6 +47,24 @@ function formatDate(value?: string) {
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(value));
+}
+
+function formatMeetingDateTime(value?: { dateTime: string; timeZone?: string }) {
+  if (!value?.dateTime) {
+    return '';
+  }
+  const date = new Date(value.dateTime);
+  if (Number.isNaN(date.getTime())) {
+    return `${value.dateTime} ${value.timeZone || ''}`.trim();
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: value.timeZone === 'UTC' ? 'UTC' : undefined,
+  }).format(date);
 }
 
 function EmptyState({ title, description }: { title: string; description: string }) {
@@ -160,11 +183,114 @@ function InsightsCard({ analysis }: { analysis?: OutlookAnalyzeResponse | null }
           </ul>
         </div>
       )}
+      {insights.identitySignals != null && insights.identitySignals.length > 0 && (
+        <div className="mt-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
+          <div className="text-xs font-semibold text-text-primary">Identity context</div>
+          <ul className="mt-1 list-disc space-y-1 pl-4 text-xs leading-5 text-text-secondary">
+            {insights.identitySignals.map((signal) => (
+              <li key={signal}>{signal}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {insights.mode === 'local-extractive' && (
         <p className="mt-3 text-[11px] leading-4 text-text-secondary">
           This first-pass analysis is local and extractive. It does not send email content through a
           model until model-backed analysis is explicitly wired in.
         </p>
+      )}
+    </div>
+  );
+}
+
+function MeetingSchedulerCard({
+  slots,
+  result,
+  onCreate,
+  isCreating,
+}: {
+  slots?: OutlookMeetingSlotsResponse | null;
+  result?: OutlookCreateMeetingResponse | null;
+  onCreate: (slot: OutlookMeetingSlot) => void;
+  isCreating: boolean;
+}) {
+  if (!slots && !result) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-3 text-sm">
+      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+        <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
+        Meeting scheduler
+      </div>
+
+      {slots && (
+        <>
+          <div className="mt-2 text-xs text-text-secondary">
+            Proposed {slots.suggestions.length} slot(s) for {slots.attendees.length} attendee(s).
+            Pick one to create a calendar-backed Teams meeting.
+          </div>
+          {slots.suggestions.length === 0 && (
+            <p className="mt-2 text-xs text-red-500">
+              No meeting slots were found
+              {slots.emptySuggestionsReason ? `: ${slots.emptySuggestionsReason}` : '.'}
+            </p>
+          )}
+          <div className="mt-3 space-y-2">
+            {slots.suggestions.map((slot) => (
+              <div
+                key={slot.id}
+                className="rounded-xl border border-border-light bg-surface-primary p-3"
+              >
+                <div className="text-sm font-semibold text-text-primary">
+                  {formatMeetingDateTime(slot.start)}
+                </div>
+                <div className="mt-1 text-xs text-text-secondary">
+                  Ends {formatMeetingDateTime(slot.end)}
+                  {slot.confidence != null ? ` • Confidence ${Math.round(slot.confidence)}%` : ''}
+                </div>
+                {slot.suggestionReason && (
+                  <div className="mt-1 text-xs text-text-secondary">{slot.suggestionReason}</div>
+                )}
+                <button
+                  type="button"
+                  className="mt-2 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                  onClick={() => onCreate(slot)}
+                  disabled={isCreating}
+                >
+                  {isCreating ? 'Creating...' : 'Create Teams meeting'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {result && (
+        <div className="mt-3 rounded-xl border border-green-500/20 bg-green-500/5 p-3">
+          <div className="font-semibold text-green-700 dark:text-green-300">{result.message}</div>
+          {result.event?.onlineMeeting?.joinUrl && (
+            <a
+              className="mt-2 inline-block text-xs font-medium text-green-700 hover:underline dark:text-green-300"
+              href={result.event.onlineMeeting.joinUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open Teams meeting
+            </a>
+          )}
+          {result.draft?.webLink && (
+            <a
+              className="ml-3 mt-2 inline-block text-xs font-medium text-green-700 hover:underline dark:text-green-300"
+              href={result.draft.webLink}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open reply draft
+            </a>
+          )}
+        </div>
       )}
     </div>
   );
@@ -176,6 +302,8 @@ export default function OutlookPanel() {
   const [inboxView, setInboxView] = useState<InboxView>('focused');
   const [analysis, setAnalysis] = useState<OutlookAnalyzeResponse | null>(null);
   const [draftResult, setDraftResult] = useState<OutlookDraftResponse | null>(null);
+  const [meetingSlots, setMeetingSlots] = useState<OutlookMeetingSlotsResponse | null>(null);
+  const [meetingResult, setMeetingResult] = useState<OutlookCreateMeetingResponse | null>(null);
   const [draftInstructions, setDraftInstructions] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
 
@@ -201,6 +329,8 @@ export default function OutlookPanel() {
   const analyzeMutation = useAnalyzeOutlookMessageMutation();
   const draftMutation = useCreateOutlookDraftMutation();
   const deleteMutation = useDeleteOutlookMessageMutation();
+  const meetingSlotsMutation = useProposeOutlookMeetingSlotsMutation();
+  const createMeetingMutation = useCreateOutlookMeetingMutation();
 
   useEffect(() => {
     if (conversations.length === 0) {
@@ -218,6 +348,8 @@ export default function OutlookPanel() {
   useEffect(() => {
     setAnalysis(null);
     setDraftResult(null);
+    setMeetingSlots(null);
+    setMeetingResult(null);
     setDraftInstructions('');
     setStatusMessage('');
   }, [selectedId, inboxView]);
@@ -242,6 +374,47 @@ export default function OutlookPanel() {
       },
     });
     setDraftResult(result);
+  };
+
+  const handleFindMeetingSlots = async () => {
+    if (!selectedId) {
+      return;
+    }
+    const result = await meetingSlotsMutation.mutateAsync({
+      messageId: selectedId,
+      payload: {
+        durationMinutes: 30,
+        maxCandidates: 5,
+      },
+    });
+    setMeetingSlots(result);
+    setMeetingResult(null);
+  };
+
+  const handleCreateMeeting = async (slot: OutlookMeetingSlot) => {
+    if (!selectedId || !meetingSlots) {
+      return;
+    }
+    const confirmed = window.confirm(
+      'Create a calendar-backed Teams meeting for this slot and prepare a reply draft?',
+    );
+    if (!confirmed) {
+      return;
+    }
+    const result = await createMeetingMutation.mutateAsync({
+      messageId: selectedId,
+      payload: {
+        slot: {
+          start: slot.start,
+          end: slot.end,
+        },
+        subject: meetingSlots.subject,
+        attendees: meetingSlots.attendees,
+        instructions: draftInstructions,
+        createReplyDraft: true,
+      },
+    });
+    setMeetingResult(result);
   };
 
   const handleDelete = async () => {
@@ -484,6 +657,15 @@ export default function OutlookPanel() {
                     >
                       {draftMutation.isLoading ? 'Creating draft...' : 'Create reply draft'}
                     </button>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-500/10 disabled:opacity-60 dark:text-amber-300"
+                      onClick={handleFindMeetingSlots}
+                      disabled={meetingSlotsMutation.isLoading || !status.meetingSchedulingEnabled}
+                    >
+                      <CalendarPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                      {meetingSlotsMutation.isLoading ? 'Finding times...' : 'Find meeting times'}
+                    </button>
                   </div>
 
                   <textarea
@@ -502,9 +684,26 @@ export default function OutlookPanel() {
                   {deleteMutation.error != null && (
                     <p className="mt-2 text-xs text-red-500">Unable to delete this email.</p>
                   )}
+                  {meetingSlotsMutation.error != null && (
+                    <p className="mt-2 text-xs text-red-500">Unable to find meeting times.</p>
+                  )}
+                  {createMeetingMutation.error != null && (
+                    <p className="mt-2 text-xs text-red-500">Unable to create Teams meeting.</p>
+                  )}
+                  {!status.meetingSchedulingEnabled && (
+                    <p className="mt-2 text-xs text-text-secondary">
+                      Meeting scheduling is disabled. Set OUTLOOK_AI_ENABLE_MEETING_SCHEDULING=true.
+                    </p>
+                  )}
 
                   <div className="mt-3 space-y-3">
                     <InsightsCard analysis={analysis} />
+                    <MeetingSchedulerCard
+                      slots={meetingSlots}
+                      result={meetingResult}
+                      onCreate={handleCreateMeeting}
+                      isCreating={createMeetingMutation.isLoading}
+                    />
 
                     {draftResult && (
                       <div className="rounded-2xl border border-green-500/20 bg-green-500/5 p-3 text-sm">

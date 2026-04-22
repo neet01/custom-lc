@@ -5,6 +5,9 @@ const OutlookAIService = require('~/server/services/OutlookAIService');
 
 const DEFAULT_GRAPH_BASE_URL = 'https://graph.microsoft.us/v1.0';
 const DEFAULT_SCOPES = 'https://graph.microsoft.us/.default';
+const USER_PROFILE_SELECT =
+  'id,displayName,mail,userPrincipalName,jobTitle,department,officeLocation';
+const DEFAULT_MEETING_DURATION_MINUTES = 30;
 
 class OutlookServiceError extends Error {
   constructor(message, status = 500, details) {
@@ -36,6 +39,10 @@ function getOutlookConfig() {
       process.env.OUTLOOK_GRAPH_BASE_URL || DEFAULT_GRAPH_BASE_URL,
     ),
     scopes: process.env.OUTLOOK_GRAPH_SCOPES || DEFAULT_SCOPES,
+    includeUserContext: process.env.OUTLOOK_AI_INCLUDE_USER_CONTEXT !== 'false',
+    includeDirectoryContext: isEnabled(process.env.OUTLOOK_AI_INCLUDE_DIRECTORY_CONTEXT),
+    includeMailboxSettings: isEnabled(process.env.OUTLOOK_AI_INCLUDE_MAILBOX_SETTINGS),
+    enableMeetingScheduling: process.env.OUTLOOK_AI_ENABLE_MEETING_SCHEDULING !== 'false',
   };
 }
 
@@ -121,11 +128,13 @@ async function graphRequest(user, pathname, options = {}) {
 
   if (!response.ok) {
     const graphMessage = await parseGraphError(response);
-    logger.warn('[OutlookService] Microsoft Graph request failed', {
-      status: response.status,
-      path: pathname,
-      graphMessage,
-    });
+    if (!options.suppressErrorLog) {
+      logger.warn('[OutlookService] Microsoft Graph request failed', {
+        status: response.status,
+        path: pathname,
+        graphMessage,
+      });
+    }
     throw new OutlookServiceError('Microsoft Graph request failed', response.status, graphMessage);
   }
 
@@ -141,6 +150,18 @@ function normalizeEmailAddress(recipient) {
   return {
     name: address?.name || '',
     address: address?.address || '',
+  };
+}
+
+function normalizeDirectoryUser(profile, fallback = {}) {
+  return {
+    id: profile?.id,
+    displayName: profile?.displayName || fallback.name || '',
+    email: profile?.mail || profile?.userPrincipalName || fallback.address || '',
+    userPrincipalName: profile?.userPrincipalName,
+    jobTitle: profile?.jobTitle || '',
+    department: profile?.department || '',
+    officeLocation: profile?.officeLocation || '',
   };
 }
 
@@ -191,6 +212,40 @@ function normalizeCalendarEvent(event) {
     showAs: event.showAs,
     isOnlineMeeting: Boolean(event.isOnlineMeeting),
     webLink: event.webLink,
+  };
+}
+
+function normalizeOnlineMeetingEvent(event) {
+  return {
+    id: event.id,
+    subject: event.subject || '(No subject)',
+    start: event.start,
+    end: event.end,
+    webLink: event.webLink,
+    onlineMeeting: event.onlineMeeting
+      ? {
+          joinUrl: event.onlineMeeting.joinUrl,
+          conferenceId: event.onlineMeeting.conferenceId,
+        }
+      : undefined,
+  };
+}
+
+function normalizeMailboxSettings(settings) {
+  if (!settings) {
+    return undefined;
+  }
+
+  return {
+    timeZone: settings.timeZone,
+    workingHours: settings.workingHours
+      ? {
+          daysOfWeek: settings.workingHours.daysOfWeek,
+          startTime: settings.workingHours.startTime,
+          endTime: settings.workingHours.endTime,
+          timeZone: settings.workingHours.timeZone?.name || settings.workingHours.timeZone,
+        }
+      : undefined,
   };
 }
 
@@ -385,6 +440,516 @@ async function getCalendarContext(user, message) {
   }
 }
 
+function getParticipantKey(participant) {
+  return String(participant?.address || '')
+    .trim()
+    .toLowerCase();
+}
+
+function collectThreadParticipants(message) {
+  const participants = new Map();
+  const threadMessages =
+    Array.isArray(message.thread) && message.thread.length > 0 ? message.thread : [message];
+
+  const addParticipant = (participant, role) => {
+    const key = getParticipantKey(participant);
+    if (!key) {
+      return;
+    }
+    const existing = participants.get(key) || {
+      name: participant.name || '',
+      address: participant.address || '',
+      roles: [],
+    };
+    if (!existing.roles.includes(role)) {
+      existing.roles.push(role);
+    }
+    participants.set(key, existing);
+  };
+
+  for (const threadMessage of threadMessages) {
+    addParticipant(threadMessage.from, 'from');
+    for (const recipient of threadMessage.toRecipients || []) {
+      addParticipant(recipient, 'to');
+    }
+    for (const recipient of threadMessage.ccRecipients || []) {
+      addParticipant(recipient, 'cc');
+    }
+  }
+
+  return Array.from(participants.values());
+}
+
+async function getCurrentUserProfile(user) {
+  try {
+    const profile = await graphRequest(user, '/me', {
+      query: {
+        $select: USER_PROFILE_SELECT,
+      },
+      suppressErrorLog: true,
+    });
+    return normalizeDirectoryUser(profile, {
+      name: user?.name || user?.username,
+      address: user?.email,
+    });
+  } catch (error) {
+    logger.warn('[OutlookService] Signed-in user profile context unavailable', {
+      status: error?.status,
+      message: error?.message,
+    });
+    return normalizeDirectoryUser(null, {
+      name: user?.name || user?.username,
+      address: user?.email,
+    });
+  }
+}
+
+async function getCurrentUserManager(user) {
+  try {
+    const manager = await graphRequest(user, '/me/manager', {
+      query: {
+        $select: USER_PROFILE_SELECT,
+      },
+      suppressErrorLog: true,
+    });
+    return normalizeDirectoryUser(manager);
+  } catch (_error) {
+    return undefined;
+  }
+}
+
+async function getMailboxContext(user) {
+  if (!getOutlookConfig().includeMailboxSettings) {
+    return undefined;
+  }
+
+  try {
+    const settings = await graphRequest(user, '/me/mailboxSettings', {
+      query: {
+        $select: 'timeZone,workingHours',
+      },
+      suppressErrorLog: true,
+    });
+    return normalizeMailboxSettings(settings);
+  } catch (error) {
+    logger.warn('[OutlookService] Mailbox settings context unavailable', {
+      status: error?.status,
+      message: error?.message,
+    });
+    return undefined;
+  }
+}
+
+async function getDirectoryProfileByAddress(user, participant) {
+  const address = getParticipantKey(participant);
+  if (!address) {
+    return null;
+  }
+
+  try {
+    const profile = await graphRequest(user, `/users/${encodeURIComponent(address)}`, {
+      query: {
+        $select: USER_PROFILE_SELECT,
+      },
+      suppressErrorLog: true,
+    });
+    return normalizeDirectoryUser(profile, participant);
+  } catch (directLookupError) {
+    if (directLookupError?.status !== 404) {
+      return null;
+    }
+  }
+
+  try {
+    const escapedAddress = escapeODataString(address);
+    const payload = await graphRequest(user, '/users', {
+      query: {
+        $top: 1,
+        $select: USER_PROFILE_SELECT,
+        $filter: `mail eq '${escapedAddress}' or userPrincipalName eq '${escapedAddress}'`,
+      },
+      suppressErrorLog: true,
+    });
+    const profile = Array.isArray(payload?.value) ? payload.value[0] : null;
+    return profile ? normalizeDirectoryUser(profile, participant) : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function markParticipantRelationship(participant, signedInUser) {
+  const participantEmail = getParticipantKey(participant);
+  const signedInEmails = [signedInUser?.email, signedInUser?.userPrincipalName]
+    .map((value) =>
+      String(value || '')
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+
+  return {
+    ...participant,
+    relationshipToSignedInUser: signedInEmails.includes(participantEmail)
+      ? 'signed_in_user'
+      : participant.internalUser
+        ? 'internal_user'
+        : 'external_or_unresolved',
+  };
+}
+
+async function getParticipantDirectoryContext(user, message, signedInUser) {
+  const participants = collectThreadParticipants(message);
+  if (!getOutlookConfig().includeDirectoryContext) {
+    return participants.map((participant) =>
+      markParticipantRelationship(participant, signedInUser),
+    );
+  }
+
+  const enrichedParticipants = [];
+  for (const participant of participants.slice(0, 20)) {
+    const profile = await getDirectoryProfileByAddress(user, participant);
+    enrichedParticipants.push(
+      markParticipantRelationship(
+        {
+          ...participant,
+          internalUser: Boolean(profile),
+          profile,
+        },
+        signedInUser,
+      ),
+    );
+  }
+
+  return enrichedParticipants;
+}
+
+async function getOutlookAIContext(user, message) {
+  const config = getOutlookConfig();
+  if (!config.includeUserContext) {
+    return {
+      participants: collectThreadParticipants(message),
+    };
+  }
+
+  const signedInUser = await getCurrentUserProfile(user);
+  const [manager, mailboxSettings] = await Promise.all([
+    config.includeDirectoryContext ? getCurrentUserManager(user) : Promise.resolve(undefined),
+    getMailboxContext(user),
+  ]);
+  const participants = await getParticipantDirectoryContext(user, message, signedInUser);
+
+  return {
+    signedInUser,
+    manager,
+    mailboxSettings,
+    participants,
+    rules: [
+      'Draft only as signedInUser.',
+      'Never sign as the sender, another recipient, or another person in the thread.',
+      'If the thread is addressed to multiple people, decide whether signedInUser should respond before drafting.',
+      'Use participant title and relationship context when available; do not invent hierarchy.',
+    ],
+  };
+}
+
+function normalizePositiveInteger(value, fallback, { min = 1, max = 120 } = {}) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.round(parsed), min), max);
+}
+
+function buildMeetingDuration(durationMinutes) {
+  const minutes = normalizePositiveInteger(
+    durationMinutes,
+    normalizePositiveInteger(
+      process.env.OUTLOOK_AI_DEFAULT_MEETING_DURATION_MINUTES,
+      DEFAULT_MEETING_DURATION_MINUTES,
+      { min: 5, max: 240 },
+    ),
+    { min: 5, max: 240 },
+  );
+  return {
+    minutes,
+    isoDuration: `PT${minutes}M`,
+  };
+}
+
+function normalizeMeetingAttendee(attendee) {
+  const address = String(attendee?.address || attendee?.email || '').trim();
+  if (!address || !address.includes('@')) {
+    return null;
+  }
+  return {
+    name: String(attendee?.name || attendee?.displayName || address).trim(),
+    address,
+  };
+}
+
+function resolveMeetingAttendees(message, outlookContext, requestedAttendees = []) {
+  const attendees = new Map();
+  const addAttendee = (attendee) => {
+    const normalized = normalizeMeetingAttendee(attendee);
+    if (!normalized) {
+      return;
+    }
+    attendees.set(normalized.address.toLowerCase(), normalized);
+  };
+
+  if (Array.isArray(requestedAttendees) && requestedAttendees.length > 0) {
+    requestedAttendees.forEach(addAttendee);
+  } else {
+    for (const participant of outlookContext?.participants || collectThreadParticipants(message)) {
+      if (participant.relationshipToSignedInUser === 'signed_in_user') {
+        continue;
+      }
+      addAttendee(participant);
+    }
+  }
+
+  return Array.from(attendees.values()).slice(0, 20);
+}
+
+function stripReplyPrefix(subject) {
+  return String(subject || 'Meeting')
+    .replace(/^(\s*(re|fw|fwd)\s*:\s*)+/i, '')
+    .trim();
+}
+
+function buildMeetingSubject(message, subject) {
+  const normalized = String(subject || '').trim();
+  if (normalized) {
+    return normalized;
+  }
+  return `Meeting: ${stripReplyPrefix(message.subject) || 'Follow-up'}`;
+}
+
+function buildDateTimeRange(days = 14) {
+  const now = new Date();
+  const start = new Date(now.getTime() + 15 * 60 * 1000);
+  const end = new Date(
+    now.getTime() + normalizePositiveInteger(days, 14, { min: 1, max: 30 }) * 24 * 60 * 60 * 1000,
+  );
+  return {
+    start: {
+      dateTime: start.toISOString(),
+      timeZone: 'UTC',
+    },
+    end: {
+      dateTime: end.toISOString(),
+      timeZone: 'UTC',
+    },
+  };
+}
+
+function normalizeMeetingTimeSlot(slot) {
+  if (!slot?.start?.dateTime || !slot?.end?.dateTime) {
+    throw new OutlookServiceError('A meeting time slot with start and end is required', 400);
+  }
+  return {
+    start: {
+      dateTime: slot.start.dateTime,
+      timeZone: slot.start.timeZone || 'UTC',
+    },
+    end: {
+      dateTime: slot.end.dateTime,
+      timeZone: slot.end.timeZone || slot.start.timeZone || 'UTC',
+    },
+  };
+}
+
+function normalizeMeetingSuggestion(suggestion, index) {
+  const slot = normalizeMeetingTimeSlot(suggestion.meetingTimeSlot);
+  return {
+    id: `slot-${index + 1}`,
+    confidence: suggestion.confidence,
+    organizerAvailability: suggestion.organizerAvailability,
+    suggestionReason: suggestion.suggestionReason,
+    attendeeAvailability: suggestion.attendeeAvailability,
+    start: slot.start,
+    end: slot.end,
+  };
+}
+
+function assertMeetingSchedulingEnabled() {
+  if (!getOutlookConfig().enableMeetingScheduling) {
+    throw new OutlookServiceError('Outlook meeting scheduling is not enabled', 403);
+  }
+}
+
+async function proposeMeetingSlots(user, messageId, options = {}) {
+  assertMeetingSchedulingEnabled();
+  const message = await getMessage(user, messageId, { includeThread: true });
+  const outlookContext = await getOutlookAIContext(user, message);
+  const attendees = resolveMeetingAttendees(message, outlookContext, options.attendees);
+
+  if (attendees.length === 0) {
+    throw new OutlookServiceError('No meeting attendees could be resolved from this thread', 400);
+  }
+
+  const duration = buildMeetingDuration(options.durationMinutes);
+  const window = buildDateTimeRange(options.days);
+  const maxCandidates = normalizePositiveInteger(options.maxCandidates, 5, { min: 1, max: 10 });
+
+  const payload = await graphRequest(user, '/me/findMeetingTimes', {
+    method: 'POST',
+    body: {
+      attendees: attendees.map((attendee) => ({
+        type: 'required',
+        emailAddress: {
+          name: attendee.name,
+          address: attendee.address,
+        },
+      })),
+      timeConstraint: {
+        activityDomain: 'work',
+        timeslots: [window],
+      },
+      meetingDuration: duration.isoDuration,
+      maxCandidates,
+      returnSuggestionReasons: true,
+    },
+  });
+
+  const suggestions = Array.isArray(payload?.meetingTimeSuggestions)
+    ? payload.meetingTimeSuggestions.map(normalizeMeetingSuggestion)
+    : [];
+
+  return {
+    messageId,
+    subject: buildMeetingSubject(message, options.subject),
+    attendees,
+    durationMinutes: duration.minutes,
+    emptySuggestionsReason: payload?.emptySuggestionsReason,
+    suggestions,
+  };
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatDateTimeForDraft(value) {
+  if (!value?.dateTime) {
+    return '';
+  }
+  const date = new Date(value.dateTime);
+  if (Number.isNaN(date.getTime())) {
+    return `${value.dateTime} ${value.timeZone || ''}`.trim();
+  }
+  return new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: value.timeZone === 'UTC' ? 'UTC' : undefined,
+  }).format(date);
+}
+
+function buildMeetingBody({ message, instructions }) {
+  const details = String(instructions || '').trim();
+  const threadSubject = stripReplyPrefix(message.subject);
+  return [
+    '<p>Meeting scheduled from the Outlook thread.</p>',
+    threadSubject ? `<p><strong>Source thread:</strong> ${escapeHtml(threadSubject)}</p>` : '',
+    details ? `<p><strong>Notes:</strong> ${escapeHtml(details)}</p>` : '',
+  ]
+    .filter(Boolean)
+    .join('');
+}
+
+function buildMeetingDraftComment({ event, subject, slot }) {
+  const joinUrl = event.onlineMeeting?.joinUrl || event.webLink;
+  const start = formatDateTimeForDraft(slot.start);
+  return [
+    `I scheduled ${subject}${start ? ` for ${start}` : ''}.`,
+    joinUrl ? `\n\nTeams link: ${joinUrl}` : '',
+    '\n\nSee the calendar invite for details.',
+  ].join('');
+}
+
+async function createTeamsMeeting(user, messageId, options = {}) {
+  assertMeetingSchedulingEnabled();
+  const message = await getMessage(user, messageId, { includeThread: true });
+  const outlookContext = await getOutlookAIContext(user, message);
+  const attendees = resolveMeetingAttendees(message, outlookContext, options.attendees);
+  if (attendees.length === 0) {
+    throw new OutlookServiceError('No meeting attendees could be resolved from this thread', 400);
+  }
+
+  const slot = normalizeMeetingTimeSlot(options.slot);
+  const subject = buildMeetingSubject(message, options.subject);
+  const eventPayload = {
+    subject,
+    body: {
+      contentType: 'HTML',
+      content: buildMeetingBody({ message, instructions: options.instructions }),
+    },
+    start: slot.start,
+    end: slot.end,
+    attendees: attendees.map((attendee) => ({
+      type: 'required',
+      emailAddress: {
+        name: attendee.name,
+        address: attendee.address,
+      },
+    })),
+    allowNewTimeProposals: true,
+    isOnlineMeeting: true,
+    onlineMeetingProvider: 'teamsForBusiness',
+  };
+
+  const event = normalizeOnlineMeetingEvent(
+    await graphRequest(user, '/me/events', {
+      method: 'POST',
+      body: eventPayload,
+    }),
+  );
+
+  let draft;
+  if (options.createReplyDraft !== false) {
+    const comment = buildMeetingDraftComment({ event, subject, slot });
+    draft = await graphRequest(user, `/me/messages/${encodeURIComponent(messageId)}/createReply`, {
+      method: 'POST',
+      body: { comment },
+    });
+    if (draft?.id) {
+      await graphRequest(user, `/me/messages/${encodeURIComponent(draft.id)}`, {
+        method: 'PATCH',
+        body: {
+          body: {
+            contentType: 'Text',
+            content: comment,
+          },
+        },
+      }).catch((error) => {
+        logger.warn('[OutlookService] Failed to patch meeting reply draft body', {
+          status: error?.status,
+          message: error?.message,
+        });
+      });
+    }
+  }
+
+  return {
+    sourceMessageId: messageId,
+    event,
+    attendees,
+    draft: draft
+      ? {
+          id: draft.id,
+          subject: draft.subject,
+          webLink: draft.webLink,
+        }
+      : undefined,
+    message: 'Teams meeting created. Review the calendar invite and reply draft before sending.',
+  };
+}
+
 function truncateText(value, maxLength = 1200) {
   const normalized = String(value || '')
     .replace(/\r/g, '')
@@ -459,10 +1024,17 @@ function buildLocalInsights(message) {
 
 async function analyzeMessage(user, messageId) {
   const message = await getMessage(user, messageId, { includeThread: true });
-  const calendarEvents = await getCalendarContext(user, message);
+  const [calendarEvents, outlookContext] = await Promise.all([
+    getCalendarContext(user, message),
+    getOutlookAIContext(user, message),
+  ]);
   if (OutlookAIService.isModelBackedAIEnabled()) {
     try {
-      const insights = await OutlookAIService.generateAnalysis({ message, calendarEvents });
+      const insights = await OutlookAIService.generateAnalysis({
+        message,
+        calendarEvents,
+        outlookContext,
+      });
       if (insights) {
         return {
           messageId,
@@ -495,7 +1067,10 @@ function buildDraftComment(message, { instructions = '', tone = 'professional' }
 
 async function createReplyDraft(user, messageId, options = {}) {
   const message = await getMessage(user, messageId, { includeThread: true });
-  const calendarEvents = await getCalendarContext(user, message);
+  const [calendarEvents, outlookContext] = await Promise.all([
+    getCalendarContext(user, message),
+    getOutlookAIContext(user, message),
+  ]);
   let comment = buildDraftComment(message, options);
 
   if (OutlookAIService.isModelBackedAIEnabled()) {
@@ -505,6 +1080,7 @@ async function createReplyDraft(user, messageId, options = {}) {
         instructions: options.instructions,
         tone: options.tone,
         calendarEvents,
+        outlookContext,
       });
       if (generated?.trim()) {
         comment = generated.trim();
@@ -566,6 +1142,10 @@ function getStatus(user) {
       delegatedGraphScopes: config.scopes,
     },
     calendarContextEnabled: isEnabled(process.env.OUTLOOK_AI_INCLUDE_CALENDAR),
+    userContextEnabled: config.includeUserContext,
+    directoryContextEnabled: config.includeDirectoryContext,
+    mailboxSettingsContextEnabled: config.includeMailboxSettings,
+    meetingSchedulingEnabled: config.enableMeetingScheduling,
   };
 }
 
@@ -579,5 +1159,8 @@ module.exports = {
   deleteMessage,
   analyzeMessage,
   createReplyDraft,
+  proposeMeetingSlots,
+  createTeamsMeeting,
   buildLocalInsights,
+  getOutlookAIContext,
 };

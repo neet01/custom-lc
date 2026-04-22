@@ -251,6 +251,179 @@ describe('OutlookService', () => {
     );
   });
 
+  it('proposes meeting slots from thread attendees without creating an event', async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'source-message',
+          conversationId: 'thread-1',
+          subject: 'Schedule budget review',
+          from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+          toRecipients: [{ emailAddress: { name: 'Test User', address: 'test.user@example.mil' } }],
+          body: { content: 'Can we find time?' },
+          bodyPreview: 'Can we find time?',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'source-message',
+              conversationId: 'thread-1',
+              subject: 'Schedule budget review',
+              from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+              toRecipients: [
+                { emailAddress: { name: 'Test User', address: 'test.user@example.mil' } },
+              ],
+              body: { content: 'Can we find time?' },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          meetingTimeSuggestions: [
+            {
+              confidence: 90,
+              meetingTimeSlot: {
+                start: { dateTime: '2026-04-23T17:00:00.0000000', timeZone: 'UTC' },
+                end: { dateTime: '2026-04-23T17:30:00.0000000', timeZone: 'UTC' },
+              },
+              suggestionReason: 'Suggested because everyone is free.',
+            },
+          ],
+        }),
+      });
+
+    const result = await OutlookService.proposeMeetingSlots(user, 'source-message', {
+      durationMinutes: 30,
+    });
+
+    expect(result.attendees).toEqual([{ name: 'Finance', address: 'finance@example.mil' }]);
+    expect(result.suggestions).toHaveLength(1);
+    expect(result.suggestions[0]).toMatchObject({ confidence: 90 });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        pathname: '/v1.0/me/findMeetingTimes',
+      }),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('finance@example.mil'),
+      }),
+    );
+  });
+
+  it('creates a calendar-backed Teams meeting only after a slot is confirmed', async () => {
+    const slot = {
+      start: { dateTime: '2026-04-23T17:00:00.0000000', timeZone: 'UTC' },
+      end: { dateTime: '2026-04-23T17:30:00.0000000', timeZone: 'UTC' },
+    };
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'source-message',
+          conversationId: 'thread-1',
+          subject: 'Schedule budget review',
+          from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+          toRecipients: [{ emailAddress: { name: 'Test User', address: 'test.user@example.mil' } }],
+          body: { content: 'Can we find time?' },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'source-message',
+              conversationId: 'thread-1',
+              subject: 'Schedule budget review',
+              from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+              toRecipients: [
+                { emailAddress: { name: 'Test User', address: 'test.user@example.mil' } },
+              ],
+              body: { content: 'Can we find time?' },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          id: 'event-1',
+          subject: 'Meeting: Schedule budget review',
+          start: slot.start,
+          end: slot.end,
+          webLink: 'https://outlook.example/event-1',
+          onlineMeeting: {
+            joinUrl: 'https://teams.example/join',
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          id: 'draft-message',
+          subject: 'RE: Schedule budget review',
+          webLink: 'https://outlook.example/draft-message',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      });
+
+    const result = await OutlookService.createTeamsMeeting(user, 'source-message', {
+      slot,
+      subject: 'Meeting: Schedule budget review',
+    });
+
+    expect(result.event.onlineMeeting.joinUrl).toBe('https://teams.example/join');
+    expect(result.draft.id).toBe('draft-message');
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        pathname: '/v1.0/me/events',
+      }),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"isOnlineMeeting":true'),
+      }),
+    );
+    expect(global.fetch.mock.calls[3][1].body).toContain('teamsForBusiness');
+  });
+
   it('creates a reply draft without sending mail', async () => {
     global.fetch
       .mockResolvedValueOnce({
@@ -283,6 +456,18 @@ describe('OutlookService', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+          jobTitle: 'Program Manager',
+          department: 'Ops',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         status: 201,
         json: async () => ({
           id: 'draft-message',
@@ -307,7 +492,7 @@ describe('OutlookService', () => {
       message: 'Draft reply created. Review it in Outlook before sending.',
     });
     expect(global.fetch).toHaveBeenNthCalledWith(
-      3,
+      4,
       expect.objectContaining({
         pathname: '/v1.0/me/messages/source-message/createReply',
       }),
@@ -357,7 +542,105 @@ describe('OutlookService', () => {
     expect(OutlookAIService.generateAnalysis).toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.objectContaining({ subject: 'Decision needed' }),
+        outlookContext: expect.objectContaining({
+          signedInUser: expect.any(Object),
+        }),
       }),
+    );
+  });
+
+  it('builds signed-in user and participant context for Outlook AI prompts', async () => {
+    process.env.OUTLOOK_AI_INCLUDE_DIRECTORY_CONTEXT = 'true';
+    process.env.OUTLOOK_AI_INCLUDE_MAILBOX_SETTINGS = 'true';
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'User Two',
+          mail: 'user2@example.mil',
+          userPrincipalName: 'user2@example.mil',
+          jobTitle: 'Program Manager',
+          department: 'Engineering',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'manager-1',
+          displayName: 'Director One',
+          mail: 'director@example.mil',
+          jobTitle: 'Director',
+          department: 'Engineering',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          timeZone: 'Pacific Standard Time',
+          workingHours: {
+            daysOfWeek: ['monday', 'tuesday'],
+            startTime: '09:00:00.0000000',
+            endTime: '17:00:00.0000000',
+            timeZone: { name: 'Pacific Standard Time' },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'user1',
+          displayName: 'User One',
+          mail: 'user1@example.mil',
+          userPrincipalName: 'user1@example.mil',
+          jobTitle: 'VP Finance',
+          department: 'Finance',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'user2',
+          displayName: 'User Two',
+          mail: 'user2@example.mil',
+          userPrincipalName: 'user2@example.mil',
+          jobTitle: 'Program Manager',
+          department: 'Engineering',
+        }),
+      });
+
+    const context = await OutlookService.getOutlookAIContext(user, {
+      from: { name: 'User One', address: 'user1@example.mil' },
+      toRecipients: [{ name: 'User Two', address: 'user2@example.mil' }],
+      ccRecipients: [],
+      body: 'Can you set up time with finance?',
+    });
+
+    expect(context.signedInUser).toMatchObject({
+      displayName: 'User Two',
+      email: 'user2@example.mil',
+      jobTitle: 'Program Manager',
+    });
+    expect(context.manager).toMatchObject({ displayName: 'Director One' });
+    expect(context.mailboxSettings).toMatchObject({ timeZone: 'Pacific Standard Time' });
+    expect(context.participants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          address: 'user2@example.mil',
+          relationshipToSignedInUser: 'signed_in_user',
+          profile: expect.objectContaining({ jobTitle: 'Program Manager' }),
+        }),
+        expect.objectContaining({
+          address: 'user1@example.mil',
+          relationshipToSignedInUser: 'internal_user',
+          profile: expect.objectContaining({ jobTitle: 'VP Finance' }),
+        }),
+      ]),
     );
   });
 
@@ -397,6 +680,18 @@ describe('OutlookService', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+          jobTitle: 'Program Manager',
+          department: 'Ops',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         status: 201,
         json: async () => ({
           id: 'draft-message',
@@ -415,6 +710,15 @@ describe('OutlookService', () => {
     });
 
     expect(result.bodyPreview).toContain('I can review this today');
+    expect(OutlookAIService.generateReplyDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outlookContext: expect.objectContaining({
+          signedInUser: expect.objectContaining({
+            displayName: 'Test User',
+          }),
+        }),
+      }),
+    );
     expect(global.fetch).toHaveBeenLastCalledWith(
       expect.objectContaining({
         pathname: '/v1.0/me/messages/draft-message',

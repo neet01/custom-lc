@@ -34,6 +34,10 @@ export type OutlookStatusResponse = {
     delegatedGraphScopes: string;
   };
   calendarContextEnabled?: boolean;
+  userContextEnabled?: boolean;
+  directoryContextEnabled?: boolean;
+  mailboxSettingsContextEnabled?: boolean;
+  meetingSchedulingEnabled?: boolean;
 };
 
 export type OutlookMessagesParams = {
@@ -52,6 +56,7 @@ export type OutlookInsights = {
   suggestedActions: string[];
   riskSignals: string[];
   calendarSignals?: string[];
+  identitySignals?: string[];
   generatedAt: string;
 };
 
@@ -76,5 +81,75 @@ export type OutlookDraftResponse = {
 
 export type OutlookDeleteResponse = {
   messageId: string;
+  message: string;
+};
+
+export type OutlookDateTimeTimeZone = {
+  dateTime: string;
+  timeZone: string;
+};
+
+export type OutlookMeetingAttendee = {
+  name: string;
+  address: string;
+};
+
+export type OutlookMeetingSlot = {
+  id: string;
+  confidence?: number;
+  organizerAvailability?: string;
+  suggestionReason?: string;
+  attendeeAvailability?: unknown[];
+  start: OutlookDateTimeTimeZone;
+  end: OutlookDateTimeTimeZone;
+};
+
+export type OutlookMeetingSlotsRequest = {
+  durationMinutes?: number;
+  days?: number;
+  maxCandidates?: number;
+  subject?: string;
+  attendees?: OutlookMeetingAttendee[];
+};
+
+export type OutlookMeetingSlotsResponse = {
+  messageId: string;
+  subject: string;
+  attendees: OutlookMeetingAttendee[];
+  durationMinutes: number;
+  emptySuggestionsReason?: string;
+  suggestions: OutlookMeetingSlot[];
+};
+
+export type OutlookCreateMeetingRequest = {
+  slot: {
+    start: OutlookDateTimeTimeZone;
+    end: OutlookDateTimeTimeZone;
+  };
+  subject?: string;
+  attendees?: OutlookMeetingAttendee[];
+  instructions?: string;
+  createReplyDraft?: boolean;
+};
+
+export type OutlookCreateMeetingResponse = {
+  sourceMessageId: string;
+  event: {
+    id?: string;
+    subject: string;
+    start?: OutlookDateTimeTimeZone;
+    end?: OutlookDateTimeTimeZone;
+    webLink?: string;
+    onlineMeeting?: {
+      joinUrl?: string;
+      conferenceId?: string;
+    };
+  };
+  attendees: OutlookMeetingAttendee[];
+  draft?: {
+    id?: string;
+    subject?: string;
+    webLink?: string;
+  };
   message: string;
 };

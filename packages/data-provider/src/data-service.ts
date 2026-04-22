@@ -67,6 +67,20 @@ export function deleteOutlookMessage(messageId: string): Promise<o.OutlookDelete
   return request.delete(endpoints.outlookDeleteMessage(messageId));
 }
 
+export function proposeOutlookMeetingSlots(
+  messageId: string,
+  payload: o.OutlookMeetingSlotsRequest,
+): Promise<o.OutlookMeetingSlotsResponse> {
+  return request.post(endpoints.outlookMeetingSlots(messageId), payload);
+}
+
+export function createOutlookMeeting(
+  messageId: string,
+  payload: o.OutlookCreateMeetingRequest,
+): Promise<o.OutlookCreateMeetingResponse> {
+  return request.post(endpoints.outlookCreateMeeting(messageId), payload);
+}
+
 export const listSharedLinks = async (
   params: q.SharedLinksListParams,
 ): Promise<q.SharedLinksResponse> => {

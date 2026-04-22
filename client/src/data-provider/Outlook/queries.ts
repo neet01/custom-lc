@@ -8,10 +8,14 @@ import type {
 } from '@tanstack/react-query';
 import type {
   OutlookAnalyzeResponse,
+  OutlookCreateMeetingRequest,
+  OutlookCreateMeetingResponse,
   OutlookDeleteResponse,
   OutlookDraftRequest,
   OutlookDraftResponse,
   OutlookMessage,
+  OutlookMeetingSlotsRequest,
+  OutlookMeetingSlotsResponse,
   OutlookMessagesParams,
   OutlookMessagesResponse,
   OutlookStatusResponse,
@@ -81,7 +85,9 @@ export const useCreateOutlookDraftMutation = (): UseMutationResult<
   unknown,
   { messageId: string; payload: OutlookDraftRequest }
 > => {
-  return useMutation(({ messageId, payload }) => dataService.createOutlookDraft(messageId, payload));
+  return useMutation(({ messageId, payload }) =>
+    dataService.createOutlookDraft(messageId, payload),
+  );
 };
 
 export const useDeleteOutlookMessageMutation = (): UseMutationResult<
@@ -90,4 +96,24 @@ export const useDeleteOutlookMessageMutation = (): UseMutationResult<
   string
 > => {
   return useMutation((messageId: string) => dataService.deleteOutlookMessage(messageId));
+};
+
+export const useProposeOutlookMeetingSlotsMutation = (): UseMutationResult<
+  OutlookMeetingSlotsResponse,
+  unknown,
+  { messageId: string; payload: OutlookMeetingSlotsRequest }
+> => {
+  return useMutation(({ messageId, payload }) =>
+    dataService.proposeOutlookMeetingSlots(messageId, payload),
+  );
+};
+
+export const useCreateOutlookMeetingMutation = (): UseMutationResult<
+  OutlookCreateMeetingResponse,
+  unknown,
+  { messageId: string; payload: OutlookCreateMeetingRequest }
+> => {
+  return useMutation(({ messageId, payload }) =>
+    dataService.createOutlookMeeting(messageId, payload),
+  );
 };

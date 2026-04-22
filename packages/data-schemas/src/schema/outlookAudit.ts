@@ -5,7 +5,9 @@ export type OutlookAuditAction =
   | 'message_viewed'
   | 'message_deleted'
   | 'message_analyzed'
-  | 'draft_created';
+  | 'draft_created'
+  | 'meeting_slots_proposed'
+  | 'meeting_created';
 
 export type OutlookAuditStatus = 'success' | 'failure';
 
@@ -40,6 +42,8 @@ const outlookAuditSchema = new Schema<IOutlookAudit>(
         'message_deleted',
         'message_analyzed',
         'draft_created',
+        'meeting_slots_proposed',
+        'meeting_created',
       ],
       required: true,
       index: true,

@@ -90,6 +90,50 @@ function compactCalendarEvents(calendarEvents = []) {
   }));
 }
 
+function compactOutlookContext(outlookContext = {}) {
+  const compactParticipant = (participant) => ({
+    name: participant.name,
+    address: participant.address,
+    roles: participant.roles,
+    relationshipToSignedInUser: participant.relationshipToSignedInUser,
+    profile: participant.profile
+      ? {
+          displayName: participant.profile.displayName,
+          email: participant.profile.email,
+          jobTitle: participant.profile.jobTitle,
+          department: participant.profile.department,
+          officeLocation: participant.profile.officeLocation,
+        }
+      : undefined,
+  });
+
+  return {
+    signedInUser: outlookContext.signedInUser
+      ? {
+          displayName: outlookContext.signedInUser.displayName,
+          email: outlookContext.signedInUser.email,
+          userPrincipalName: outlookContext.signedInUser.userPrincipalName,
+          jobTitle: outlookContext.signedInUser.jobTitle,
+          department: outlookContext.signedInUser.department,
+          officeLocation: outlookContext.signedInUser.officeLocation,
+        }
+      : undefined,
+    manager: outlookContext.manager
+      ? {
+          displayName: outlookContext.manager.displayName,
+          email: outlookContext.manager.email,
+          jobTitle: outlookContext.manager.jobTitle,
+          department: outlookContext.manager.department,
+        }
+      : undefined,
+    mailboxSettings: outlookContext.mailboxSettings,
+    participants: Array.isArray(outlookContext.participants)
+      ? outlookContext.participants.slice(0, 20).map(compactParticipant)
+      : [],
+    rules: outlookContext.rules || [],
+  };
+}
+
 function extractText(response) {
   const content = response?.output?.message?.content;
   if (!Array.isArray(content)) {
@@ -149,7 +193,7 @@ async function callBedrock({ system, prompt }) {
   return extractText(response);
 }
 
-async function generateAnalysis({ message, calendarEvents = [] }) {
+async function generateAnalysis({ message, calendarEvents = [], outlookContext = {} }) {
   if (!isModelBackedAIEnabled()) {
     return null;
   }
@@ -168,8 +212,12 @@ async function generateAnalysis({ message, calendarEvents = [] }) {
       suggestedActions: ['3-6 concrete action items'],
       riskSignals: ['0-5 urgency, compliance, dependency, or scheduling signals'],
       calendarSignals: ['0-4 signals from calendar context, if provided'],
+      identitySignals: [
+        '0-4 signals about who should respond, whether signedInUser is directly addressed, and hierarchy if known',
+      ],
     },
     emailConversation: compactEmail(message),
+    outlookContext: compactOutlookContext(outlookContext),
     calendarEvents: compactCalendarEvents(calendarEvents),
   });
 
@@ -184,6 +232,7 @@ async function generateAnalysis({ message, calendarEvents = [] }) {
     ]),
     riskSignals: normalizeStringArray(parsed.riskSignals, ['No obvious risk signals detected.']),
     calendarSignals: normalizeStringArray(parsed.calendarSignals, []),
+    identitySignals: normalizeStringArray(parsed.identitySignals, []),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -193,6 +242,7 @@ async function generateReplyDraft({
   instructions = '',
   tone = 'professional',
   calendarEvents = [],
+  outlookContext = {},
 }) {
   if (!isModelBackedAIEnabled()) {
     return null;
@@ -201,6 +251,11 @@ async function generateReplyDraft({
   const config = getAIConfig();
   const system = [
     'You are drafting an Outlook reply for the signed-in user.',
+    'The signedInUser in outlookContext is the only person you are allowed to write as.',
+    'Never sign as the sender, another recipient, a manager, an executive, or any person other than signedInUser.',
+    'If signedInUser is one of multiple recipients, draft only the response signedInUser should send. Do not imply another recipient approved anything.',
+    'If the correct author is ambiguous, draft a short clarification instead of pretending to be someone else.',
+    'Use signedInUser.displayName for the sign-off only when a sign-off is appropriate.',
     'Write only the reply body, with no markdown fences and no analysis preamble.',
     `Default writing style: ${config.draftStyle}`,
     'Be clear about ownership, asks, next steps, dates, and blockers.',
@@ -219,7 +274,14 @@ async function generateReplyDraft({
     userInstructions:
       instructions ||
       'Draft a direct, useful response that answers the thread, states the next step, and avoids unnecessary pleasantries.',
+    identityRules: [
+      'Author is signedInUser only.',
+      'Sign-off must match signedInUser, not any other participant.',
+      'Use participant job titles and relationship context when available, but do not invent missing hierarchy.',
+      'If signedInUser should not be the responder, say so briefly and explain what needs clarification.',
+    ],
     emailConversation: compactEmail(message),
+    outlookContext: compactOutlookContext(outlookContext),
     calendarEvents: compactCalendarEvents(calendarEvents),
   });
 
@@ -243,4 +305,5 @@ module.exports = {
   logModelFailure,
   parseJsonObject,
   DEFAULT_DRAFT_STYLE,
+  compactOutlookContext,
 };

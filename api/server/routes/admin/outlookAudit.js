@@ -10,7 +10,15 @@ const requireAdminAccess = requireCapability(SystemCapabilities.ACCESS_ADMIN);
 const requireReadUsage = requireCapability(SystemCapabilities.READ_USAGE);
 
 const USER_FIELDS = '_id name username email avatar role provider';
-const ACTIONS = new Set(['mailbox_listed', 'message_viewed', 'message_analyzed', 'draft_created']);
+const ACTIONS = new Set([
+  'mailbox_listed',
+  'message_viewed',
+  'message_deleted',
+  'message_analyzed',
+  'draft_created',
+  'meeting_slots_proposed',
+  'meeting_created',
+]);
 const STATUSES = new Set(['success', 'failure']);
 
 function parsePagination(query) {

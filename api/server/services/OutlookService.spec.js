@@ -173,7 +173,8 @@ describe('OutlookService', () => {
           receivedDateTime: '2026-04-21T13:00:00Z',
           body: {
             contentType: 'html',
-            content: '<div><strong>Latest</strong> thread note.<img src="https://vendor.test/logo.png"></div>',
+            content:
+              '<div><strong>Latest</strong> thread note.<img src="https://vendor.test/logo.png"></div>',
           },
           bodyPreview: 'Latest thread note.',
         }),
@@ -435,20 +436,6 @@ describe('OutlookService', () => {
             joinUrl: 'https://teams.example/join',
           },
         }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        json: async () => ({
-          id: 'draft-message',
-          subject: 'RE: Schedule budget review',
-          webLink: 'https://outlook.example/draft-message',
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({}),
       });
 
     const result = await OutlookService.createTeamsMeeting(user, 'source-message', {
@@ -457,7 +444,12 @@ describe('OutlookService', () => {
     });
 
     expect(result.event.onlineMeeting.joinUrl).toBe('https://teams.example/join');
-    expect(result.draft.id).toBe('draft-message');
+    expect(result.draft).toBeUndefined();
+    expect(result.meetingDraft).toMatchObject({
+      id: 'event-1',
+      subject: 'Meeting: Schedule budget review',
+      webLink: 'https://outlook.example/event-1',
+    });
     expect(global.fetch).toHaveBeenNthCalledWith(
       4,
       expect.objectContaining({
@@ -471,7 +463,16 @@ describe('OutlookService', () => {
     const eventPayload = JSON.parse(global.fetch.mock.calls[3][1].body);
     expect(eventPayload.onlineMeetingProvider).toBe('teamsForBusiness');
     expect(eventPayload.isOnlineMeeting).toBe(true);
-    expect(eventPayload.attendees).toBeUndefined();
+    expect(eventPayload.attendees).toEqual([
+      {
+        type: 'required',
+        emailAddress: {
+          name: 'Finance',
+          address: 'finance@example.mil',
+        },
+      },
+    ]);
+    expect(global.fetch).toHaveBeenCalledTimes(4);
   });
 
   it('creates a reply draft without sending mail', async () => {

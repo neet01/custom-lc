@@ -810,15 +810,9 @@ function formatGraphDate(date) {
 }
 
 function getUtcDayName(date) {
-  return [
-    'sunday',
-    'monday',
-    'tuesday',
-    'wednesday',
-    'thursday',
-    'friday',
-    'saturday',
-  ][date.getUTCDay()];
+  return ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][
+    date.getUTCDay()
+  ];
 }
 
 function getWorkingHoursConfig(mailboxSettings) {
@@ -954,8 +948,12 @@ function isMeetingSlotInsideWorkingHours(slot, workingHours) {
 
   const startMinutes = getTimeMinutes(start);
   const endMinutes = getTimeMinutes(end);
-  const workStartMinutes = getTimeMinutes(parseGraphDateTimeParts(`2000-01-01T${workingHours.startTime}`));
-  const workEndMinutes = getTimeMinutes(parseGraphDateTimeParts(`2000-01-01T${workingHours.endTime}`));
+  const workStartMinutes = getTimeMinutes(
+    parseGraphDateTimeParts(`2000-01-01T${workingHours.startTime}`),
+  );
+  const workEndMinutes = getTimeMinutes(
+    parseGraphDateTimeParts(`2000-01-01T${workingHours.endTime}`),
+  );
   const dayName = getDayNameFromDateParts(start);
 
   return (
@@ -1157,17 +1155,14 @@ async function createTeamsMeeting(user, messageId, options = {}) {
     allowNewTimeProposals: true,
     isOnlineMeeting: true,
     onlineMeetingProvider: 'teamsForBusiness',
-  };
-
-  if (options.sendInvites === true) {
-    eventPayload.attendees = attendees.map((attendee) => ({
+    attendees: attendees.map((attendee) => ({
       type: 'required',
       emailAddress: {
         name: attendee.name,
         address: attendee.address,
       },
-    }));
-  }
+    })),
+  };
 
   const event = normalizeOnlineMeetingEvent(
     await graphRequest(user, '/me/events', {
@@ -1176,8 +1171,9 @@ async function createTeamsMeeting(user, messageId, options = {}) {
     }),
   );
 
+  const shouldCreateReplyDraft = options.createReplyDraft === true;
   let draft;
-  if (options.createReplyDraft !== false) {
+  if (shouldCreateReplyDraft) {
     const comment = buildMeetingDraftComment({
       event,
       subject,
@@ -1210,6 +1206,11 @@ async function createTeamsMeeting(user, messageId, options = {}) {
     sourceMessageId: messageId,
     event,
     attendees,
+    meetingDraft: {
+      id: event.id,
+      subject: event.subject,
+      webLink: event.webLink,
+    },
     draft: draft
       ? {
           id: draft.id,
@@ -1219,8 +1220,10 @@ async function createTeamsMeeting(user, messageId, options = {}) {
       : undefined,
     message:
       options.sendInvites === true
-        ? 'Teams meeting invite sent. Review the reply draft before sending.'
-        : 'Teams meeting created on your calendar only. Review and send the reply draft when ready.',
+        ? 'Teams meeting invite sent to attendees.'
+        : shouldCreateReplyDraft
+          ? 'Teams meeting draft prepared. Review it in Outlook and optionally send your companion reply draft.'
+          : 'Teams meeting draft prepared. Review it in Outlook and send when ready.',
   };
 }
 

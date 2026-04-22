@@ -155,6 +155,11 @@ export type OutlookCreateMeetingResponse = {
     };
   };
   attendees: OutlookMeetingAttendee[];
+  meetingDraft?: {
+    id?: string;
+    subject?: string;
+    webLink?: string;
+  };
   draft?: {
     id?: string;
     subject?: string;

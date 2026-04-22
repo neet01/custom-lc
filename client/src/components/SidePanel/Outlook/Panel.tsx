@@ -204,8 +204,7 @@ function sanitizeEmailHtml(html: string, loadRemoteImages: boolean) {
     if ((isRemoteImage && !loadRemoteImages) || isInlineImage) {
       blockedImageCount += 1;
       const placeholder = document.createElement('span');
-      placeholder.className =
-        'cortex-email-image-placeholder';
+      placeholder.className = 'cortex-email-image-placeholder';
       placeholder.textContent = isInlineImage ? 'Inline image unavailable' : 'Remote image blocked';
       image.replaceWith(placeholder);
       return;
@@ -352,8 +351,8 @@ function MeetingSchedulerCard({
         <>
           <div className="mt-2 text-xs text-text-secondary">
             Proposed {slots.suggestions.length} slot(s) for {slots.attendees.length} attendee(s).
-            Pick one to create a Teams meeting on your calendar and prepare a reply draft. Invites
-            are not sent automatically.
+            Pick one to prepare a Teams meeting draft with attendees on your calendar. Invites are
+            not sent automatically.
           </div>
           {slots.suggestions.length === 0 && (
             <p className="mt-2 text-xs text-red-500">
@@ -383,7 +382,7 @@ function MeetingSchedulerCard({
                   onClick={() => onCreate(slot)}
                   disabled={isCreating}
                 >
-                  {isCreating ? 'Preparing...' : 'Prepare Teams draft'}
+                  {isCreating ? 'Preparing...' : 'Prepare meeting draft'}
                 </button>
               </div>
             ))}
@@ -404,14 +403,14 @@ function MeetingSchedulerCard({
               Open Teams meeting
             </a>
           )}
-          {result.draft?.webLink && (
+          {(result.meetingDraft?.webLink || result.event?.webLink) && (
             <a
               className="ml-3 mt-2 inline-block text-xs font-medium text-green-700 hover:underline dark:text-green-300"
-              href={result.draft.webLink}
+              href={result.meetingDraft?.webLink || result.event?.webLink}
               target="_blank"
               rel="noreferrer"
             >
-              Open reply draft
+              Open meeting draft
             </a>
           )}
         </div>
@@ -424,9 +423,8 @@ export default function OutlookPanel() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [inboxView, setInboxView] = useState<InboxView>('focused');
-  const [analysisByMessage, setAnalysisByMessage] = useState<
-    Record<string, OutlookAnalyzeResponse>
-  >(loadCachedAnalysis);
+  const [analysisByMessage, setAnalysisByMessage] =
+    useState<Record<string, OutlookAnalyzeResponse>>(loadCachedAnalysis);
   const [draftResultByMessage, setDraftResultByMessage] = useState<
     Record<string, OutlookDraftResponse>
   >({});
@@ -436,6 +434,7 @@ export default function OutlookPanel() {
   const [meetingResultByMessage, setMeetingResultByMessage] = useState<
     Record<string, OutlookCreateMeetingResponse>
   >({});
+  const [selectedDeleteIds, setSelectedDeleteIds] = useState<string[]>([]);
   const [draftInstructions, setDraftInstructions] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
 
@@ -453,6 +452,14 @@ export default function OutlookPanel() {
 
   const messages = useMemo(() => messageList?.messages ?? [], [messageList?.messages]);
   const conversations = useMemo(() => groupMessagesByConversation(messages), [messages]);
+  const visibleConversationIds = useMemo(
+    () => conversations.map((conversation) => conversation.latest.id),
+    [conversations],
+  );
+  const selectedDeleteIdSet = useMemo(() => new Set(selectedDeleteIds), [selectedDeleteIds]);
+  const allVisibleSelected =
+    visibleConversationIds.length > 0 &&
+    visibleConversationIds.every((messageId) => selectedDeleteIdSet.has(messageId));
   const analysis = selectedId ? analysisByMessage[selectedId] : null;
   const draftResult = selectedId ? draftResultByMessage[selectedId] : null;
   const meetingSlots = selectedId ? meetingSlotsByMessage[selectedId] : null;
@@ -483,7 +490,12 @@ export default function OutlookPanel() {
 
   useEffect(() => {
     setStatusMessage('');
-  }, [selectedId, inboxView]);
+  }, [inboxView]);
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleConversationIds);
+    setSelectedDeleteIds((current) => current.filter((messageId) => visibleIds.has(messageId)));
+  }, [visibleConversationIds]);
 
   useEffect(() => {
     try {
@@ -539,7 +551,7 @@ export default function OutlookPanel() {
       return;
     }
     const confirmed = window.confirm(
-      'Create a Teams meeting on your calendar and prepare a reply draft? This will not send invites automatically.',
+      'Prepare an Outlook meeting draft from this slot? You can review it before sending invites.',
     );
     if (!confirmed) {
       return;
@@ -554,11 +566,26 @@ export default function OutlookPanel() {
         subject: meetingSlots.subject,
         attendees: meetingSlots.attendees,
         instructions: draftInstructions,
-        createReplyDraft: true,
+        createReplyDraft: false,
         sendInvites: false,
       },
     });
     setMeetingResultByMessage((current) => ({ ...current, [selectedId]: result }));
+  };
+
+  const deleteMessages = async (messageIds: string[]) => {
+    const deleted: string[] = [];
+    const failed: string[] = [];
+    for (const messageId of messageIds) {
+      try {
+        await deleteMutation.mutateAsync(messageId);
+        deleted.push(messageId);
+        queryClient.removeQueries([QueryKeys.outlookMessage, messageId]);
+      } catch {
+        failed.push(messageId);
+      }
+    }
+    return { deleted, failed };
   };
 
   const handleDelete = async () => {
@@ -570,14 +597,78 @@ export default function OutlookPanel() {
       return;
     }
 
-    const currentIndex = conversations.findIndex(
-      (conversation) => conversation.latest.id === selectedId,
+    const { deleted, failed } = await deleteMessages([selectedId]);
+    if (deleted.length > 0) {
+      setStatusMessage('Email moved to Deleted Items.');
+      setSelectedDeleteIds((current) =>
+        current.filter((messageId) => !deleted.includes(messageId)),
+      );
+      setSelectedId((current) => (current && deleted.includes(current) ? undefined : current));
+    } else {
+      setStatusMessage('Unable to delete this email.');
+    }
+    if (failed.length > 0 && deleted.length === 0) {
+      setStatusMessage('Unable to delete this email.');
+    }
+    await refetch();
+  };
+
+  const toggleDeleteSelection = (messageId: string, checked: boolean) => {
+    setSelectedDeleteIds((current) => {
+      if (checked) {
+        if (current.includes(messageId)) {
+          return current;
+        }
+        return [...current, messageId];
+      }
+      return current.filter((id) => id !== messageId);
+    });
+  };
+
+  const toggleSelectVisible = () => {
+    if (allVisibleSelected) {
+      const visibleSet = new Set(visibleConversationIds);
+      setSelectedDeleteIds((current) => current.filter((messageId) => !visibleSet.has(messageId)));
+      return;
+    }
+    setSelectedDeleteIds((current) => {
+      const next = new Set(current);
+      for (const messageId of visibleConversationIds) {
+        next.add(messageId);
+      }
+      return Array.from(next);
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedDeleteIds.length === 0) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Move ${selectedDeleteIds.length} selected email(s) to Deleted Items?`,
     );
-    const nextConversation = conversations[currentIndex + 1] ?? conversations[currentIndex - 1];
-    const result = await deleteMutation.mutateAsync(selectedId);
-    setStatusMessage(result.message);
-    setSelectedId(nextConversation?.latest.id);
-    queryClient.removeQueries([QueryKeys.outlookMessage, selectedId]);
+    if (!confirmed) {
+      return;
+    }
+
+    const { deleted, failed } = await deleteMessages(selectedDeleteIds);
+    if (deleted.length > 0) {
+      setSelectedDeleteIds((current) =>
+        current.filter((messageId) => !deleted.includes(messageId)),
+      );
+      setSelectedId((current) => (current && deleted.includes(current) ? undefined : current));
+    }
+
+    if (failed.length > 0 && deleted.length > 0) {
+      setStatusMessage(
+        `Moved ${deleted.length} email(s) to Deleted Items. ${failed.length} email(s) failed.`,
+      );
+    } else if (failed.length > 0) {
+      setStatusMessage(`Unable to delete ${failed.length} selected email(s).`);
+    } else {
+      setStatusMessage(`Moved ${deleted.length} email(s) to Deleted Items.`);
+    }
+
     await refetch();
   };
 
@@ -626,6 +717,29 @@ export default function OutlookPanel() {
         <div className="mt-3">
           <ViewTabs active={inboxView} onChange={setInboxView} />
         </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold hover:bg-surface-hover disabled:opacity-60"
+            onClick={toggleSelectVisible}
+            disabled={visibleConversationIds.length === 0}
+          >
+            {allVisibleSelected ? 'Clear visible selection' : 'Select visible'}
+          </button>
+          {selectedDeleteIds.length > 0 && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 px-2.5 py-1 text-[11px] font-semibold text-red-600 hover:bg-red-500/10 disabled:opacity-60 dark:text-red-300"
+              onClick={handleBulkDelete}
+              disabled={deleteMutation.isLoading}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {deleteMutation.isLoading
+                ? 'Deleting selected...'
+                : `Delete selected (${selectedDeleteIds.length})`}
+            </button>
+          )}
+        </div>
         <div className="mt-2 flex items-center gap-1.5 text-[11px] text-text-secondary">
           <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
           {status.calendarContextEnabled
@@ -649,43 +763,56 @@ export default function OutlookPanel() {
             const message = conversation.latest;
             const threadCount = message.threadMessageCount || conversation.messages.length;
             return (
-              <button
+              <div
                 key={conversation.id}
-                type="button"
                 className={cn(
-                  'block w-full border-b border-border-light px-3 py-2 text-left transition-colors hover:bg-surface-hover',
+                  'flex items-start gap-2 border-b border-border-light px-2 py-2',
                   selectedId === message.id && 'bg-surface-active-alt',
                 )}
-                onClick={() => setSelectedId(message.id)}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <div className="truncate text-sm font-semibold">{message.subject}</div>
-                      {threadCount > 1 && (
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
-                          <Mail className="h-3 w-3" aria-hidden="true" />
-                          {threadCount}
-                        </span>
-                      )}
-                    </div>
-                    <div className="truncate text-[11px] text-text-secondary">
-                      {formatSender(message)}
-                    </div>
-                  </div>
-                  <div className="whitespace-nowrap text-[11px] text-text-secondary">
-                    {formatDate(message.receivedDateTime)}
-                  </div>
+                <div className="pt-1">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${message.subject}`}
+                    className="h-4 w-4 rounded border-border-light"
+                    checked={selectedDeleteIdSet.has(message.id)}
+                    onChange={(event) => toggleDeleteSelection(message.id, event.target.checked)}
+                  />
                 </div>
-                <p className="mt-0.5 line-clamp-1 text-xs leading-4 text-text-secondary">
-                  {message.bodyPreview}
-                </p>
-                {message.inferenceClassification && (
-                  <span className="mt-1 inline-flex rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-text-secondary">
-                    {message.inferenceClassification}
-                  </span>
-                )}
-              </button>
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 rounded-lg px-1 py-1 text-left transition-colors hover:bg-surface-hover"
+                  onClick={() => setSelectedId(message.id)}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <div className="truncate text-sm font-semibold">{message.subject}</div>
+                        {threadCount > 1 && (
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
+                            <Mail className="h-3 w-3" aria-hidden="true" />
+                            {threadCount}
+                          </span>
+                        )}
+                      </div>
+                      <div className="truncate text-[11px] text-text-secondary">
+                        {formatSender(message)}
+                      </div>
+                    </div>
+                    <div className="whitespace-nowrap text-[11px] text-text-secondary">
+                      {formatDate(message.receivedDateTime)}
+                    </div>
+                  </div>
+                  <p className="mt-0.5 line-clamp-1 text-xs leading-4 text-text-secondary">
+                    {message.bodyPreview}
+                  </p>
+                  {message.inferenceClassification && (
+                    <span className="mt-1 inline-flex rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-text-secondary">
+                      {message.inferenceClassification}
+                    </span>
+                  )}
+                </button>
+              </div>
             );
           })}
         </div>

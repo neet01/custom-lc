@@ -209,7 +209,7 @@ router.post('/messages/:messageId/meetings', async (req, res) => {
       action: 'meeting_created',
       status: 'success',
       graphMessageId: result.sourceMessageId,
-      graphDraftId: result.draft?.id,
+      graphDraftId: result.meetingDraft?.id || result.draft?.id,
       metadata: {
         graphEventId: result.event?.id,
         attendeeCount: result.attendees.length,

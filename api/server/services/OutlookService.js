@@ -852,6 +852,150 @@ function resolveMeetingAttendees(message, outlookContext, requestedAttendees = [
   return Array.from(attendees.values()).slice(0, 20);
 }
 
+function getEmailDomain(address) {
+  const normalized = String(address || '')
+    .trim()
+    .toLowerCase();
+  if (!normalized.includes('@')) {
+    return '';
+  }
+  return normalized.split('@')[1] || '';
+}
+
+function buildParticipantLookup(message, outlookContext) {
+  const participants =
+    Array.isArray(outlookContext?.participants) && outlookContext.participants.length > 0
+      ? outlookContext.participants
+      : collectThreadParticipants(message);
+  const lookup = new Map();
+
+  for (const participant of participants) {
+    const address = String(participant?.address || '')
+      .trim()
+      .toLowerCase();
+    if (!address) {
+      continue;
+    }
+    lookup.set(address, participant);
+  }
+
+  return lookup;
+}
+
+function hasAvailabilitySignal(text) {
+  const source = String(text || '');
+  if (!source) {
+    return false;
+  }
+  const availabilityPattern =
+    /\b(available|availability|free|works for (me|us)|can do|can meet|i can meet|i(?:'| a)?m free|open to)\b/i;
+  const timePattern =
+    /\b(mon(day)?|tue(s(day)?)?|wed(nesday)?|thu(rs(day)?)?|fri(day)?|sat(urday)?|sun(day)?|\d{1,2}(:\d{2})?\s?(am|pm)|\d{1,2}\/\d{1,2}(\/\d{2,4})?|today|tomorrow|next\s+(week|mon(day)?|tue(s(day)?)?|wed(nesday)?|thu(rs(day)?)?|fri(day)?))\b/i;
+  return availabilityPattern.test(source) && timePattern.test(source);
+}
+
+function collectThreadAvailabilityBySender(message) {
+  const threadMessages =
+    Array.isArray(message.thread) && message.thread.length > 0 ? message.thread : [message];
+  const sendersWithAvailability = new Set();
+
+  for (const threadMessage of threadMessages) {
+    const sender = normalizeMeetingAttendee(threadMessage.from);
+    if (!sender) {
+      continue;
+    }
+    const senderKey = sender.address.toLowerCase();
+    const source = [
+      threadMessage.subject || '',
+      threadMessage.body || '',
+      threadMessage.bodyPreview || '',
+    ].join('\n');
+    if (hasAvailabilitySignal(source)) {
+      sendersWithAvailability.add(senderKey);
+    }
+  }
+
+  return sendersWithAvailability;
+}
+
+function classifySchedulingAttendees(attendees, message, outlookContext) {
+  const participantLookup = buildParticipantLookup(message, outlookContext);
+  const senderAvailability = collectThreadAvailabilityBySender(message);
+  const signedInDomain = getEmailDomain(
+    outlookContext?.signedInUser?.email || outlookContext?.signedInUser?.userPrincipalName,
+  );
+  const internalAttendees = [];
+  const externalAttendees = [];
+  const externalAttendeesWithThreadAvailability = [];
+  const externalAttendeesExcluded = [];
+
+  for (const attendee of attendees) {
+    const attendeeKey = String(attendee?.address || '')
+      .trim()
+      .toLowerCase();
+    const participant = participantLookup.get(attendeeKey);
+    const relationship = String(participant?.relationshipToSignedInUser || '').toLowerCase();
+    const attendeeDomain = getEmailDomain(attendeeKey);
+    const likelyInternalByDomain =
+      Boolean(signedInDomain) && Boolean(attendeeDomain) && attendeeDomain === signedInDomain;
+    const isInternal = relationship === 'internal_user' || likelyInternalByDomain;
+
+    if (isInternal) {
+      internalAttendees.push(attendee);
+      continue;
+    }
+
+    externalAttendees.push(attendee);
+    if (senderAvailability.has(attendeeKey)) {
+      externalAttendeesWithThreadAvailability.push(attendee);
+    } else {
+      externalAttendeesExcluded.push(attendee);
+    }
+  }
+
+  const availabilityNotes = [];
+  if (externalAttendeesExcluded.length > 0) {
+    const names = externalAttendeesExcluded.map((attendee) => attendee.name || attendee.address);
+    availabilityNotes.push(
+      `External attendee calendars were not considered: ${names.join(', ')}. Suggestions are based on internal attendee availability.`,
+    );
+  }
+  if (externalAttendeesWithThreadAvailability.length > 0) {
+    const names = externalAttendeesWithThreadAvailability.map(
+      (attendee) => attendee.name || attendee.address,
+    );
+    availabilityNotes.push(
+      `Thread-stated availability detected for external attendees: ${names.join(', ')}. Confirm these times before sending invites.`,
+    );
+  }
+
+  return {
+    internalAttendees,
+    externalAttendees,
+    externalAttendeesExcluded,
+    externalAttendeesWithThreadAvailability,
+    availabilityNotes,
+  };
+}
+
+function buildFallbackWorkingHourSuggestions(timeSlots, maxCandidates = 5) {
+  return (timeSlots || []).slice(0, Math.max(maxCandidates, 1)).map((slot, index) => ({
+    id: `slot-fallback-${index + 1}`,
+    confidence: 35,
+    confidenceReason:
+      'Derived from organizer working hours only because attendee calendars could not be queried.',
+    suggestionReason: 'Working-hour fallback suggestion.',
+    start: {
+      dateTime: slot.start.dateTime,
+      timeZone: slot.start.timeZone || 'UTC',
+    },
+    end: {
+      dateTime: slot.end.dateTime,
+      timeZone: slot.end.timeZone || slot.start.timeZone || 'UTC',
+    },
+  }));
+}
+
 function stripReplyPrefix(subject) {
   return String(subject || 'Meeting')
     .replace(/^(\s*(re|fw|fwd)\s*:\s*)+/i, '')
@@ -1201,44 +1345,61 @@ async function proposeMeetingSlots(user, messageId, options = {}) {
   const workingHours = getWorkingHoursConfig(mailboxSettings);
   const timeSlots = buildWorkingHourTimeSlots(options.days, mailboxSettings);
   const maxCandidates = normalizePositiveInteger(options.maxCandidates, 5, { min: 1, max: 10 });
+  const attendeeClassification = classifySchedulingAttendees(attendees, message, outlookContext);
+  const queryAttendees = attendeeClassification.internalAttendees;
+  let payload = null;
 
-  const payload = await graphRequest(user, '/me/findMeetingTimes', {
-    method: 'POST',
-    headers: {
-      Prefer: `outlook.timezone="${workingHours.timeZone}"`,
-    },
-    body: {
-      attendees: attendees.map((attendee) => ({
-        type: 'required',
-        emailAddress: {
-          name: attendee.name,
-          address: attendee.address,
-        },
-      })),
-      timeConstraint: {
-        activityDomain: 'work',
-        timeslots: timeSlots,
+  if (queryAttendees.length > 0) {
+    payload = await graphRequest(user, '/me/findMeetingTimes', {
+      method: 'POST',
+      headers: {
+        Prefer: `outlook.timezone="${workingHours.timeZone}"`,
       },
-      meetingDuration: duration.isoDuration,
-      maxCandidates: Math.max(maxCandidates, 10),
-      returnSuggestionReasons: true,
-    },
-  });
+      body: {
+        attendees: queryAttendees.map((attendee) => ({
+          type: 'required',
+          emailAddress: {
+            name: attendee.name,
+            address: attendee.address,
+          },
+        })),
+        timeConstraint: {
+          activityDomain: 'work',
+          timeslots: timeSlots,
+        },
+        meetingDuration: duration.isoDuration,
+        maxCandidates: Math.max(maxCandidates, 10),
+        returnSuggestionReasons: true,
+      },
+    });
+  }
 
-  const suggestions = Array.isArray(payload?.meetingTimeSuggestions)
-    ? payload.meetingTimeSuggestions
-        .map(normalizeMeetingSuggestion)
-        .filter((suggestion) => isMeetingSlotInsideWorkingHours(suggestion, workingHours))
-        .slice(0, maxCandidates)
-    : [];
+  const suggestions =
+    queryAttendees.length > 0
+      ? Array.isArray(payload?.meetingTimeSuggestions)
+        ? payload.meetingTimeSuggestions
+            .map(normalizeMeetingSuggestion)
+            .filter((suggestion) => isMeetingSlotInsideWorkingHours(suggestion, workingHours))
+            .slice(0, maxCandidates)
+        : []
+      : buildFallbackWorkingHourSuggestions(timeSlots, maxCandidates);
+  const emptySuggestionsReason =
+    queryAttendees.length > 0
+      ? payload?.emptySuggestionsReason
+      : 'No internal attendee calendars were available for scheduling.';
 
   return {
     messageId,
     subject: buildMeetingSubject(message, options.subject),
     attendees,
+    schedulingAttendees: queryAttendees,
+    externalAttendeesExcluded: attendeeClassification.externalAttendeesExcluded,
+    externalAttendeesWithThreadAvailability:
+      attendeeClassification.externalAttendeesWithThreadAvailability,
+    availabilityNotes: attendeeClassification.availabilityNotes,
     durationMinutes: duration.minutes,
     workingHours,
-    emptySuggestionsReason: payload?.emptySuggestionsReason,
+    emptySuggestionsReason,
     suggestions,
   };
 }

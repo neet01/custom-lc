@@ -130,6 +130,10 @@ export type OutlookMeetingSlotsResponse = {
   messageId: string;
   subject: string;
   attendees: OutlookMeetingAttendee[];
+  schedulingAttendees?: OutlookMeetingAttendee[];
+  externalAttendeesExcluded?: OutlookMeetingAttendee[];
+  externalAttendeesWithThreadAvailability?: OutlookMeetingAttendee[];
+  availabilityNotes?: string[];
   durationMinutes: number;
   workingHours?: {
     daysOfWeek: string[];

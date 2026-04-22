@@ -532,6 +532,119 @@ describe('OutlookService', () => {
     expect(global.fetch).toHaveBeenCalledTimes(5);
   });
 
+  it('schedules against internal attendees and annotates external availability behavior', async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'source-message',
+          conversationId: 'thread-1',
+          subject: 'License review sync',
+          from: { emailAddress: { name: 'Vendor Rep', address: 'rep@vendor.com' } },
+          toRecipients: [{ emailAddress: { name: 'Test User', address: 'test.user@example.mil' } }],
+          ccRecipients: [
+            { emailAddress: { name: 'Finance Lead', address: 'finance@example.mil' } },
+          ],
+          body: { content: 'I am available Tuesday at 2pm ET.' },
+          bodyPreview: 'I am available Tuesday at 2pm ET.',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'source-message',
+              conversationId: 'thread-1',
+              subject: 'License review sync',
+              from: { emailAddress: { name: 'Vendor Rep', address: 'rep@vendor.com' } },
+              toRecipients: [
+                { emailAddress: { name: 'Test User', address: 'test.user@example.mil' } },
+              ],
+              ccRecipients: [
+                { emailAddress: { name: 'Finance Lead', address: 'finance@example.mil' } },
+              ],
+              body: { content: 'I am available Tuesday at 2pm ET.' },
+              bodyPreview: 'I am available Tuesday at 2pm ET.',
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          timeZone: 'Pacific Standard Time',
+          workingHours: {
+            daysOfWeek: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+            startTime: '08:30:00.0000000',
+            endTime: '16:30:00.0000000',
+            timeZone: { name: 'Pacific Standard Time' },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          meetingTimeSuggestions: [
+            {
+              confidence: 92,
+              meetingTimeSlot: {
+                start: { dateTime: '2026-04-23T17:00:00.0000000', timeZone: 'UTC' },
+                end: { dateTime: '2026-04-23T17:30:00.0000000', timeZone: 'UTC' },
+              },
+              suggestionReason: 'Suggested because internal attendees are free.',
+            },
+          ],
+        }),
+      });
+
+    const result = await OutlookService.proposeMeetingSlots(user, 'source-message', {
+      durationMinutes: 30,
+    });
+
+    expect(result.attendees).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ address: 'finance@example.mil' }),
+        expect.objectContaining({ address: 'rep@vendor.com' }),
+      ]),
+    );
+    expect(result.schedulingAttendees).toEqual([
+      expect.objectContaining({ address: 'finance@example.mil' }),
+    ]);
+    expect(result.externalAttendeesExcluded).toEqual([]);
+    expect(result.externalAttendeesWithThreadAvailability).toEqual([
+      expect.objectContaining({ address: 'rep@vendor.com' }),
+    ]);
+    expect(result.availabilityNotes).toEqual([
+      expect.stringContaining('Thread-stated availability detected for external attendees'),
+    ]);
+
+    const requestBody = JSON.parse(global.fetch.mock.calls[5][1].body);
+    const requestAddresses = requestBody.attendees.map((attendee) => attendee.emailAddress.address);
+    expect(requestAddresses).toEqual(['finance@example.mil']);
+  });
+
   it('reduces meeting confidence when the suggested time has tentative conflicts', async () => {
     global.fetch
       .mockResolvedValueOnce({

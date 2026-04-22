@@ -548,10 +548,29 @@ function MeetingSchedulerCard({
       {slots && (
         <>
           <div className="mt-2 text-xs text-text-secondary">
-            Proposed {slots.suggestions.length} slot(s) for {slots.attendees.length} attendee(s).
-            Pick one to schedule a Teams meeting from this thread. You will confirm before Outlook
+            Proposed {slots.suggestions.length} slot(s) for{' '}
+            {(slots.schedulingAttendees || slots.attendees).length} internal attendee(s)
+            {Array.isArray(slots.externalAttendeesExcluded) &&
+            slots.externalAttendeesExcluded.length > 0
+              ? ` (${slots.externalAttendeesExcluded.length} external attendee calendar${
+                  slots.externalAttendeesExcluded.length === 1 ? '' : 's'
+                } excluded)`
+              : ''}
+            . Pick one to schedule a Teams meeting from this thread. You will confirm before Outlook
             sends invites.
           </div>
+          {Array.isArray(slots.availabilityNotes) && slots.availabilityNotes.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {slots.availabilityNotes.map((note, index) => (
+                <p
+                  key={`${slots.messageId}-availability-note-${index}`}
+                  className="text-xs text-amber-700 dark:text-amber-300"
+                >
+                  {note}
+                </p>
+              ))}
+            </div>
+          )}
           {slots.suggestions.length === 0 && (
             <p className="mt-2 text-xs text-red-500">
               No meeting slots were found

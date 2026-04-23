@@ -429,23 +429,140 @@ function sanitizeEmailHtml(html: string, loadRemoteImages: boolean) {
   };
 }
 
+function normalizeReadableEmailText(value?: string) {
+  return String(value || '')
+    .replace(/\r/g, '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function isQuotedHeaderLine(line: string) {
+  return /^(from|sent|to|cc|subject|date):\s+/i.test(line.trim());
+}
+
+function isQuoteBoundary(line: string) {
+  const trimmed = line.trim();
+  return (
+    /^-{2,}\s*original message\s*-{2,}$/i.test(trimmed) ||
+    /^_{5,}$/.test(trimmed) ||
+    /^on .+ wrote:$/i.test(trimmed) ||
+    /^from:\s.+/i.test(trimmed) ||
+    /^>/.test(trimmed)
+  );
+}
+
+function stripQuotedHistory(value?: string) {
+  const normalized = normalizeReadableEmailText(value);
+  if (!normalized) {
+    return '';
+  }
+
+  const lines = normalized.split('\n');
+  const kept: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const nextLines = lines.slice(index, index + 5);
+    const quotedHeaderCount = nextLines.filter(isQuotedHeaderLine).length;
+
+    if (isQuoteBoundary(line) || quotedHeaderCount >= 2) {
+      break;
+    }
+
+    kept.push(line);
+  }
+
+  return normalizeReadableEmailText(
+    kept
+      .join('\n')
+      .replace(/\n\s*Get Outlook for .+$/i, '')
+      .replace(/\n\s*Sent from my .+$/i, ''),
+  );
+}
+
+function getReadableEmailBody(message: OutlookMessage) {
+  const source = message.body || message.bodyPreview || '';
+  const stripped = stripQuotedHistory(source);
+  const fallback = normalizeReadableEmailText(source);
+  const text = stripped || fallback || 'No body text available.';
+
+  return {
+    text,
+    wasCleaned: Boolean(stripped && fallback && stripped.length < fallback.length * 0.9),
+  };
+}
+
+function ReadableEmailBody({ text }: { text: string }) {
+  const blocks = text
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  return (
+    <div className="max-h-[46vh] space-y-3 overflow-y-auto rounded-xl border border-border-light bg-surface-primary p-4 text-sm leading-6 text-text-primary">
+      {blocks.map((block, index) => (
+        <p key={`${index}-${block.slice(0, 24)}`} className="whitespace-pre-wrap break-words">
+          {block}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function EmailBody({ message }: { message: OutlookMessage }) {
   const [loadRemoteImages, setLoadRemoteImages] = useState(false);
+  const [showSimplified, setShowSimplified] = useState(false);
   const sanitized = useMemo(
     () => sanitizeEmailHtml(message.bodyHtml || '', loadRemoteImages),
     [message.bodyHtml, loadRemoteImages],
   );
+  const readable = useMemo(
+    () => getReadableEmailBody(message),
+    [message.body, message.bodyPreview],
+  );
+  const hasOriginal = Boolean(message.bodyHtml || message.body);
 
-  if (!message.bodyHtml) {
+  if (!hasOriginal) {
     return (
       <pre className="max-h-[32vh] overflow-y-auto whitespace-pre-wrap break-words font-sans text-sm leading-6 text-text-primary">
-        {message.body || message.bodyPreview || 'No body text available.'}
+        {message.bodyPreview || 'No body text available.'}
       </pre>
+    );
+  }
+
+  if (showSimplified) {
+    return (
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+            Simplified view{readable.wasCleaned ? ' • quoted history hidden' : ''}
+          </div>
+          <button
+            type="button"
+            className="rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold transition-colors hover:bg-surface-hover"
+            onClick={() => setShowSimplified(false)}
+          >
+            Display HTML view
+          </button>
+        </div>
+        <ReadableEmailBody text={readable.text} />
+      </div>
     );
   }
 
   return (
     <div className="space-y-3">
+      <div className="flex justify-end">
+        <button
+          type="button"
+          className="rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold transition-colors hover:bg-surface-hover"
+          onClick={() => setShowSimplified(true)}
+        >
+          Display simplified view
+        </button>
+      </div>
       {sanitized.blockedImageCount > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
           <span>
@@ -464,7 +581,7 @@ function EmailBody({ message }: { message: OutlookMessage }) {
         </div>
       )}
       <div
-        className="max-h-[46vh] overflow-y-auto rounded-xl bg-white p-4 text-sm leading-6 text-gray-950 shadow-inner dark:bg-white dark:text-gray-950 [&_.cortex-email-image-placeholder]:my-2 [&_.cortex-email-image-placeholder]:inline-block [&_.cortex-email-image-placeholder]:rounded-lg [&_.cortex-email-image-placeholder]:border [&_.cortex-email-image-placeholder]:border-dashed [&_.cortex-email-image-placeholder]:border-gray-300 [&_.cortex-email-image-placeholder]:bg-gray-50 [&_.cortex-email-image-placeholder]:px-3 [&_.cortex-email-image-placeholder]:py-2 [&_.cortex-email-image-placeholder]:text-xs [&_.cortex-email-image-placeholder]:text-gray-500 [&_a]:text-blue-700 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-gray-300 [&_blockquote]:pl-3 [&_img]:h-auto [&_img]:max-w-full [&_table]:max-w-full [&_table]:border-collapse"
+        className="max-h-[46vh] overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 text-sm leading-6 text-gray-950 shadow-inner dark:border-gray-200 dark:bg-white dark:text-gray-950 [&_*]:max-w-full [&_.cortex-email-image-placeholder]:my-2 [&_.cortex-email-image-placeholder]:inline-block [&_.cortex-email-image-placeholder]:rounded-lg [&_.cortex-email-image-placeholder]:border [&_.cortex-email-image-placeholder]:border-dashed [&_.cortex-email-image-placeholder]:border-gray-300 [&_.cortex-email-image-placeholder]:bg-gray-50 [&_.cortex-email-image-placeholder]:px-3 [&_.cortex-email-image-placeholder]:py-2 [&_.cortex-email-image-placeholder]:text-xs [&_.cortex-email-image-placeholder]:text-gray-500 [&_a]:text-blue-700 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-gray-300 [&_blockquote]:pl-3 [&_img]:h-auto [&_img]:max-w-full [&_table]:max-w-full [&_table]:border-collapse"
         dangerouslySetInnerHTML={{ __html: sanitized.html }}
       />
     </div>
@@ -1266,7 +1383,7 @@ export default function OutlookPanel() {
                   <input
                     type="checkbox"
                     aria-label={`Select ${message.subject}`}
-                    className="h-4 w-4 rounded border-border-light"
+                    className="h-4 w-4 rounded border-border-light accent-[#f5d000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f5d000]/45"
                     checked={selectedDeleteIdSet.has(message.id)}
                     onChange={(event) => toggleDeleteSelection(message.id, event.target.checked)}
                   />
@@ -1297,7 +1414,7 @@ export default function OutlookPanel() {
                           </span>
                         )}
                       </div>
-                      <div className="truncate text-[11px] text-text-secondary">
+                      <div className="truncate text-[11px] font-semibold text-[#b88a00] dark:text-[#f5d000]">
                         {formatSender(message)}
                       </div>
                     </div>
@@ -1346,7 +1463,10 @@ export default function OutlookPanel() {
                         {selectedMessage.subject}
                       </h3>
                       <div className="mt-1 text-xs text-text-secondary">
-                        From {formatSender(selectedMessage)}
+                        From{' '}
+                        <span className="font-semibold text-[#b88a00] dark:text-[#f5d000]">
+                          {formatSender(selectedMessage)}
+                        </span>
                         {selectedMessage.receivedDateTime
                           ? ` • ${formatDate(selectedMessage.receivedDateTime)}`
                           : ''}
@@ -1396,7 +1516,7 @@ export default function OutlookPanel() {
                       >
                         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 border-b border-border-light pb-2">
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold">
+                            <div className="truncate text-sm font-semibold text-[#b88a00] dark:text-[#f5d000]">
                               {formatSender(threadMessage)}
                             </div>
                             <div className="text-[11px] text-text-secondary">
@@ -1482,7 +1602,7 @@ export default function OutlookPanel() {
                   {!assistantPanelOpen && (
                     <button
                       type="button"
-                      className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border-light bg-surface-primary px-4 py-2 text-xs font-semibold shadow-lg transition-colors hover:bg-surface-hover"
+                      className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-[#f5d000]/70 bg-[#f5d000] px-4 py-2 text-xs font-semibold text-black shadow-lg shadow-[#f5d000]/20 transition-colors hover:bg-[#ffe05c]"
                       onClick={() => {
                         setAssistantPanelScrolled(false);
                         setAssistantPanelOpen(true);
@@ -1508,7 +1628,7 @@ export default function OutlookPanel() {
                           )}
                         >
                           <div className="flex items-center justify-between">
-                            <div className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                            <div className="text-xs font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]">
                               AI assistant
                             </div>
                             <button

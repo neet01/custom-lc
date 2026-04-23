@@ -162,6 +162,46 @@ describe('OutlookService', () => {
     expect(requestedUrl.searchParams.get('$filter')).toBeNull();
   });
 
+  it('searches inbox messages through Microsoft Graph search', async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        value: [
+          {
+            id: 'older-match',
+            subject: 'Vendor renewal',
+            from: { emailAddress: { name: 'Vendor', address: 'rep@vendor.com' } },
+            receivedDateTime: '2026-04-19T12:00:00Z',
+            bodyPreview: 'Renewal terms attached.',
+            inferenceClassification: 'other',
+          },
+          {
+            id: 'newer-match',
+            subject: 'Vendor renewal follow-up',
+            from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+            receivedDateTime: '2026-04-21T12:00:00Z',
+            bodyPreview: 'Please review before Friday.',
+            inferenceClassification: 'focused',
+          },
+        ],
+      }),
+    });
+
+    const result = await OutlookService.listMessages(user, {
+      inboxView: 'focused',
+      limit: 10,
+      search: 'vendor renewal',
+    });
+
+    expect(result.search).toBe('vendor renewal');
+    expect(result.messages.map((message) => message.id)).toEqual(['newer-match', 'older-match']);
+    const requestedUrl = global.fetch.mock.calls[0][0];
+    expect(requestedUrl.searchParams.get('$search')).toBe('"vendor renewal"');
+    expect(requestedUrl.searchParams.get('$orderby')).toBeNull();
+    expect(requestedUrl.searchParams.get('$top')).toBe('10');
+  });
+
   it('loads selected messages with conversation thread context', async () => {
     global.fetch
       .mockResolvedValueOnce({

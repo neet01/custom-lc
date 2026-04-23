@@ -44,7 +44,7 @@ export default function StartupLayout({ isAuthenticated }: { isAuthenticated?: b
   }, [isAuthenticated, navigate, data]);
 
   useEffect(() => {
-    document.title = startupConfig?.appTitle || 'Cortex';
+    document.title = startupConfig?.appTitle || 'Hermeus Cortex';
   }, [startupConfig?.appTitle]);
 
   useEffect(() => {

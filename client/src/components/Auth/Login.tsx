@@ -115,7 +115,7 @@ function Login() {
           {localize('com_auth_no_account')}{' '}
           <a
             href={registerPage()}
-            className="inline-flex p-1 text-sm font-medium text-green-600 underline decoration-transparent transition-all duration-200 hover:text-green-700 hover:decoration-green-700 focus:text-green-700 focus:decoration-green-700 dark:text-green-500 dark:hover:text-green-400 dark:hover:decoration-green-400 dark:focus:text-green-400 dark:focus:decoration-green-400"
+            className="inline-flex p-1 text-sm font-medium text-[#8a7500] underline decoration-transparent transition-all duration-200 hover:text-[#5f5000] hover:decoration-[#5f5000] focus:text-[#5f5000] focus:decoration-[#5f5000] dark:text-[#f5d000] dark:hover:text-[#ffe66d] dark:hover:decoration-[#ffe66d] dark:focus:text-[#ffe66d] dark:focus:decoration-[#ffe66d]"
           >
             {localize('com_auth_sign_up')}
           </a>

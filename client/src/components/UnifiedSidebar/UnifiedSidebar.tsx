@@ -157,7 +157,7 @@ function UnifiedSidebar() {
         >
           <SidebarChatProvider>
             <ExpandedPanel links={links} onCollapse={handleCollapse} />
-            <nav className="min-h-0 flex-1 overflow-hidden bg-surface-primary-alt">
+            <nav className="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface-primary-alt">
               <SidePanelNav links={links} />
             </nav>
           </SidebarChatProvider>

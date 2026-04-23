@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react';
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  startTransition,
+} from 'react';
 import type { ComponentType, ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import DOMPurify from 'dompurify';
@@ -14,8 +22,10 @@ import {
   MessageSquareText,
   Minimize2,
   RefreshCw,
+  Search,
   Sparkles,
   Trash2,
+  X,
 } from 'lucide-react';
 import type {
   OutlookAnalyzeResponse,
@@ -702,6 +712,7 @@ export default function OutlookPanel() {
   const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
   const [assistantPanelScrolled, setAssistantPanelScrolled] = useState(false);
   const [draftInstructions, setDraftInstructions] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const successTimerRef = useRef<Record<string, number>>({});
   const deleteTimerRef = useRef<Record<string, number>>({});
@@ -709,13 +720,15 @@ export default function OutlookPanel() {
 
   const { data: status, isLoading: statusLoading } = useOutlookStatusQuery();
   const mailboxEnabled = Boolean(status?.enabled && status?.connected);
+  const deferredSearchTerm = useDeferredValue(searchTerm);
+  const normalizedSearchTerm = deferredSearchTerm.trim();
 
   const {
     data: messageList,
     isLoading: messagesLoading,
     refetch,
   } = useOutlookMessagesQuery(
-    { folder: 'inbox', inboxView, limit: 100 },
+    { folder: 'inbox', inboxView, limit: 100, search: normalizedSearchTerm || undefined },
     { enabled: mailboxEnabled },
   );
 
@@ -1113,6 +1126,30 @@ export default function OutlookPanel() {
           />
         </div>
         <div className="mt-2">
+          <div className="relative mb-2">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary"
+              aria-hidden="true"
+            />
+            <input
+              type="search"
+              className="h-10 w-full rounded-xl border border-border-light bg-surface-secondary py-2 pl-9 pr-10 text-sm outline-none transition-colors placeholder:text-text-secondary focus:border-blue-500 focus:bg-surface-primary"
+              placeholder="Search inbox by sender, subject, or message text"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              aria-label="Search Outlook inbox"
+            />
+            {searchTerm.trim().length > 0 && (
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                onClick={() => setSearchTerm('')}
+                aria-label="Clear inbox search"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
+          </div>
           <button
             type="button"
             className="inline-flex items-center gap-2 rounded-lg border border-border-light px-2.5 py-1.5 text-[11px] font-semibold transition-colors hover:bg-surface-hover"
@@ -1201,8 +1238,12 @@ export default function OutlookPanel() {
           {messagesLoading && <MessageListSkeleton density={densityMode} />}
           {!messagesLoading && visibleConversations.length === 0 && (
             <EmptyState
-              title="No messages found"
-              description={`Your ${inboxView === 'all' ? 'inbox' : inboxView} query returned no mail.`}
+              title={normalizedSearchTerm ? 'No matching emails found' : 'No messages found'}
+              description={
+                normalizedSearchTerm
+                  ? 'Try a different sender, subject, or phrase.'
+                  : `Your ${inboxView === 'all' ? 'inbox' : inboxView} query returned no mail.`
+              }
             />
           )}
           {visibleConversations.map((conversation) => {

@@ -6,6 +6,7 @@ import SocialLoginRender from './SocialLoginRender';
 import { BlinkAnimation } from './BlinkAnimation';
 import { Banner } from '../Banners';
 import Footer from './Footer';
+import { HermeusBrand } from '~/components/Brand';
 
 function AuthLayout({
   children,
@@ -39,7 +40,10 @@ function AuthLayout({
         <div className="mx-auto sm:max-w-sm">
           <ErrorMessage>
             {localize('com_auth_error_invalid_reset_token')}{' '}
-            <a className="font-semibold text-green-600 hover:underline" href="/forgot-password">
+            <a
+              className="font-semibold text-[#8a7500] hover:underline dark:text-[#f5d000]"
+              href="/forgot-password"
+            >
               {localize('com_auth_click_here')}
             </a>{' '}
             {localize('com_auth_to_try_again')}
@@ -57,14 +61,16 @@ function AuthLayout({
   };
 
   return (
-    <div className="relative flex min-h-screen flex-col bg-white dark:bg-gray-900">
+    <div className="relative flex min-h-screen flex-col bg-surface-secondary text-text-primary">
       <Banner />
       <BlinkAnimation active={isFetching}>
-        <div className="mt-6 h-10 w-full bg-cover">
-          <img
-            src="assets/logo.svg"
-            className="h-full w-full object-contain"
-            alt={localize('com_ui_logo', { 0: startupConfig?.appTitle ?? 'Cortex' })}
+        <div className="mt-6 flex h-12 w-full items-center justify-center">
+          <HermeusBrand
+            className="max-w-[260px] justify-center"
+            markClassName="h-8"
+            ariaLabel={localize('com_ui_logo', {
+              0: startupConfig?.appTitle ?? 'Hermeus Cortex',
+            })}
           />
         </div>
       </BlinkAnimation>
@@ -74,10 +80,10 @@ function AuthLayout({
       </div>
 
       <main className="flex flex-grow items-center justify-center">
-        <div className="w-authPageWidth overflow-hidden bg-white px-6 py-4 dark:bg-gray-900 sm:max-w-md sm:rounded-lg">
+        <div className="w-authPageWidth overflow-hidden border border-border-light bg-surface-primary px-6 py-5 shadow-lg sm:max-w-md sm:rounded-lg">
           {!hasStartupConfigError && !isFetching && header && (
             <h1
-              className="mb-4 text-center text-3xl font-semibold text-black dark:text-white"
+              className="mb-4 text-center text-3xl font-semibold text-text-primary"
               style={{ userSelect: 'none' }}
             >
               {header}

@@ -76,6 +76,9 @@ export default defineConfig(({ command }) => ({
       workbox: {
         globPatterns: [
           '**/*.{js,css,html}',
+          'assets/favicon.svg',
+          'assets/hermeus-*.png',
+          'assets/bedrock-favicon.svg',
           'assets/favicon*.png',
           'assets/icon-*.png',
           'assets/apple-touch-icon*.png',
@@ -88,11 +91,11 @@ export default defineConfig(({ command }) => ({
       },
       includeAssets: [],
       manifest: {
-        name: 'LibreChat',
-        short_name: 'LibreChat',
+        name: 'Hermeus Cortex',
+        short_name: 'Cortex',
         display: 'standalone',
-        background_color: '#000000',
-        theme_color: '#009688',
+        background_color: '#050505',
+        theme_color: '#f5d000',
         icons: [
           {
             src: 'assets/favicon-32x32.png',

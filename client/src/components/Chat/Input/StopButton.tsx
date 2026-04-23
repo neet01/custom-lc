@@ -19,7 +19,7 @@ export default memo(function StopButton({
         <button
           type="button"
           className={cn(
-            'rounded-full bg-text-primary p-1.5 text-text-primary outline-offset-4 transition-all duration-200 disabled:cursor-not-allowed disabled:text-text-secondary disabled:opacity-10',
+            'rounded-full bg-surface-submit p-1.5 text-black outline-offset-4 transition-all duration-200 hover:bg-surface-submit-hover disabled:cursor-not-allowed disabled:bg-text-primary disabled:text-surface-primary disabled:opacity-15',
           )}
           aria-label={localize('com_nav_stop_generating')}
           onClick={(e) => {

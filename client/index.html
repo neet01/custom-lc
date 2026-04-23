@@ -1,18 +1,22 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en-US">
   <head>
     <meta charset="utf-8" />
     <base href="/" />
-    <meta name="theme-color" content="#171717" />
+    <meta name="theme-color" content="#050505" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="description" content="Cortex - Internal enterprise AI platform" />
-    <title>Cortex</title>
+    <meta name="description" content="Hermeus Cortex - Internal high-speed AI platform" />
+    <title>Hermeus Cortex</title>
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16x16.png" />
     <link rel="apple-touch-icon" href="assets/apple-touch-icon-180x180.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, interactive-widget=resizes-content"
+    />
     <style>
       html,
       body {
@@ -27,14 +31,14 @@
       let backgroundColor;
 
       if (theme === 'dark') {
-        backgroundColor = '#0d0d0d';
+        backgroundColor = '#0a0a0a';
       } else if (theme === 'light') {
         backgroundColor = '#ffffff';
       } else if (theme === 'system') {
         const prefersDarkScheme = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        backgroundColor = prefersDarkScheme ? '#0d0d0d' : '#ffffff';
+        backgroundColor = prefersDarkScheme ? '#0a0a0a' : '#f4f4f2';
       } else {
-        backgroundColor = '#ffffff';
+        backgroundColor = '#f4f4f2';
       }
 
       loadingContainerStyle.innerHTML = `

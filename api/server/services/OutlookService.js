@@ -397,21 +397,46 @@ function filterMessagesByInboxView(messages, folder, inboxView) {
   );
 }
 
-async function listMessages(user, { folder = 'inbox', inboxView = 'focused', limit = 25 } = {}) {
+function normalizeMessageSearch(value) {
+  return String(value || '')
+    .replace(/["\\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+function buildMessageListQuery({ top, searchTerm }) {
+  const query = {
+    $top: top,
+    $select: getMessageSelect(false),
+  };
+  if (searchTerm) {
+    query.$search = `"${searchTerm}"`;
+  } else {
+    query.$orderby = 'receivedDateTime desc';
+  }
+  return query;
+}
+
+async function listMessages(
+  user,
+  { folder = 'inbox', inboxView = 'focused', limit = 25, search } = {},
+) {
   const top = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const searchTerm = normalizeMessageSearch(search);
   const payload = await graphRequest(user, getFolderPath(folder), {
-    query: {
-      $top: top,
-      $select: getMessageSelect(false),
-      $orderby: 'receivedDateTime desc',
-    },
+    query: buildMessageListQuery({ top, searchTerm }),
   });
   const messages = Array.isArray(payload?.value)
     ? payload.value.map((message) => normalizeMessage(message, false))
     : [];
+  const sortedMessages = searchTerm
+    ? [...messages].sort((a, b) => getMessageTimestamp(b) - getMessageTimestamp(a))
+    : messages;
 
   return {
-    messages: filterMessagesByInboxView(messages, folder, inboxView),
+    messages: filterMessagesByInboxView(sortedMessages, folder, searchTerm ? 'all' : inboxView),
+    search: searchTerm || undefined,
   };
 }
 

@@ -140,6 +140,7 @@ router.get('/messages', async (req, res) => {
       folder: req.query.folder,
       inboxView: req.query.inboxView,
       limit: req.query.limit,
+      search: req.query.search,
     });
     await recordAudit(req, {
       action: 'mailbox_listed',
@@ -147,6 +148,7 @@ router.get('/messages', async (req, res) => {
       metadata: {
         folder: typeof req.query.folder === 'string' ? req.query.folder : 'inbox',
         inboxView: typeof req.query.inboxView === 'string' ? req.query.inboxView : 'focused',
+        searched: typeof req.query.search === 'string' && req.query.search.trim().length > 0,
         limit: result.messages.length,
       },
     });
@@ -158,6 +160,7 @@ router.get('/messages', async (req, res) => {
       metadata: {
         folder: typeof req.query.folder === 'string' ? req.query.folder : 'inbox',
         inboxView: typeof req.query.inboxView === 'string' ? req.query.inboxView : 'focused',
+        searched: typeof req.query.search === 'string' && req.query.search.trim().length > 0,
       },
     });
     handleOutlookError(res, error);

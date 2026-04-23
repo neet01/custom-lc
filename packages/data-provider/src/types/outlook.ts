@@ -51,10 +51,12 @@ export type OutlookMessagesParams = {
   folder?: 'inbox' | 'drafts' | 'sent' | 'sentitems' | 'all';
   inboxView?: 'focused' | 'other' | 'all';
   limit?: number;
+  search?: string;
 };
 
 export type OutlookMessagesResponse = {
   messages: OutlookMessage[];
+  search?: string;
 };
 
 export type OutlookInsights = {

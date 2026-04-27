@@ -80,6 +80,22 @@ export class FlowStateManager<T = unknown> {
     return normalizeExpiresAt(expiresAt) < Date.now();
   }
 
+  private isReusableHandledFlow(flowState: FlowState<T> | undefined): boolean {
+    if (!flowState) {
+      return false;
+    }
+
+    if (flowState.status === 'PENDING') {
+      return true;
+    }
+
+    if (flowState.status !== 'COMPLETED' || flowState.result === undefined) {
+      return false;
+    }
+
+    return !this.isTokenExpired(flowState);
+  }
+
   /**
    * Stores initial PENDING flow state without starting the monitor loop.
    * Use this when you need to guarantee the state is persisted before
@@ -381,7 +397,7 @@ export class FlowStateManager<T = unknown> {
   ): Promise<T> {
     const flowKey = this.getFlowKey(flowId, type);
     let existingState = (await this.keyv.get(flowKey)) as FlowState<T> | undefined;
-    if (existingState && !this.isTokenExpired(existingState)) {
+    if (this.isReusableHandledFlow(existingState)) {
       logger.debug(`[${flowKey}] Flow already exists with valid token`);
       return this.monitorFlow(flowKey, type, signal);
     }
@@ -389,7 +405,7 @@ export class FlowStateManager<T = unknown> {
     await new Promise((resolve) => setTimeout(resolve, 250));
 
     existingState = (await this.keyv.get(flowKey)) as FlowState<T> | undefined;
-    if (existingState && !this.isTokenExpired(existingState)) {
+    if (this.isReusableHandledFlow(existingState)) {
       logger.debug(`[${flowKey}] Flow exists on 2nd check with valid token`);
       return this.monitorFlow(flowKey, type, signal);
     }

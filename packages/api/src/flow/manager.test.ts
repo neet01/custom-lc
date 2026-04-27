@@ -478,6 +478,29 @@ describe('FlowStateManager', () => {
       expect(handlerSpy).not.toHaveBeenCalled();
       expect(result).toEqual(validTokenResult);
     }, 15000);
+
+    it('should replace a failed token flow instead of reusing it', async () => {
+      await tokenStore.set(flowKey, {
+        type,
+        status: 'FAILED',
+        metadata: {},
+        createdAt: Date.now() - 5000,
+        failedAt: Date.now() - 4000,
+        error: 'access token missing and no refresh token available',
+      } as FlowState<TokenResult>);
+
+      const newTokenResult: TokenResult = {
+        access_token: 'new_token_after_failed_flow',
+        refresh_token: 'new_refresh_after_failed_flow',
+        expires_at: Date.now() + 3600000,
+      };
+      const handlerSpy = jest.fn().mockResolvedValue(newTokenResult);
+
+      const result = await tokenFlowManager.createFlowWithHandler(flowId, type, handlerSpy);
+
+      expect(handlerSpy).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(newTokenResult);
+    });
   });
 
   describe('Timestamp normalization', () => {

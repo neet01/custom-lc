@@ -1376,6 +1376,8 @@ export default function OutlookPanel() {
                 className={cn(
                   'flex items-start gap-2 border-b border-border-light px-2 transition-colors duration-150',
                   densityMode === 'compact' ? 'py-1.5' : 'py-2',
+                  message.isRead && selectedId !== message.id && 'opacity-80',
+                  !message.isRead && selectedId !== message.id && 'bg-[#f5d000]/[0.04]',
                   selectedId === message.id && 'bg-surface-active-alt',
                 )}
               >
@@ -1399,9 +1401,17 @@ export default function OutlookPanel() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-1.5">
+                        {!message.isRead && (
+                          <span
+                            className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-[#f5d000]"
+                            aria-label="Unread email"
+                            title="Unread email"
+                          />
+                        )}
                         <div
                           className={cn(
                             'truncate font-semibold',
+                            message.isRead ? 'text-text-primary/90' : 'text-text-primary',
                             densityMode === 'compact' ? 'text-[13px]' : 'text-sm',
                           )}
                         >
@@ -1414,7 +1424,14 @@ export default function OutlookPanel() {
                           </span>
                         )}
                       </div>
-                      <div className="truncate text-[11px] font-semibold text-[#b88a00] dark:text-[#f5d000]">
+                      <div
+                        className={cn(
+                          'truncate text-[11px] font-semibold',
+                          message.isRead
+                            ? 'text-text-primary/90'
+                            : 'text-[#b88a00] dark:text-[#f5d000]',
+                        )}
+                      >
                         {formatSender(message)}
                       </div>
                     </div>
@@ -1422,7 +1439,12 @@ export default function OutlookPanel() {
                       {formatDate(message.receivedDateTime)}
                     </div>
                   </div>
-                  <p className="mt-0.5 line-clamp-1 text-xs leading-4 text-text-secondary">
+                  <p
+                    className={cn(
+                      'mt-0.5 line-clamp-1 text-xs leading-4',
+                      message.isRead ? 'text-text-secondary/80' : 'text-text-secondary',
+                    )}
+                  >
                     {message.bodyPreview}
                   </p>
                   {message.inferenceClassification && (

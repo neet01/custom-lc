@@ -8,6 +8,7 @@ import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
 import { ConnectionsRepository } from '~/mcp/ConnectionsRepository';
 import { MCPConnection } from '~/mcp/connection';
 import { MCPManager } from '~/mcp/MCPManager';
+import { MCPTokenStorage } from '~/mcp/oauth';
 import * as graphUtils from '~/utils/graph';
 
 // Mock external dependencies
@@ -964,6 +965,68 @@ describe('MCPManager', () => {
         expect.objectContaining({ serverName }),
         expect.objectContaining({ user: mockUser, useOAuth: true }),
       );
+    });
+  });
+
+  describe('OAuth connection reuse', () => {
+    it('should hydrate an active OAuth user connection with stored tokens before reuse', async () => {
+      mockAppConnections({
+        get: jest.fn().mockResolvedValue(null),
+      });
+
+      const mockUser = { id: userId, email: 'test@example.com' } as unknown as IUser;
+      const mockConnection = {
+        isConnected: jest.fn().mockResolvedValue(true),
+        setOAuthTokens: jest.fn(),
+      } as unknown as MCPConnection;
+
+      const storedTokens = {
+        access_token: 'oauth-access-token',
+        token_type: 'Bearer',
+      };
+
+      const flowManager = {
+        createFlowWithHandler: jest.fn(async (_flowId, _type, handler) => handler()),
+      };
+
+      const tokenMethods = {
+        findToken: jest.fn(),
+        createToken: jest.fn(),
+        updateToken: jest.fn(),
+        deleteTokens: jest.fn(),
+      };
+
+      jest.spyOn(MCPTokenStorage, 'getTokens').mockResolvedValue(
+        storedTokens as Awaited<ReturnType<typeof MCPTokenStorage.getTokens>>,
+      );
+
+      (mockRegistryInstance.getServerConfig as jest.Mock).mockResolvedValue({
+        type: 'streamable-http',
+        url: 'https://jira-mcp.hermeus.com/mcp',
+        requiresOAuth: true,
+      });
+
+      const manager = await MCPManager.createInstance(newMCPServersConfig());
+      (manager as unknown as { userConnections: Map<string, Map<string, MCPConnection>> }).userConnections.set(
+        userId,
+        new Map([[serverName, mockConnection]]),
+      );
+
+      const connection = await manager.getConnection({
+        serverName,
+        user: mockUser,
+        flowManager: flowManager as never,
+        tokenMethods,
+      });
+
+      expect(connection).toBe(mockConnection);
+      expect(flowManager.createFlowWithHandler).toHaveBeenCalledWith(
+        `${userId}:${serverName}`,
+        'mcp_get_tokens',
+        expect.any(Function),
+      );
+      expect(MCPTokenStorage.getTokens).toHaveBeenCalled();
+      expect(mockConnection.setOAuthTokens).toHaveBeenCalledWith(storedTokens);
     });
   });
 });

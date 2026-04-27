@@ -4,9 +4,11 @@ import type * as t from './types';
 import { MCPServersRegistry } from '~/mcp/registry/MCPServersRegistry';
 import { ConnectionsRepository } from '~/mcp/ConnectionsRepository';
 import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
+import { MCPOAuthHandler, MCPTokenStorage } from '~/mcp/oauth';
 import { isUserSourced } from './utils';
 import { MCPConnection } from './connection';
 import { mcpConfig } from './mcpConfig';
+import type { MCPOAuthTokens } from '~/mcp/oauth';
 
 /**
  * Abstract base class for managing user-specific MCP connections with lifecycle management.
@@ -32,6 +34,72 @@ export abstract class UserConnectionManager {
     logger.debug(
       `[MCP][User: ${userId}] Updated last activity timestamp: ${new Date(now).toISOString()}`,
     );
+  }
+
+  private async syncStoredOAuthTokensToConnection({
+    userId,
+    serverName,
+    connection,
+    config,
+    flowManager,
+    tokenMethods,
+  }: {
+    userId: string;
+    serverName: string;
+    connection: MCPConnection;
+    config: t.ParsedServerConfig;
+    flowManager?: t.OAuthConnectionOptions['flowManager'];
+    tokenMethods?: t.OAuthConnectionOptions['tokenMethods'];
+  }): Promise<void> {
+    if (!config.requiresOAuth || !flowManager || !tokenMethods?.findToken) {
+      return;
+    }
+
+    try {
+      const registry = MCPServersRegistry.getInstance();
+      const flowId = MCPOAuthHandler.generateFlowId(userId, serverName);
+      const serverUrl = 'url' in config ? config.url : undefined;
+
+      const tokens = await flowManager.createFlowWithHandler(
+        flowId,
+        'mcp_get_tokens',
+        async (): Promise<MCPOAuthTokens | null> =>
+          MCPTokenStorage.getTokens({
+            userId,
+            serverName,
+            findToken: tokenMethods.findToken,
+            createToken: tokenMethods.createToken,
+            updateToken: tokenMethods.updateToken,
+            deleteTokens: tokenMethods.deleteTokens,
+            refreshTokens: async (refreshToken, metadata) =>
+              MCPOAuthHandler.refreshOAuthTokens(
+                refreshToken,
+                {
+                  serverUrl,
+                  serverName: metadata.serverName,
+                  clientInfo: metadata.clientInfo,
+                  storedTokenEndpoint: metadata.storedTokenEndpoint,
+                  storedAuthMethods: metadata.storedAuthMethods,
+                },
+                config.oauth_headers ?? {},
+                config.oauth,
+                registry.getAllowedDomains(),
+              ),
+          }),
+      );
+
+      if (tokens?.access_token) {
+        connection.setOAuthTokens(tokens);
+        logger.debug(
+          `[MCP][User: ${userId}][${serverName}] Hydrated active connection with stored OAuth tokens`,
+        );
+      }
+    } catch (error) {
+      logger.debug(
+        `[MCP][User: ${userId}][${serverName}] Unable to hydrate active connection with stored OAuth tokens`,
+        error,
+      );
+    }
   }
 
   /** Gets or creates a connection for a specific user, coalescing concurrent attempts */
@@ -135,6 +203,14 @@ export abstract class UserConnectionManager {
         await this.disconnectUserConnection(userId, serverName);
         connection = undefined;
       } else if (await connection.isConnected()) {
+        await this.syncStoredOAuthTokensToConnection({
+          userId,
+          serverName,
+          connection,
+          config,
+          flowManager,
+          tokenMethods,
+        });
         logger.debug(`[MCP][User: ${userId}][${serverName}] Reusing active connection`);
         this.updateUserLastActivity(userId);
         return connection;

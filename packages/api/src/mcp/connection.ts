@@ -380,7 +380,13 @@ export class MCPConnection extends EventEmitter {
   }
 
   getRequestHeaders(): Record<string, string> | null | undefined {
-    return this.requestHeaders;
+    const headers = this.requestHeaders ? { ...this.requestHeaders } : {};
+
+    if (this.oauthTokens?.access_token) {
+      headers.authorization = `Bearer ${this.oauthTokens.access_token}`;
+    }
+
+    return Object.keys(headers).length > 0 ? headers : this.requestHeaders;
   }
 
   constructor(params: MCPConnectionParams) {

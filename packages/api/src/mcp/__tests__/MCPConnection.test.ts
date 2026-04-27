@@ -560,6 +560,67 @@ describe('extractSSEErrorMessage', () => {
   });
 });
 
+describe('MCPConnection request headers', () => {
+  it('should inject delegated OAuth bearer tokens into request headers for active transports', () => {
+    const { MCPConnection } = require('~/mcp/connection');
+
+    const connection = new MCPConnection({
+      serverName: 'jira',
+      serverConfig: {
+        type: 'streamable-http',
+        url: 'https://jira-mcp.hermeus.com/mcp',
+      },
+      userId: 'user-1',
+    });
+
+    connection.setRequestHeaders({
+      'X-User-Id': 'user-1',
+      'X-User-Email': 'user@example.com',
+    });
+    connection.setOAuthTokens({
+      access_token: 'delegated-token',
+      token_type: 'Bearer',
+    });
+
+    expect(connection.getRequestHeaders()).toEqual({
+      'x-user-id': 'user-1',
+      'x-user-email': 'user@example.com',
+      authorization: 'Bearer delegated-token',
+    });
+  });
+
+  it('should preserve delegated OAuth bearer tokens when request headers are refreshed after hydration', () => {
+    const { MCPConnection } = require('~/mcp/connection');
+
+    const connection = new MCPConnection({
+      serverName: 'jira',
+      serverConfig: {
+        type: 'streamable-http',
+        url: 'https://jira-mcp.hermeus.com/mcp',
+      },
+      userId: 'user-1',
+      oauthTokens: {
+        access_token: 'delegated-token',
+        token_type: 'Bearer',
+      },
+    });
+
+    connection.setRequestHeaders({
+      'X-User-Id': 'user-1',
+    });
+    connection.setRequestHeaders({
+      'X-User-Id': 'user-1',
+      'X-User-Email': 'user@example.com',
+    });
+
+    expect(connection.getRequestHeaders()).toEqual({
+      'x-user-id': 'user-1',
+      'x-user-email': 'user@example.com',
+      authorization: 'Bearer delegated-token',
+    });
+  });
+});
+
 /**
  * Tests for circuit breaker logic.
  *

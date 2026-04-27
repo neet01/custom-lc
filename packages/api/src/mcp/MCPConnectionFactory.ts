@@ -52,6 +52,50 @@ export class MCPConnectionFactory {
   }
 
   /**
+   * Completes an OAuth flow for servers that allow anonymous MCP connection/setup
+   * but still require delegated tokens at tool execution time.
+   */
+  static async completeOAuthAuthentication(
+    basic: t.BasicConnectionOptions,
+    oauth: t.OAuthConnectionOptions,
+  ): Promise<{
+    tokens: MCPOAuthTokens | null;
+    clientInfo?: OAuthClientInformation;
+    metadata?: OAuthMetadata;
+    reusedStoredClient?: boolean;
+    error?: unknown;
+  } | null> {
+    const factory = new this(basic, oauth);
+
+    const existingTokens = await factory.getOAuthTokens();
+    if (existingTokens?.access_token) {
+      return { tokens: existingTokens };
+    }
+
+    const result = await factory.handleOAuthRequired();
+
+    if (result?.tokens && factory.tokenMethods?.createToken) {
+      try {
+        await MCPTokenStorage.storeTokens({
+          userId: factory.userId!,
+          serverName: factory.serverName,
+          tokens: result.tokens,
+          createToken: factory.tokenMethods.createToken,
+          updateToken: factory.tokenMethods.updateToken,
+          findToken: factory.tokenMethods.findToken,
+          clientInfo: result.clientInfo,
+          metadata: result.metadata,
+        });
+        logger.info(`${factory.logPrefix} OAuth tokens saved to storage`);
+      } catch (error) {
+        logger.error(`${factory.logPrefix} Failed to save OAuth tokens to storage`, error);
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Discovers tools from an MCP server, even when OAuth is required.
    * Per MCP spec, tool listing should be possible without authentication.
    * Returns tools if discoverable, plus OAuth status for tool execution.

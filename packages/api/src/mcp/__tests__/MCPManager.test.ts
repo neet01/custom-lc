@@ -1028,5 +1028,75 @@ describe('MCPManager', () => {
       expect(MCPTokenStorage.getTokens).toHaveBeenCalled();
       expect(mockConnection.setOAuthTokens).toHaveBeenCalledWith(storedTokens);
     });
+
+    it('should replace an active OAuth connection when delegated tokens are missing', async () => {
+      mockAppConnections({
+        get: jest.fn().mockResolvedValue(null),
+      });
+
+      const mockUser = { id: userId, email: 'test@example.com' } as unknown as IUser;
+      const existingConnection = {
+        isConnected: jest.fn().mockResolvedValue(true),
+        setOAuthTokens: jest.fn(),
+        disconnect: jest.fn().mockResolvedValue(undefined),
+      } as unknown as MCPConnection;
+      const freshConnection = {
+        isConnected: jest.fn().mockResolvedValue(true),
+        setOAuthTokens: jest.fn(),
+        disconnect: jest.fn().mockResolvedValue(undefined),
+      } as unknown as MCPConnection;
+
+      const freshTokens = {
+        access_token: 'fresh-access-token',
+        token_type: 'Bearer',
+      };
+
+      const flowManager = {
+        createFlowWithHandler: jest.fn(async (_flowId, _type, handler) => handler()),
+      };
+
+      const tokenMethods = {
+        findToken: jest.fn(),
+        createToken: jest.fn(),
+        updateToken: jest.fn(),
+        deleteTokens: jest.fn(),
+      };
+
+      jest
+        .spyOn(MCPTokenStorage, 'getTokens')
+        .mockResolvedValue(null as Awaited<ReturnType<typeof MCPTokenStorage.getTokens>>);
+
+      (MCPConnectionFactory.create as jest.Mock).mockResolvedValue(freshConnection);
+      (MCPConnectionFactory.completeOAuthAuthentication as jest.Mock).mockResolvedValue({
+        tokens: freshTokens,
+      });
+
+      (mockRegistryInstance.getServerConfig as jest.Mock).mockResolvedValue({
+        type: 'streamable-http',
+        url: 'https://jira-mcp.hermeus.com/mcp',
+        requiresOAuth: true,
+      });
+
+      const manager = await MCPManager.createInstance(newMCPServersConfig());
+      (manager as unknown as { userConnections: Map<string, Map<string, MCPConnection>> }).userConnections.set(
+        userId,
+        new Map([[serverName, existingConnection]]),
+      );
+
+      const connection = await manager.getConnection({
+        serverName,
+        user: mockUser,
+        flowManager: flowManager as never,
+        tokenMethods,
+      });
+
+      expect(connection).toBe(freshConnection);
+      expect((existingConnection as unknown as { disconnect: jest.Mock }).disconnect).toHaveBeenCalled();
+      expect(MCPConnectionFactory.create).toHaveBeenCalled();
+      expect(MCPConnectionFactory.completeOAuthAuthentication).toHaveBeenCalled();
+      expect((freshConnection as unknown as { setOAuthTokens: jest.Mock }).setOAuthTokens).toHaveBeenCalledWith(
+        freshTokens,
+      );
+    });
   });
 });

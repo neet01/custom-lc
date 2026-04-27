@@ -38,6 +38,7 @@ jest.mock('@librechat/api', () => {
 
 const { logger } = require('@librechat/data-schemas');
 const { MCPOAuthHandler } = require('@librechat/api');
+const { findToken } = require('~/models');
 const { CacheKeys, Constants } = require('librechat-data-provider');
 const D = Constants.mcp_delimiter;
 const {
@@ -71,6 +72,7 @@ jest.mock('~/models', () => ({
   findToken: jest.fn(),
   createToken: jest.fn(),
   updateToken: jest.fn(),
+  deleteTokens: jest.fn(),
 }));
 
 jest.mock('./Tools/mcp', () => ({
@@ -90,6 +92,7 @@ describe('tests for the new helper functions used by the MCP connection status e
   beforeEach(() => {
     jest.clearAllMocks();
     jest.spyOn(MCPOAuthHandler, 'generateFlowId');
+    findToken.mockResolvedValue(null);
 
     mockGetMCPManager = require('~/config').getMCPManager;
     mockGetFlowStateManager = require('~/config').getFlowStateManager;
@@ -590,12 +593,17 @@ describe('tests for the new helper functions used by the MCP connection status e
       );
     });
 
-    it('should not check OAuth flow status when server is connected', async () => {
+    it('should report connected for OAuth servers when usable tokens exist', async () => {
       const mockFlowManager = {
         getFlowState: jest.fn(),
       };
       mockGetFlowStateManager.mockReturnValue(mockFlowManager);
       mockGetLogStores.mockReturnValue({});
+      findToken
+        .mockResolvedValueOnce({
+          expiresAt: new Date(Date.now() + 60_000),
+        })
+        .mockResolvedValueOnce(null);
 
       const appConnections = new Map([
         [
@@ -623,8 +631,47 @@ describe('tests for the new helper functions used by the MCP connection status e
         connectionState: 'connected',
       });
 
-      // Should not call flow manager since server is connected
+      // Should not call flow manager since server is connected and token-ready
       expect(mockFlowManager.getFlowState).not.toHaveBeenCalled();
+    });
+
+    it('should downgrade connected OAuth servers without tokens to disconnected', async () => {
+      const mockFlowManager = {
+        getFlowState: jest.fn(() => null),
+      };
+      const mockOAuthReconnectionManager = {
+        isReconnecting: jest.fn(() => false),
+      };
+      mockGetFlowStateManager.mockReturnValue(mockFlowManager);
+      mockGetOAuthReconnectionManager.mockReturnValue(mockOAuthReconnectionManager);
+      mockGetLogStores.mockReturnValue({});
+
+      const appConnections = new Map([
+        [
+          mockServerName,
+          {
+            connectionState: 'connected',
+            isStale: jest.fn(() => false),
+          },
+        ],
+      ]);
+      const userConnections = new Map();
+      const oauthServers = new Set([mockServerName]);
+
+      const result = await getServerConnectionStatus(
+        mockUserId,
+        mockServerName,
+        mockConfig,
+        appConnections,
+        userConnections,
+        oauthServers,
+      );
+
+      expect(result).toEqual({
+        requiresOAuth: true,
+        connectionState: 'disconnected',
+      });
+      expect(mockFlowManager.getFlowState).toHaveBeenCalled();
     });
 
     it('should not check OAuth flow status when server does not require OAuth', async () => {

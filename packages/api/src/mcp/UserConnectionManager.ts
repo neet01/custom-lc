@@ -50,9 +50,13 @@ export abstract class UserConnectionManager {
     config: t.ParsedServerConfig;
     flowManager?: t.OAuthConnectionOptions['flowManager'];
     tokenMethods?: t.OAuthConnectionOptions['tokenMethods'];
-  }): Promise<void> {
-    if (!config.requiresOAuth || !flowManager || !tokenMethods?.findToken) {
-      return;
+  }): Promise<boolean> {
+    if (!config.requiresOAuth) {
+      return true;
+    }
+
+    if (!flowManager || !tokenMethods?.findToken) {
+      return false;
     }
 
     try {
@@ -93,12 +97,16 @@ export abstract class UserConnectionManager {
         logger.debug(
           `[MCP][User: ${userId}][${serverName}] Hydrated active connection with stored OAuth tokens`,
         );
+        return true;
       }
+
+      return false;
     } catch (error) {
       logger.debug(
         `[MCP][User: ${userId}][${serverName}] Unable to hydrate active connection with stored OAuth tokens`,
         error,
       );
+      return false;
     }
   }
 
@@ -203,17 +211,28 @@ export abstract class UserConnectionManager {
         await this.disconnectUserConnection(userId, serverName);
         connection = undefined;
       } else if (await connection.isConnected()) {
-        await this.syncStoredOAuthTokensToConnection({
-          userId,
-          serverName,
-          connection,
-          config,
-          flowManager,
-          tokenMethods,
-        });
-        logger.debug(`[MCP][User: ${userId}][${serverName}] Reusing active connection`);
-        this.updateUserLastActivity(userId);
-        return connection;
+        const oauthReady = config.requiresOAuth
+          ? await this.syncStoredOAuthTokensToConnection({
+              userId,
+              serverName,
+              connection,
+              config,
+              flowManager,
+              tokenMethods,
+            })
+          : true;
+
+        if (!oauthReady && config.requiresOAuth) {
+          logger.info(
+            `[MCP][User: ${userId}][${serverName}] Active connection has no usable delegated OAuth tokens, forcing reconnect`,
+          );
+          await this.disconnectUserConnection(userId, serverName);
+          connection = undefined;
+        } else {
+          logger.debug(`[MCP][User: ${userId}][${serverName}] Reusing active connection`);
+          this.updateUserLastActivity(userId);
+          return connection;
+        }
       } else {
         // Connection exists but is not connected, attempt to remove potentially stale entry
         logger.warn(
@@ -237,31 +256,63 @@ export abstract class UserConnectionManager {
 
     try {
       const registry = MCPServersRegistry.getInstance();
+      const basicConnectionOptions = {
+        serverConfig: config,
+        serverName: serverName,
+        dbSourced: isUserSourced(config),
+        useSSRFProtection: registry.shouldEnableSSRFProtection(),
+        allowedDomains: registry.getAllowedDomains(),
+      };
+      const oauthConnectionOptions = {
+        useOAuth: true as const,
+        user: user,
+        customUserVars: customUserVars,
+        flowManager: flowManager,
+        tokenMethods: tokenMethods,
+        signal: signal,
+        oauthStart: oauthStart,
+        oauthEnd: oauthEnd,
+        returnOnOAuth: returnOnOAuth,
+        requestBody: requestBody,
+        connectionTimeout: connectionTimeout,
+      };
+
       connection = await MCPConnectionFactory.create(
-        {
-          serverConfig: config,
-          serverName: serverName,
-          dbSourced: isUserSourced(config),
-          useSSRFProtection: registry.shouldEnableSSRFProtection(),
-          allowedDomains: registry.getAllowedDomains(),
-        },
-        {
-          useOAuth: true,
-          user: user,
-          customUserVars: customUserVars,
-          flowManager: flowManager,
-          tokenMethods: tokenMethods,
-          signal: signal,
-          oauthStart: oauthStart,
-          oauthEnd: oauthEnd,
-          returnOnOAuth: returnOnOAuth,
-          requestBody: requestBody,
-          connectionTimeout: connectionTimeout,
-        },
+        basicConnectionOptions,
+        oauthConnectionOptions,
       );
 
       if (!(await connection?.isConnected())) {
         throw new Error('Failed to establish connection after initialization attempt.');
+      }
+
+      if (config.requiresOAuth) {
+        const oauthReady = await this.syncStoredOAuthTokensToConnection({
+          userId,
+          serverName,
+          connection,
+          config,
+          flowManager,
+          tokenMethods,
+        });
+
+        if (!oauthReady && !returnOnOAuth) {
+          logger.info(
+            `[MCP][User: ${userId}][${serverName}] Connected without delegated tokens, completing OAuth before tool execution`,
+          );
+          const authResult = await MCPConnectionFactory.completeOAuthAuthentication(
+            basicConnectionOptions,
+            oauthConnectionOptions,
+          );
+
+          if (authResult?.tokens?.access_token) {
+            connection.setOAuthTokens(authResult.tokens);
+          } else {
+            throw new Error(
+              `[MCP][User: ${userId}][${serverName}] OAuth authentication did not produce usable access tokens.`,
+            );
+          }
+        }
       }
 
       if (!this.userConnections.has(userId)) {

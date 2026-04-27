@@ -1,5 +1,6 @@
 const { logger } = require('@librechat/data-schemas');
 const { CacheKeys, Constants } = require('librechat-data-provider');
+const { MCPOAuthHandler, MCPTokenStorage, PENDING_STALE_MS } = require('@librechat/api');
 const { getMCPManager, getMCPServersRegistry, getFlowStateManager } = require('~/config');
 const { findToken, createToken, updateToken, deleteTokens } = require('~/models');
 const { updateMCPServerTools } = require('~/server/services/Config');
@@ -41,6 +42,78 @@ async function reinitMCPServer({
   let tools = null;
   let oauthRequired = false;
   let oauthUrl = null;
+
+  const getUsableOAuthTokens = async (serverConfig, userId) => {
+    const allowedDomains = registry.getAllowedDomains();
+    const serverUrl = 'url' in serverConfig ? serverConfig.url : undefined;
+
+    return MCPTokenStorage.getTokens({
+      userId,
+      serverName,
+      findToken,
+      createToken,
+      updateToken,
+      deleteTokens,
+      refreshTokens: async (refreshToken, metadata) =>
+        MCPOAuthHandler.refreshOAuthTokens(
+          refreshToken,
+          {
+            serverUrl,
+            serverName: metadata.serverName,
+            clientInfo: metadata.clientInfo,
+            storedTokenEndpoint: metadata.storedTokenEndpoint,
+            storedAuthMethods: metadata.storedAuthMethods,
+          },
+          serverConfig.oauth_headers ?? {},
+          serverConfig.oauth,
+          allowedDomains,
+        ),
+    });
+  };
+
+  const ensureDeferredOAuthFlow = async (serverConfig, userId) => {
+    const flowId = MCPOAuthHandler.generateFlowId(userId, serverName);
+    const existingFlow = await flowManager.getFlowState(flowId, 'mcp_oauth');
+
+    if (existingFlow?.status === 'PENDING') {
+      const pendingAge = existingFlow.createdAt ? Date.now() - existingFlow.createdAt : Infinity;
+      const existingAuthorizationUrl = existingFlow.metadata?.authorizationUrl;
+
+      if (pendingAge < PENDING_STALE_MS && existingAuthorizationUrl) {
+        await oauthStart(existingAuthorizationUrl);
+        return;
+      }
+    }
+
+    const { authorizationUrl, flowId: newFlowId, flowMetadata } =
+      await MCPOAuthHandler.initiateOAuthFlow(
+        serverName,
+        serverConfig.url,
+        userId,
+        serverConfig.oauth_headers ?? {},
+        serverConfig.oauth,
+        registry.getAllowedDomains(),
+        deleteTokens ? findToken : undefined,
+      );
+
+    if (existingFlow) {
+      const oldState = existingFlow.metadata?.state;
+      await flowManager.deleteFlow(flowId, 'mcp_oauth');
+      if (oldState) {
+        await MCPOAuthHandler.deleteStateMapping(oldState, flowManager);
+      }
+    }
+
+    const metadataWithUrl = { ...flowMetadata, authorizationUrl };
+    await flowManager.initFlow(newFlowId, 'mcp_oauth', metadataWithUrl);
+    await MCPOAuthHandler.storeStateMapping(flowMetadata.state, newFlowId, flowManager);
+
+    flowManager.createFlow(newFlowId, 'mcp_oauth', {}, signal).catch((error) => {
+      logger.debug(`[MCP Reinitialize] Background OAuth flow monitor ended for ${serverName}`, error);
+    });
+
+    await oauthStart(authorizationUrl);
+  };
 
   try {
     const registry = getMCPServersRegistry();
@@ -114,6 +187,26 @@ async function reinitMCPServer({
       });
 
       logger.info(`[MCP Reinitialize] Successfully established connection for ${serverName}`);
+
+      if (
+        serverConfig?.requiresOAuth &&
+        user?.id &&
+        serverConfig.type !== 'stdio' &&
+        serverConfig.type !== 'websocket'
+      ) {
+        try {
+          const tokens = await getUsableOAuthTokens(serverConfig, user.id);
+          if (!tokens?.access_token) {
+            await ensureDeferredOAuthFlow(serverConfig, user.id);
+          }
+        } catch (error) {
+          logger.info(
+            `[MCP Reinitialize] ${serverName} connected without usable OAuth tokens, initiating delegated OAuth`,
+            error,
+          );
+          await ensureDeferredOAuthFlow(serverConfig, user.id);
+        }
+      }
     } catch (err) {
       logger.info(`[MCP Reinitialize] getConnection threw error: ${err.message}`);
       logger.info(

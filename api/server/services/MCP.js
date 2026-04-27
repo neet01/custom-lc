@@ -10,6 +10,7 @@ const {
   sendEvent,
   MCPOAuthHandler,
   isMCPDomainAllowed,
+  normalizeExpiresAt,
   normalizeServerName,
   normalizeJsonSchema,
   GenerationJobManager,
@@ -49,6 +50,28 @@ function evictStale(map, ttl) {
       return;
     }
   }
+}
+
+async function hasUsableOAuthCredentials(userId, serverName) {
+  const identifier = `mcp:${serverName}`;
+  const [accessToken, refreshToken] = await Promise.all([
+    findToken({
+      userId,
+      type: 'mcp_oauth',
+      identifier,
+    }),
+    findToken({
+      userId,
+      type: 'mcp_oauth_refresh',
+      identifier: `${identifier}:refresh`,
+    }),
+  ]);
+
+  const accessTokenValid =
+    !!accessToken &&
+    (!accessToken.expiresAt || normalizeExpiresAt(accessToken.expiresAt.getTime()) > Date.now());
+
+  return accessTokenValid || !!refreshToken;
 }
 
 const unavailableMsg =
@@ -822,8 +845,23 @@ async function getServerConnectionStatus(
     : connection?.connectionState || 'disconnected';
   let finalConnectionState = baseConnectionState;
 
+  if (baseConnectionState === 'connected' && oauthServers.has(serverName)) {
+    try {
+      const hasTokens = await hasUsableOAuthCredentials(userId, serverName);
+      if (!hasTokens) {
+        finalConnectionState = 'disconnected';
+      }
+    } catch (error) {
+      logger.warn(
+        `[MCP Connection Status] Failed to inspect OAuth token readiness for ${serverName}, treating as disconnected`,
+        error,
+      );
+      finalConnectionState = 'disconnected';
+    }
+  }
+
   // connection state overrides specific to OAuth servers
-  if (baseConnectionState === 'disconnected' && oauthServers.has(serverName)) {
+  if (finalConnectionState === 'disconnected' && oauthServers.has(serverName)) {
     // check if server is actively being reconnected
     const oauthReconnectionManager = getOAuthReconnectionManager();
     if (oauthReconnectionManager.isReconnecting(userId, serverName)) {

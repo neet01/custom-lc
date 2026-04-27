@@ -43,78 +43,6 @@ async function reinitMCPServer({
   let oauthRequired = false;
   let oauthUrl = null;
 
-  const getUsableOAuthTokens = async (serverConfig, userId) => {
-    const allowedDomains = registry.getAllowedDomains();
-    const serverUrl = 'url' in serverConfig ? serverConfig.url : undefined;
-
-    return MCPTokenStorage.getTokens({
-      userId,
-      serverName,
-      findToken,
-      createToken,
-      updateToken,
-      deleteTokens,
-      refreshTokens: async (refreshToken, metadata) =>
-        MCPOAuthHandler.refreshOAuthTokens(
-          refreshToken,
-          {
-            serverUrl,
-            serverName: metadata.serverName,
-            clientInfo: metadata.clientInfo,
-            storedTokenEndpoint: metadata.storedTokenEndpoint,
-            storedAuthMethods: metadata.storedAuthMethods,
-          },
-          serverConfig.oauth_headers ?? {},
-          serverConfig.oauth,
-          allowedDomains,
-        ),
-    });
-  };
-
-  const ensureDeferredOAuthFlow = async (serverConfig, userId) => {
-    const flowId = MCPOAuthHandler.generateFlowId(userId, serverName);
-    const existingFlow = await flowManager.getFlowState(flowId, 'mcp_oauth');
-
-    if (existingFlow?.status === 'PENDING') {
-      const pendingAge = existingFlow.createdAt ? Date.now() - existingFlow.createdAt : Infinity;
-      const existingAuthorizationUrl = existingFlow.metadata?.authorizationUrl;
-
-      if (pendingAge < PENDING_STALE_MS && existingAuthorizationUrl) {
-        await oauthStart(existingAuthorizationUrl);
-        return;
-      }
-    }
-
-    const { authorizationUrl, flowId: newFlowId, flowMetadata } =
-      await MCPOAuthHandler.initiateOAuthFlow(
-        serverName,
-        serverConfig.url,
-        userId,
-        serverConfig.oauth_headers ?? {},
-        serverConfig.oauth,
-        registry.getAllowedDomains(),
-        deleteTokens ? findToken : undefined,
-      );
-
-    if (existingFlow) {
-      const oldState = existingFlow.metadata?.state;
-      await flowManager.deleteFlow(flowId, 'mcp_oauth');
-      if (oldState) {
-        await MCPOAuthHandler.deleteStateMapping(oldState, flowManager);
-      }
-    }
-
-    const metadataWithUrl = { ...flowMetadata, authorizationUrl };
-    await flowManager.initFlow(newFlowId, 'mcp_oauth', metadataWithUrl);
-    await MCPOAuthHandler.storeStateMapping(flowMetadata.state, newFlowId, flowManager);
-
-    flowManager.createFlow(newFlowId, 'mcp_oauth', {}, signal).catch((error) => {
-      logger.debug(`[MCP Reinitialize] Background OAuth flow monitor ended for ${serverName}`, error);
-    });
-
-    await oauthStart(authorizationUrl);
-  };
-
   try {
     const registry = getMCPServersRegistry();
     const serverConfig =
@@ -170,6 +98,81 @@ async function reinitMCPServer({
         oauthUrl = authURL;
         oauthRequired = true;
       });
+
+    const getUsableOAuthTokens = async (serverConfig, userId) => {
+      const allowedDomains = registry.getAllowedDomains();
+      const serverUrl = 'url' in serverConfig ? serverConfig.url : undefined;
+
+      return MCPTokenStorage.getTokens({
+        userId,
+        serverName,
+        findToken,
+        createToken,
+        updateToken,
+        deleteTokens,
+        refreshTokens: async (refreshToken, metadata) =>
+          MCPOAuthHandler.refreshOAuthTokens(
+            refreshToken,
+            {
+              serverUrl,
+              serverName: metadata.serverName,
+              clientInfo: metadata.clientInfo,
+              storedTokenEndpoint: metadata.storedTokenEndpoint,
+              storedAuthMethods: metadata.storedAuthMethods,
+            },
+            serverConfig.oauth_headers ?? {},
+            serverConfig.oauth,
+            allowedDomains,
+          ),
+      });
+    };
+
+    const ensureDeferredOAuthFlow = async (serverConfig, userId) => {
+      const flowId = MCPOAuthHandler.generateFlowId(userId, serverName);
+      const existingFlow = await flowManager.getFlowState(flowId, 'mcp_oauth');
+
+      if (existingFlow?.status === 'PENDING') {
+        const pendingAge = existingFlow.createdAt ? Date.now() - existingFlow.createdAt : Infinity;
+        const existingAuthorizationUrl = existingFlow.metadata?.authorizationUrl;
+
+        if (pendingAge < PENDING_STALE_MS && existingAuthorizationUrl) {
+          await oauthStart(existingAuthorizationUrl);
+          return;
+        }
+      }
+
+      const { authorizationUrl, flowId: newFlowId, flowMetadata } =
+        await MCPOAuthHandler.initiateOAuthFlow(
+          serverName,
+          serverConfig.url,
+          userId,
+          serverConfig.oauth_headers ?? {},
+          serverConfig.oauth,
+          registry.getAllowedDomains(),
+          deleteTokens ? findToken : undefined,
+        );
+
+      if (existingFlow) {
+        const oldState = existingFlow.metadata?.state;
+        await flowManager.deleteFlow(flowId, 'mcp_oauth');
+        if (oldState) {
+          await MCPOAuthHandler.deleteStateMapping(oldState, flowManager);
+        }
+      }
+
+      const metadataWithUrl = { ...flowMetadata, authorizationUrl };
+      await flowManager.initFlow(newFlowId, 'mcp_oauth', metadataWithUrl);
+      await MCPOAuthHandler.storeStateMapping(flowMetadata.state, newFlowId, flowManager);
+
+      flowManager.createFlow(newFlowId, 'mcp_oauth', {}, signal).catch((error) => {
+        logger.debug(
+          `[MCP Reinitialize] Background OAuth flow monitor ended for ${serverName}`,
+          error,
+        );
+      });
+
+      await oauthStart(authorizationUrl);
+    };
 
     try {
       connection = await mcpManager.getConnection({

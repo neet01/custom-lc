@@ -2,6 +2,8 @@ import { Types } from 'mongoose';
 import { PrincipalType, SystemRoles } from 'librechat-data-provider';
 import { logger, isValidObjectIdString } from '@librechat/data-schemas';
 import type {
+  IBalance,
+  IBalanceUpdate,
   IUser,
   IConfig,
   AdminUserListItem,
@@ -40,10 +42,20 @@ export interface AdminUsersDeps {
     principalType: PrincipalType;
     principalId: string | Types.ObjectId;
   }) => Promise<void>;
+  findBalanceByUser: (userId: string) => Promise<IBalance | null>;
+  upsertBalanceFields: (userId: string, fields: IBalanceUpdate) => Promise<IBalance | null>;
 }
 
 export function createAdminUsersHandlers(deps: AdminUsersDeps) {
-  const { findUsers, countUsers, deleteUserById, deleteConfig, deleteAclEntries } = deps;
+  const {
+    findUsers,
+    countUsers,
+    deleteUserById,
+    deleteConfig,
+    deleteAclEntries,
+    findBalanceByUser,
+    upsertBalanceFields,
+  } = deps;
 
   async function listUsersHandler(req: ServerRequest, res: Response) {
     try {
@@ -52,6 +64,15 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps) {
         findUsers({}, USER_LIST_FIELDS, { limit, offset, sort: { createdAt: -1 } }),
         countUsers(),
       ]);
+      const balanceRecords = await Promise.all(
+        users.map((user) => findBalanceByUser(user._id?.toString() ?? '')),
+      );
+      const balanceLookup = new Map(
+        users.map((user, index) => [
+          user._id?.toString() ?? '',
+          balanceRecords[index]?.tokenCredits ?? 0,
+        ]),
+      );
 
       const mapped: AdminUserListItem[] = users.map((u) => ({
         id: u._id?.toString() ?? '',
@@ -61,6 +82,7 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps) {
         avatar: u.avatar ?? '',
         role: u.role ?? 'USER',
         provider: u.provider ?? 'local',
+        tokenCredits: balanceLookup.get(u._id?.toString() ?? '') ?? 0,
         createdAt: u.createdAt?.toISOString(),
         updatedAt: u.updatedAt?.toISOString(),
       }));
@@ -118,6 +140,45 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps) {
     } catch (error) {
       logger.error('[adminUsers] searchUsers error:', error);
       return res.status(500).json({ error: 'Failed to search users' });
+    }
+  }
+
+  async function updateUserBalanceHandler(req: ServerRequest, res: Response) {
+    try {
+      const { id } = req.params as { id: string };
+
+      if (!isValidObjectIdString(id)) {
+        return res.status(400).json({ error: 'Invalid user ID format' });
+      }
+
+      const tokenCredits = req.body?.tokenCredits;
+      if (!Number.isInteger(tokenCredits) || tokenCredits < 0) {
+        return res.status(400).json({ error: 'tokenCredits must be a non-negative integer' });
+      }
+
+      const [user] = await findUsers({ _id: id }, USER_LIST_FIELDS, { limit: 1 });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const balance = await upsertBalanceFields(id, { user: id, tokenCredits });
+      const mapped: AdminUserListItem = {
+        id: user._id?.toString() ?? '',
+        name: user.name ?? '',
+        username: user.username ?? '',
+        email: user.email ?? '',
+        avatar: user.avatar ?? '',
+        role: user.role ?? 'USER',
+        provider: user.provider ?? 'local',
+        tokenCredits: balance?.tokenCredits ?? tokenCredits,
+        createdAt: user.createdAt?.toISOString(),
+        updatedAt: user.updatedAt?.toISOString(),
+      };
+
+      return res.status(200).json({ user: mapped });
+    } catch (error) {
+      logger.error('[adminUsers] updateUserBalance error:', error);
+      return res.status(500).json({ error: 'Failed to update user balance' });
     }
   }
 
@@ -179,6 +240,7 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps) {
   return {
     listUsers: listUsersHandler,
     searchUsers: searchUsersHandler,
+    updateUserBalance: updateUserBalanceHandler,
     deleteUser: deleteUserHandler,
   };
 }

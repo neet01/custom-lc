@@ -120,6 +120,7 @@ export type AdminUserListItem = {
   avatar: string;
   role: string;
   provider: string;
+  tokenCredits: number;
   createdAt?: string;
   updatedAt?: string;
 };

@@ -561,6 +561,26 @@ async function getMessage(user, messageId, { includeThread = true } = {}) {
   }
 }
 
+async function updateMessageReadState(user, messageId, isRead) {
+  if (!messageId) {
+    throw new OutlookServiceError('Message id is required', 400);
+  }
+
+  const nextIsRead = Boolean(isRead);
+  await graphRequest(user, `/me/messages/${encodeURIComponent(messageId)}`, {
+    method: 'PATCH',
+    body: {
+      isRead: nextIsRead,
+    },
+  });
+
+  return {
+    messageId,
+    isRead: nextIsRead,
+    message: nextIsRead ? 'Message marked as read.' : 'Message marked as unread.',
+  };
+}
+
 function shouldFetchCalendarContext(message) {
   if (!isEnabled(process.env.OUTLOOK_AI_INCLUDE_CALENDAR)) {
     return false;
@@ -2160,6 +2180,7 @@ module.exports = {
   listMessages,
   getConversationMessages,
   getMessage,
+  updateMessageReadState,
   deleteMessage,
   analyzeMessage,
   createReplyDraft,

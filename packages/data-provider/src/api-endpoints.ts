@@ -85,6 +85,9 @@ export const outlookCreateDraft = (messageId: string) => `${outlookMessage(messa
 
 export const outlookDeleteMessage = (messageId: string) => outlookMessage(messageId);
 
+export const outlookUpdateMessageReadState = (messageId: string) =>
+  `${outlookMessage(messageId)}/read`;
+
 export const outlookMeetingSlots = (messageId: string) =>
   `${outlookMessage(messageId)}/meeting-slots`;
 
@@ -216,6 +219,9 @@ export const resendVerificationEmail = () => `${BASE_URL}/api/user/verify/resend
 
 export const adminUsers = (params: q.AdminUsersListParams = {}) =>
   `${BASE_URL}/api/admin/users${buildQuery(params as Record<string, unknown>)}`;
+
+export const adminUserBalance = (userId: string) =>
+  `${BASE_URL}/api/admin/users/${encodeURIComponent(userId)}/balance`;
 
 export const adminUsage = (params: q.AdminUsageListParams = {}) =>
   `${BASE_URL}/api/admin/usage${buildQuery(params as Record<string, unknown>)}`;

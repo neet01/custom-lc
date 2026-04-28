@@ -67,6 +67,13 @@ export function deleteOutlookMessage(messageId: string): Promise<o.OutlookDelete
   return request.delete(endpoints.outlookDeleteMessage(messageId));
 }
 
+export function updateOutlookMessageReadState(
+  messageId: string,
+  payload: o.OutlookUpdateReadStateRequest,
+): Promise<o.OutlookUpdateReadStateResponse> {
+  return request.patch(endpoints.outlookUpdateMessageReadState(messageId), payload);
+}
+
 export function proposeOutlookMeetingSlots(
   messageId: string,
   payload: o.OutlookMeetingSlotsRequest,
@@ -161,6 +168,13 @@ export function getAdminUsers(
   params: q.AdminUsersListParams = {},
 ): Promise<q.AdminUsersListResponse> {
   return request.get(endpoints.adminUsers(params));
+}
+
+export function updateAdminUserBalance(
+  userId: string,
+  payload: q.AdminUpdateUserBalanceRequest,
+): Promise<q.AdminUpdateUserBalanceResponse> {
+  return request.patch(endpoints.adminUserBalance(userId), payload);
 }
 
 export function getAdminUsage(

@@ -34,6 +34,7 @@ import type {
   OutlookMeetingSlotsResponse,
   OutlookMeetingSlot,
   OutlookMessage,
+  OutlookMessagesResponse,
 } from 'librechat-data-provider';
 import { QueryKeys } from 'librechat-data-provider';
 import {
@@ -45,6 +46,7 @@ import {
   useOutlookMessagesQuery,
   useOutlookStatusQuery,
   useProposeOutlookMeetingSlotsMutation,
+  useUpdateOutlookMessageReadStateMutation,
 } from '~/data-provider';
 import { cn } from '~/utils';
 
@@ -59,6 +61,7 @@ type OutlookConversation = {
 const OUTLOOK_ANALYSIS_CACHE_KEY = 'cortex.outlook.analysisByMessage';
 const OUTLOOK_DENSITY_KEY = 'cortex.outlook.listDensity';
 const DELETE_UNDO_WINDOW_MS = 8000;
+const MAILBOX_REFRESH_INTERVAL_MS = 15000;
 
 type DensityMode = 'comfortable' | 'compact';
 
@@ -839,14 +842,28 @@ export default function OutlookPanel() {
   const mailboxEnabled = Boolean(status?.enabled && status?.connected);
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const normalizedSearchTerm = deferredSearchTerm.trim();
+  const messageListParams = useMemo(
+    () => ({
+      folder: 'inbox' as const,
+      inboxView,
+      limit: 100,
+      search: normalizedSearchTerm || undefined,
+    }),
+    [inboxView, normalizedSearchTerm],
+  );
 
   const {
     data: messageList,
     isLoading: messagesLoading,
     refetch,
   } = useOutlookMessagesQuery(
-    { folder: 'inbox', inboxView, limit: 100, search: normalizedSearchTerm || undefined },
-    { enabled: mailboxEnabled },
+    messageListParams,
+    {
+      enabled: mailboxEnabled,
+      keepPreviousData: true,
+      refetchInterval: mailboxEnabled ? MAILBOX_REFRESH_INTERVAL_MS : false,
+      refetchIntervalInBackground: false,
+    },
   );
 
   const messages = useMemo(() => messageList?.messages ?? [], [messageList?.messages]);
@@ -885,8 +902,53 @@ export default function OutlookPanel() {
   const analyzeMutation = useAnalyzeOutlookMessageMutation();
   const draftMutation = useCreateOutlookDraftMutation();
   const deleteMutation = useDeleteOutlookMessageMutation();
+  const updateReadStateMutation = useUpdateOutlookMessageReadStateMutation();
   const meetingSlotsMutation = useProposeOutlookMeetingSlotsMutation();
   const createMeetingMutation = useCreateOutlookMeetingMutation();
+
+  const updateCachedReadState = useCallback(
+    (messageId: string, isRead: boolean) => {
+      queryClient.setQueryData<OutlookMessagesResponse>(
+        [QueryKeys.outlookMessages, messageListParams],
+        (current) =>
+          current == null
+            ? current
+            : {
+                ...current,
+                messages: current.messages.map((message) =>
+                  message.id === messageId ? { ...message, isRead } : message,
+                ),
+              },
+      );
+      queryClient.setQueryData<OutlookMessage | undefined>(
+        [QueryKeys.outlookMessage, messageId],
+        (current) => (current == null ? current : { ...current, isRead }),
+      );
+    },
+    [messageListParams, queryClient],
+  );
+
+  const handleSelectMessage = useCallback(
+    (message: OutlookMessage) => {
+      startTransition(() => setSelectedId(message.id));
+
+      if (message.isRead) {
+        return;
+      }
+
+      updateCachedReadState(message.id, true);
+      void updateReadStateMutation.mutateAsync({ messageId: message.id, isRead: true }).catch(() => {
+        updateCachedReadState(message.id, false);
+        showToast({
+          message: 'Unable to update Outlook read state.',
+          severity: 'warning',
+          duration: 4000,
+        });
+        void refetch();
+      });
+    },
+    [refetch, showToast, updateCachedReadState, updateReadStateMutation],
+  );
 
   useEffect(() => {
     if (visibleConversations.length === 0) {
@@ -1396,7 +1458,7 @@ export default function OutlookPanel() {
                     'min-w-0 flex-1 rounded-lg px-1 text-left transition-colors hover:bg-surface-hover',
                     densityMode === 'compact' ? 'py-0.5' : 'py-1',
                   )}
-                  onClick={() => setSelectedId(message.id)}
+                  onClick={() => handleSelectMessage(message)}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">

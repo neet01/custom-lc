@@ -136,10 +136,14 @@ export default function ReportIssueButton({
                 onChange={(event) =>
                   setCategory(event.target.value as (typeof CATEGORY_OPTIONS)[number]['value'])
                 }
-                className="rounded-xl border border-border-medium bg-transparent px-3 py-2"
+                className="rounded-xl border border-border-medium bg-surface-primary px-3 py-2 text-text-primary [color-scheme:light] dark:[color-scheme:dark]"
               >
                 {CATEGORY_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
+                  <option
+                    key={option.value}
+                    value={option.value}
+                    className="bg-surface-primary text-text-primary"
+                  >
                     {option.label}
                   </option>
                 ))}

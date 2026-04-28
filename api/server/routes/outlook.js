@@ -191,6 +191,33 @@ router.get('/messages/:messageId', async (req, res) => {
   }
 });
 
+router.patch('/messages/:messageId/read', async (req, res) => {
+  if (typeof req.body?.isRead !== 'boolean') {
+    return res.status(400).json({ message: 'isRead must be a boolean' });
+  }
+
+  try {
+    const result = await OutlookService.updateMessageReadState(
+      req.user,
+      req.params.messageId,
+      req.body.isRead,
+    );
+    await recordAudit(req, {
+      action: result.isRead ? 'message_marked_read' : 'message_marked_unread',
+      status: 'success',
+      graphMessageId: result.messageId,
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: req.body.isRead ? 'message_marked_read' : 'message_marked_unread',
+      graphMessageId: req.params.messageId,
+      ...getErrorAudit(error),
+    });
+    handleOutlookError(res, error);
+  }
+});
+
 router.delete('/messages/:messageId', async (req, res) => {
   try {
     const result = await OutlookService.deleteMessage(req.user, req.params.messageId);

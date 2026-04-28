@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Spinner } from '@librechat/client';
+import { Spinner, useToastContext } from '@librechat/client';
 import { BarChart3, Mail, ShieldAlert, Users } from 'lucide-react';
 import { SystemRoles } from 'librechat-data-provider';
 import type {
@@ -12,6 +12,7 @@ import type {
 import {
   useAdminIssuesQuery,
   useAdminOutlookAuditQuery,
+  useAdminUpdateUserBalanceMutation,
   useAdminUsageQuery,
   useAdminUsageSummaryQuery,
   useAdminUsersQuery,
@@ -43,15 +44,7 @@ function formatAuditAction(action: string) {
     .join(' ');
 }
 
-function MetricCard({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string;
-  detail?: string;
-}) {
+function MetricCard({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
     <div className="rounded-2xl border border-border-medium bg-surface-secondary p-4">
       <div className="text-xs uppercase tracking-[0.18em] text-text-secondary">{label}</div>
@@ -75,7 +68,7 @@ function TableShell({
   return (
     <section
       className={cn(
-        'rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-sm',
+        'flex min-h-0 flex-col rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-sm',
         className,
       )}
     >
@@ -83,7 +76,7 @@ function TableShell({
         <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
         {description ? <p className="mt-1 text-xs text-text-secondary">{description}</p> : null}
       </div>
-      {children}
+      <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </section>
   );
 }
@@ -205,6 +198,7 @@ function AccessDenied() {
 
 function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const { user } = useAuthContext();
+  const { showToast } = useToastContext();
   const [days, setDays] = useState(30);
   const [activeTab, setActiveTab] = useState<AdminTab>('usage-users');
   const [summaryOffset, setSummaryOffset] = useState(0);
@@ -212,7 +206,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const [usersOffset, setUsersOffset] = useState(0);
   const [issuesOffset, setIssuesOffset] = useState(0);
   const [outlookAuditOffset, setOutlookAuditOffset] = useState(0);
+  const [balanceDrafts, setBalanceDrafts] = useState<Record<string, string>>({});
   const isAdmin = user?.role === SystemRoles.ADMIN;
+  const updateUserBalance = useAdminUpdateUserBalanceMutation();
 
   const usersQuery = useAdminUsersQuery(
     { limit: PAGE_SIZE, offset: usersOffset },
@@ -298,17 +294,65 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const outlookAudits = outlookAuditQuery.data?.audits ?? [];
   const directoryUsers = usersQuery.data?.users ?? [];
 
+  const handleBalanceSave = async (row: AdminUserListItem) => {
+    const rawValue = balanceDrafts[row.id] ?? String(row.tokenCredits ?? 0);
+    const trimmed = rawValue.trim();
+    const parsed = Number(trimmed);
+
+    if (!trimmed || !Number.isInteger(parsed) || parsed < 0) {
+      showToast({
+        status: 'error',
+        message: 'Balance must be a non-negative integer.',
+      });
+      return;
+    }
+
+    if (parsed === row.tokenCredits) {
+      setBalanceDrafts((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      return;
+    }
+
+    try {
+      await updateUserBalance.mutateAsync({ userId: row.id, tokenCredits: parsed });
+      setBalanceDrafts((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      showToast({
+        status: 'success',
+        message: 'User balance updated.',
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message ? error.message : 'Failed to update user balance.';
+      showToast({
+        status: 'error',
+        message,
+      });
+    }
+  };
+
   return (
     <div
       className={cn(
-        'flex flex-col gap-4 text-sm text-text-primary',
+        'flex min-h-0 flex-col gap-4 text-sm text-text-primary',
         workspaceMode ? 'h-full overflow-y-auto p-6' : 'p-1',
       )}
     >
       <div className="rounded-2xl border border-border-medium bg-surface-secondary p-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h2 className={cn('font-semibold text-text-primary', workspaceMode ? 'text-xl' : 'text-base')}>
+            <h2
+              className={cn(
+                'font-semibold text-text-primary',
+                workspaceMode ? 'text-xl' : 'text-base',
+              )}
+            >
               Admin reporting
             </h2>
             <p className="mt-1 text-xs text-text-secondary">
@@ -405,9 +449,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="Usage by user"
               description="Token and request totals for users active in the selected reporting window."
-              className={workspaceMode ? 'min-h-[55vh]' : undefined}
+              className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
-              <div className="overflow-x-auto">
+              <div className="min-h-0 flex-1 overflow-auto">
                 <table className="min-w-full divide-y divide-border-medium text-left">
                   <thead>
                     <tr className="text-xs uppercase tracking-wide text-text-secondary">
@@ -427,7 +471,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                           <div className="font-medium text-text-primary">
                             {row.name || row.username || row.email || row.userId}
                           </div>
-                          <div className="text-xs text-text-secondary">{row.email || row.username}</div>
+                          <div className="text-xs text-text-secondary">
+                            {row.email || row.username}
+                          </div>
                         </td>
                         <td className="py-3 pr-4 text-text-secondary">{row.role}</td>
                         <td className="py-3 pr-4">{formatNumber(row.requestCount)}</td>
@@ -440,7 +486,10 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                       </tr>
                     ))}
                     {usageUsers.length === 0 ? (
-                      <EmptyRow colSpan={7} message="No active users were returned for this time window." />
+                      <EmptyRow
+                        colSpan={7}
+                        message="No active users were returned for this time window."
+                      />
                     ) : null}
                   </tbody>
                 </table>
@@ -458,9 +507,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="Recent requests"
               description="Latest tracked model requests, including request source, model, and token totals."
-              className={workspaceMode ? 'min-h-[55vh]' : undefined}
+              className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
-              <div className="overflow-x-auto">
+              <div className="min-h-0 flex-1 overflow-auto">
                 <table className="min-w-full divide-y divide-border-medium text-left">
                   <thead>
                     <tr className="text-xs uppercase tracking-wide text-text-secondary">
@@ -485,7 +534,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                             {matchedUser?.email || matchedUser?.name || record.userId}
                           </td>
                           <td className="py-3 pr-4">{record.model || record.provider || 'n/a'}</td>
-                          <td className="py-3 pr-4">{record.context || record.endpoint || 'n/a'}</td>
+                          <td className="py-3 pr-4">
+                            {record.context || record.endpoint || 'n/a'}
+                          </td>
                           <td className="py-3 pr-4">{record.source || 'system'}</td>
                           <td className="py-3 pr-4">{formatNumber(record.totalTokens)}</td>
                           <td className="py-3 pr-4 text-text-secondary">
@@ -513,13 +564,14 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="User directory"
               description="All users known to LibreChat, independent of current activity in the reporting window."
-              className={workspaceMode ? 'min-h-[55vh]' : undefined}
+              className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
-              <div className="overflow-x-auto">
+              <div className="min-h-0 flex-1 overflow-auto">
                 <table className="min-w-full divide-y divide-border-medium text-left">
                   <thead>
                     <tr className="text-xs uppercase tracking-wide text-text-secondary">
                       <th className="py-2 pr-4 font-medium">User</th>
+                      <th className="py-2 pr-4 font-medium">Balance</th>
                       <th className="py-2 pr-4 font-medium">Role</th>
                       <th className="py-2 pr-4 font-medium">Provider</th>
                       <th className="py-2 pr-4 font-medium">Created</th>
@@ -533,7 +585,48 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                           <div className="font-medium text-text-primary">
                             {row.name || row.username || row.email || row.id}
                           </div>
-                          <div className="text-xs text-text-secondary">{row.email || row.username}</div>
+                          <div className="text-xs text-text-secondary">
+                            {row.email || row.username}
+                          </div>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <div className="flex min-w-[13rem] items-center gap-2">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={balanceDrafts[row.id] ?? String(row.tokenCredits ?? 0)}
+                              onChange={(event) =>
+                                setBalanceDrafts((current) => ({
+                                  ...current,
+                                  [row.id]: event.target.value,
+                                }))
+                              }
+                              className="w-28 rounded-lg border border-border-medium bg-surface-secondary px-3 py-2 text-sm text-text-primary [color-scheme:light] dark:[color-scheme:dark]"
+                            />
+                            <button
+                              type="button"
+                              className="rounded-lg border border-border-medium px-3 py-2 text-xs font-medium text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                              onClick={() => void handleBalanceSave(row)}
+                              disabled={
+                                updateUserBalance.isLoading ||
+                                !Number.isInteger(
+                                  Number(balanceDrafts[row.id] ?? row.tokenCredits),
+                                ) ||
+                                Number(balanceDrafts[row.id] ?? row.tokenCredits) < 0 ||
+                                Number(balanceDrafts[row.id] ?? row.tokenCredits) ===
+                                  row.tokenCredits
+                              }
+                            >
+                              {updateUserBalance.isLoading &&
+                              updateUserBalance.variables?.userId === row.id
+                                ? 'Saving...'
+                                : 'Save'}
+                            </button>
+                          </div>
+                          <div className="mt-1 text-xs text-text-secondary">
+                            {formatNumber(row.tokenCredits)} credits
+                          </div>
                         </td>
                         <td className="py-3 pr-4 text-text-secondary">{row.role}</td>
                         <td className="py-3 pr-4 text-text-secondary">{row.provider}</td>
@@ -546,7 +639,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                       </tr>
                     ))}
                     {directoryUsers.length === 0 ? (
-                      <EmptyRow colSpan={5} message="No users were returned by the admin API." />
+                      <EmptyRow colSpan={6} message="No users were returned by the admin API." />
                     ) : null}
                   </tbody>
                 </table>
@@ -564,9 +657,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="Outlook AI audit trail"
               description="Metadata-only trace of AI Inbox views, analyses, and draft creation. Email bodies are not stored here."
-              className={workspaceMode ? 'min-h-[55vh]' : undefined}
+              className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
-              <div className="overflow-x-auto">
+              <div className="min-h-0 flex-1 overflow-auto">
                 <table className="min-w-full divide-y divide-border-medium text-left">
                   <thead>
                     <tr className="text-xs uppercase tracking-wide text-text-secondary">
@@ -620,7 +713,10 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                       </tr>
                     ))}
                     {outlookAudits.length === 0 ? (
-                      <EmptyRow colSpan={7} message="No Outlook AI audit records have been captured yet." />
+                      <EmptyRow
+                        colSpan={7}
+                        message="No Outlook AI audit records have been captured yet."
+                      />
                     ) : null}
                   </tbody>
                 </table>
@@ -638,9 +734,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="Reported issues"
               description="Open user reports for bad responses, MCP failures, and file transformation problems."
-              className={workspaceMode ? 'min-h-[55vh]' : undefined}
+              className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
-              <div className="overflow-x-auto">
+              <div className="min-h-0 flex-1 overflow-auto">
                 <table className="min-w-full divide-y divide-border-medium text-left">
                   <thead>
                     <tr className="text-xs uppercase tracking-wide text-text-secondary">

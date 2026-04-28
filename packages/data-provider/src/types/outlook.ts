@@ -99,6 +99,16 @@ export type OutlookDeleteResponse = {
   message: string;
 };
 
+export type OutlookUpdateReadStateRequest = {
+  isRead: boolean;
+};
+
+export type OutlookUpdateReadStateResponse = {
+  messageId: string;
+  isRead: boolean;
+  message: string;
+};
+
 export type OutlookDateTimeTimeZone = {
   dateTime: string;
   timeZone: string;

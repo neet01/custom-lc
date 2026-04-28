@@ -19,6 +19,7 @@ import type {
   OutlookMessagesParams,
   OutlookMessagesResponse,
   OutlookStatusResponse,
+  OutlookUpdateReadStateResponse,
 } from 'librechat-data-provider';
 import store from '~/store';
 
@@ -96,6 +97,16 @@ export const useDeleteOutlookMessageMutation = (): UseMutationResult<
   string
 > => {
   return useMutation((messageId: string) => dataService.deleteOutlookMessage(messageId));
+};
+
+export const useUpdateOutlookMessageReadStateMutation = (): UseMutationResult<
+  OutlookUpdateReadStateResponse,
+  unknown,
+  { messageId: string; isRead: boolean }
+> => {
+  return useMutation(({ messageId, isRead }) =>
+    dataService.updateOutlookMessageReadState(messageId, { isRead }),
+  );
 };
 
 export const useProposeOutlookMeetingSlotsMutation = (): UseMutationResult<

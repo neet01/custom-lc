@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { PrincipalType, SystemRoles } from 'librechat-data-provider';
-import type { IUser, UserDeleteResult } from '@librechat/data-schemas';
+import type { IBalance, IUser, UserDeleteResult } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
 import type { AdminUsersDeps } from './users';
@@ -58,6 +58,10 @@ function createDeps(overrides: Partial<AdminUsersDeps> = {}): AdminUsersDeps {
       .mockResolvedValue({ deletedCount: 1, message: 'User was deleted successfully.' }),
     deleteConfig: jest.fn().mockResolvedValue(null),
     deleteAclEntries: jest.fn().mockResolvedValue(undefined),
+    findBalanceByUser: jest.fn().mockResolvedValue(null),
+    upsertBalanceFields: jest
+      .fn()
+      .mockResolvedValue({ user: validUserId, tokenCredits: 0 } as unknown as IBalance),
     ...overrides,
   };
 }
@@ -88,6 +92,24 @@ describe('createAdminUsersHandlers', () => {
       expect(response.users[0]).toHaveProperty('name');
       expect(response.users[0]).toHaveProperty('email');
       expect(response.users[0]).toHaveProperty('role');
+      expect(response.users[0]).toHaveProperty('tokenCredits');
+    });
+
+    it('includes user balances when records exist', async () => {
+      const user = mockUser({ _id: new Types.ObjectId(validUserId) });
+      const deps = createDeps({
+        findUsers: jest.fn().mockResolvedValue([user]),
+        countUsers: jest.fn().mockResolvedValue(1),
+        findBalanceByUser: jest
+          .fn()
+          .mockResolvedValue({ user: validUserId, tokenCredits: 4200 } as unknown as IBalance),
+      });
+      const handlers = createAdminUsersHandlers(deps);
+      const { req, res, json } = createReqRes();
+
+      await handlers.listUsers(req, res);
+
+      expect(json.mock.calls[0][0].users[0].tokenCredits).toBe(4200);
     });
 
     it('passes pagination params to findUsers and unfiltered count', async () => {
@@ -141,6 +163,93 @@ describe('createAdminUsersHandlers', () => {
 
       expect(status).toHaveBeenCalledWith(500);
       expect(json).toHaveBeenCalledWith({ error: 'Failed to list users' });
+    });
+  });
+
+  describe('updateUserBalance', () => {
+    it('updates user balance and returns the mapped user', async () => {
+      const user = mockUser({ _id: new Types.ObjectId(validUserId) });
+      const deps = createDeps({
+        findUsers: jest.fn().mockResolvedValue([user]),
+        upsertBalanceFields: jest
+          .fn()
+          .mockResolvedValue({ user: validUserId, tokenCredits: 9000 } as unknown as IBalance),
+      });
+      const handlers = createAdminUsersHandlers(deps);
+      const { req, res, status, json } = createReqRes({ params: { id: validUserId } });
+      req.body = { tokenCredits: 9000 };
+
+      await handlers.updateUserBalance(req, res);
+
+      expect(status).toHaveBeenCalledWith(200);
+      expect(deps.upsertBalanceFields).toHaveBeenCalledWith(validUserId, {
+        user: validUserId,
+        tokenCredits: 9000,
+      });
+      expect(json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          user: expect.objectContaining({
+            id: validUserId,
+            tokenCredits: 9000,
+          }),
+        }),
+      );
+    });
+
+    it('returns 400 for invalid user id', async () => {
+      const deps = createDeps();
+      const handlers = createAdminUsersHandlers(deps);
+      const { req, res, status, json } = createReqRes({ params: { id: 'bad-id' } });
+      req.body = { tokenCredits: 1000 };
+
+      await handlers.updateUserBalance(req, res);
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({ error: 'Invalid user ID format' });
+    });
+
+    it('returns 400 for negative balances', async () => {
+      const deps = createDeps();
+      const handlers = createAdminUsersHandlers(deps);
+      const { req, res, status, json } = createReqRes({ params: { id: validUserId } });
+      req.body = { tokenCredits: -1 };
+
+      await handlers.updateUserBalance(req, res);
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({
+        error: 'tokenCredits must be a non-negative integer',
+      });
+    });
+
+    it('returns 404 when target user does not exist', async () => {
+      const deps = createDeps({
+        findUsers: jest.fn().mockResolvedValue([]),
+      });
+      const handlers = createAdminUsersHandlers(deps);
+      const { req, res, status, json } = createReqRes({ params: { id: validUserId } });
+      req.body = { tokenCredits: 2500 };
+
+      await handlers.updateUserBalance(req, res);
+
+      expect(status).toHaveBeenCalledWith(404);
+      expect(json).toHaveBeenCalledWith({ error: 'User not found' });
+    });
+
+    it('returns 500 when the balance update fails', async () => {
+      const user = mockUser({ _id: new Types.ObjectId(validUserId) });
+      const deps = createDeps({
+        findUsers: jest.fn().mockResolvedValue([user]),
+        upsertBalanceFields: jest.fn().mockRejectedValue(new Error('write failed')),
+      });
+      const handlers = createAdminUsersHandlers(deps);
+      const { req, res, status, json } = createReqRes({ params: { id: validUserId } });
+      req.body = { tokenCredits: 777 };
+
+      await handlers.updateUserBalance(req, res);
+
+      expect(status).toHaveBeenCalledWith(500);
+      expect(json).toHaveBeenCalledWith({ error: 'Failed to update user balance' });
     });
   });
 

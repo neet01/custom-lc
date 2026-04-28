@@ -252,6 +252,7 @@ export type AdminUserListItem = {
   avatar: string;
   role: string;
   provider: string;
+  tokenCredits: number;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -261,6 +262,14 @@ export type AdminUsersListResponse = {
   total: number;
   limit: number;
   offset?: number;
+};
+
+export type AdminUpdateUserBalanceRequest = {
+  tokenCredits: number;
+};
+
+export type AdminUpdateUserBalanceResponse = {
+  user: AdminUserListItem;
 };
 
 export type AdminUsageListItem = {

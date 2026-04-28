@@ -1,7 +1,11 @@
 import { useRecoilValue } from 'recoil';
 import { QueryKeys, dataService } from 'librechat-data-provider';
-import { useQuery } from '@tanstack/react-query';
-import type { QueryObserverResult, UseQueryOptions } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type {
+  QueryObserverResult,
+  UseMutationResult,
+  UseQueryOptions,
+} from '@tanstack/react-query';
 import type t from 'librechat-data-provider';
 import store from '~/store';
 
@@ -96,6 +100,67 @@ export const useAdminOutlookAuditQuery = (
       refetchOnMount: false,
       ...config,
       enabled: (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};
+
+export const useAdminUpdateUserBalanceMutation = (): UseMutationResult<
+  t.AdminUpdateUserBalanceResponse,
+  unknown,
+  { userId: string; tokenCredits: number },
+  { previousUsers: [unknown[], t.AdminUsersListResponse | undefined][] }
+> => {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    ({ userId, tokenCredits }) =>
+      dataService.updateAdminUserBalance(userId, {
+        tokenCredits,
+      }),
+    {
+      onMutate: async ({ userId, tokenCredits }) => {
+        await queryClient.cancelQueries([QueryKeys.adminUsers]);
+        const previousUsers = queryClient.getQueriesData<t.AdminUsersListResponse>([
+          QueryKeys.adminUsers,
+        ]);
+
+        queryClient.setQueriesData<t.AdminUsersListResponse>([QueryKeys.adminUsers], (current) => {
+          if (!current) {
+            return current;
+          }
+
+          return {
+            ...current,
+            users: current.users.map((user) =>
+              user.id === userId ? { ...user, tokenCredits } : user,
+            ),
+          };
+        });
+
+        return { previousUsers };
+      },
+      onError: (_error, _variables, context) => {
+        for (const [queryKey, previousValue] of context?.previousUsers ?? []) {
+          queryClient.setQueryData(queryKey, previousValue);
+        }
+      },
+      onSuccess: ({ user }) => {
+        queryClient.setQueriesData<t.AdminUsersListResponse>([QueryKeys.adminUsers], (current) => {
+          if (!current) {
+            return current;
+          }
+
+          return {
+            ...current,
+            users: current.users.map((existingUser) =>
+              existingUser.id === user.id ? user : existingUser,
+            ),
+          };
+        });
+      },
+      onSettled: () => {
+        queryClient.invalidateQueries([QueryKeys.adminUsers]);
+      },
     },
   );
 };

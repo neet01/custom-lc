@@ -265,6 +265,48 @@ describe('Spreadsheet transform service', () => {
     );
   });
 
+  it('preserves existing cell formatting for transformed workbooks', async () => {
+    const workbook = utils.book_new();
+    const worksheet = utils.aoa_to_sheet([
+      ['Employee', 'Revenue', 'Expense'],
+      ['Alice', 2000, 500],
+      ['Bob', 1500, 400],
+    ]);
+    worksheet.B1.s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '1F4E78' } } };
+    worksheet.B2.s = { numFmt: '$#,##0.00', fill: { fgColor: { rgb: 'FFF2CC' } } };
+    worksheet.B2.z = '$#,##0.00';
+    worksheet.C2.s = { numFmt: '$#,##0.00', fill: { fgColor: { rgb: 'FCE4D6' } } };
+    worksheet.C2.z = '$#,##0.00';
+    utils.book_append_sheet(workbook, worksheet, 'Styled');
+
+    const inputBuffer = Buffer.from(
+      write(workbook, { type: 'buffer', bookType: 'xlsx', cellStyles: true }),
+    );
+    const result = await transformSpreadsheetBuffer({
+      buffer: inputBuffer,
+      sourceFilename: 'styled.xlsx',
+      outputFormat: 'xlsx',
+      operations: [
+        {
+          type: 'add_column',
+          sheetName: 'Styled',
+          columnName: 'Net',
+          expression: '{{Revenue}} - {{Expense}}',
+        },
+      ],
+    });
+
+    const outputWorkbook = read(result.buffer, {
+      type: 'buffer',
+      cellStyles: true,
+      cellNF: true,
+    });
+    expect(outputWorkbook.Sheets.Styled.B1.s).toBeTruthy();
+    expect(outputWorkbook.Sheets.Styled.B2.s).toBeTruthy();
+    expect(outputWorkbook.Sheets.Styled.B2.z).toBe('$#,##0.00');
+    expect(outputWorkbook.Sheets.Styled.D2.s).toBeTruthy();
+  });
+
   it('recognizes supported spreadsheet MIME types', () => {
     expect(isSpreadsheetTransformable('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe(true);
     expect(isSpreadsheetTransformable('text/csv')).toBe(true);

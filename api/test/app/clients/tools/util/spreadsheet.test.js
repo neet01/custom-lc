@@ -173,5 +173,70 @@ describe('spreadsheet tool', () => {
         }),
       );
     });
+
+    it('makes a generated spreadsheet immediately reusable within the same tool instance', async () => {
+      transformSpreadsheetFile
+        .mockResolvedValueOnce({
+          file: {
+            file_id: 'file-2',
+            filename: 'runway-transformed.xlsx',
+            filepath: '/uploads/runway-transformed.xlsx',
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          },
+          summary: {
+            matchedColumns: {
+              remove: ['Salary'],
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          file: {
+            file_id: 'file-3',
+            filename: 'runway-transformed-twice.xlsx',
+            filepath: '/uploads/runway-transformed-twice.xlsx',
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          },
+          summary: {
+            matchedColumns: {
+              keep: ['Employee'],
+            },
+          },
+        });
+
+      const spreadsheetTool = await createSpreadsheetTool({
+        req,
+        res: {},
+        files: [spreadsheetFile],
+      });
+
+      await spreadsheetTool.func({
+        action: 'transform',
+        file_id: 'file-1',
+        removeColumns: ['Salary'],
+      });
+
+      const secondResult = await spreadsheetTool.func({
+        action: 'transform',
+        file_id: 'file-2',
+        keepColumns: ['Employee'],
+      });
+
+      expect(transformSpreadsheetFile).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          sourceFile: expect.objectContaining({
+            file_id: 'file-2',
+            filename: 'runway-transformed.xlsx',
+          }),
+          keepColumns: ['Employee'],
+        }),
+      );
+      expect(req.body.files).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ file_id: 'file-2', filename: 'runway-transformed.xlsx' }),
+        ]),
+      );
+      expect(secondResult[1].files[0].file_id).toBe('file-3');
+    });
   });
 });

@@ -152,5 +152,68 @@ describe('word document tool', () => {
         }),
       );
     });
+
+    it('makes a generated Word document immediately reusable within the same tool instance', async () => {
+      transformWordDocumentFile
+        .mockResolvedValueOnce({
+          file: {
+            file_id: 'file-2',
+            filename: 'proposal-redacted.docx',
+            filepath: '/uploads/proposal-redacted.docx',
+            type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          },
+          summary: {
+            redactions: [{ phrase: 'Internal Only', occurrences: 1 }],
+          },
+        })
+        .mockResolvedValueOnce({
+          file: {
+            file_id: 'file-3',
+            filename: 'proposal-redacted-v2.docx',
+            filepath: '/uploads/proposal-redacted-v2.docx',
+            type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          },
+          summary: {
+            replacements: [{ find: 'Confidential', replace: 'Restricted' }],
+          },
+        });
+
+      const wordTool = await createWordDocumentTool({
+        req,
+        res: {},
+        files: [wordFile],
+      });
+
+      await wordTool.func({
+        action: 'transform',
+        file_id: 'file-1',
+        redactPhrases: ['Internal Only'],
+        outputFilename: 'proposal-redacted.docx',
+      });
+
+      const secondResult = await wordTool.func({
+        action: 'transform',
+        file_id: 'file-2',
+        replaceText: [{ find: 'Confidential', replace: 'Restricted' }],
+        outputFilename: 'proposal-redacted-v2.docx',
+      });
+
+      expect(transformWordDocumentFile).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          sourceFile: expect.objectContaining({
+            file_id: 'file-2',
+            filename: 'proposal-redacted.docx',
+          }),
+          outputFilename: 'proposal-redacted-v2.docx',
+        }),
+      );
+      expect(req.body.files).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ file_id: 'file-2', filename: 'proposal-redacted.docx' }),
+        ]),
+      );
+      expect(secondResult[1].files[0].file_id).toBe('file-3');
+    });
   });
 });

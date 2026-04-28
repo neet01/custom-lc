@@ -91,6 +91,21 @@ function cloneCell(cell) {
   return cell ? JSON.parse(JSON.stringify(cell)) : cell;
 }
 
+function cloneCellTemplate(cell) {
+  if (!cell) {
+    return null;
+  }
+
+  const nextCell = cloneCell(cell);
+  delete nextCell.v;
+  delete nextCell.w;
+  delete nextCell.t;
+  delete nextCell.f;
+  delete nextCell.r;
+  delete nextCell.h;
+  return nextCell;
+}
+
 function cloneArrayValue(value) {
   return Array.isArray(value) ? JSON.parse(JSON.stringify(value)) : [];
 }
@@ -449,6 +464,24 @@ function trimTrailingEmptyCells(row) {
   return nextRow;
 }
 
+function getTemplateRow({ worksheet, utils, rowIndex, width }) {
+  return Array.from({ length: width }, (_value, columnIndex) =>
+    cloneCellTemplate(worksheet[utils.encode_cell({ r: rowIndex, c: columnIndex })]),
+  );
+}
+
+function cloneTemplateRow(rowTemplates, width) {
+  return Array.from({ length: width }, (_value, columnIndex) =>
+    cloneCell(rowTemplates?.[columnIndex]) ?? null,
+  );
+}
+
+function deriveInsertedTemplateCell(rowTemplates, insertIndex) {
+  const leftTemplate = rowTemplates?.[insertIndex - 1] ?? null;
+  const rightTemplate = rowTemplates?.[insertIndex] ?? null;
+  return cloneCell(leftTemplate ?? rightTemplate) ?? null;
+}
+
 function toWorksheetModel({ sheetName, worksheet, utils }) {
   if (!worksheet?.['!ref']) {
     return {
@@ -459,6 +492,9 @@ function toWorksheetModel({ sheetName, worksheet, utils }) {
       headerRowMeta: {},
       dataRows: [],
       dataRowMeta: [],
+      prefixCellTemplates: [],
+      headerCellTemplates: [],
+      dataCellTemplates: [],
       cols: [],
       merges: [],
       autofilter: null,
@@ -488,6 +524,7 @@ function toWorksheetModel({ sheetName, worksheet, utils }) {
 
   const rowMeta = cloneArrayValue(worksheet['!rows']);
   const headerMetaIndex = prefixRows.length;
+  const width = headers.length;
 
   return {
     sheetName,
@@ -499,6 +536,18 @@ function toWorksheetModel({ sheetName, worksheet, utils }) {
     dataRowMeta: rowMeta
       .slice(headerMetaIndex + 1, headerMetaIndex + 1 + dataRows.length)
       .map(cloneObjectValue),
+    prefixCellTemplates: prefixRows.map((_row, rowIndex) =>
+      getTemplateRow({ worksheet, utils, rowIndex: range.s.r + rowIndex, width }),
+    ),
+    headerCellTemplates: getTemplateRow({ worksheet, utils, rowIndex: headerRowIndex, width }),
+    dataCellTemplates: dataRows.map((_row, dataRowIndex) =>
+      getTemplateRow({
+        worksheet,
+        utils,
+        rowIndex: headerRowIndex + 1 + dataRowIndex,
+        width,
+      }),
+    ),
     cols: cloneArrayValue(worksheet['!cols']).map(cloneObjectValue),
     merges: cloneArrayValue(worksheet['!merges']),
     autofilter: worksheet['!autofilter'] ? cloneObjectValue(worksheet['!autofilter']) : null,
@@ -515,6 +564,13 @@ function cloneWorksheetModel(model, sheetNameOverride) {
     headerRowMeta: cloneObjectValue(model.headerRowMeta),
     dataRows: model.dataRows.map((row) => [...row]),
     dataRowMeta: model.dataRowMeta.map(cloneObjectValue),
+    prefixCellTemplates: model.prefixCellTemplates.map((rowTemplates) =>
+      rowTemplates.map((cell) => cloneCell(cell) ?? null),
+    ),
+    headerCellTemplates: model.headerCellTemplates.map((cell) => cloneCell(cell) ?? null),
+    dataCellTemplates: model.dataCellTemplates.map((rowTemplates) =>
+      rowTemplates.map((cell) => cloneCell(cell) ?? null),
+    ),
     cols: model.cols.map(cloneObjectValue),
     merges: cloneArrayValue(model.merges),
     autofilter: model.autofilter ? cloneObjectValue(model.autofilter) : null,
@@ -757,10 +813,22 @@ function applyAddColumnOperation({ model, operation, outputFormat, utils }) {
     nextRow.splice(insertIndex, 0, '');
     return nextRow;
   });
+  model.prefixCellTemplates = model.prefixCellTemplates.map((rowTemplates) => {
+    const nextTemplates = cloneTemplateRow(rowTemplates, model.headers.length - 1);
+    nextTemplates.splice(insertIndex, 0, deriveInsertedTemplateCell(nextTemplates, insertIndex));
+    return nextTemplates;
+  });
+  const nextHeaderTemplates = cloneTemplateRow(model.headerCellTemplates, model.headers.length - 1);
+  nextHeaderTemplates.splice(insertIndex, 0, deriveInsertedTemplateCell(nextHeaderTemplates, insertIndex));
+  model.headerCellTemplates = nextHeaderTemplates;
   model.merges = shiftMergesForColumnInsert(model.merges, insertIndex);
 
   model.dataRows = model.dataRows.map((row, dataRowIndex) => {
     const nextRow = padRow(row, model.headers.length - 1);
+    const nextTemplates = cloneTemplateRow(
+      model.dataCellTemplates[dataRowIndex],
+      model.headers.length - 1,
+    );
     const rowObject = buildRowObject(
       {
         ...model,
@@ -780,6 +848,8 @@ function applyAddColumnOperation({ model, operation, outputFormat, utils }) {
     });
 
     nextRow.splice(insertIndex, 0, value ?? '');
+    nextTemplates.splice(insertIndex, 0, deriveInsertedTemplateCell(nextTemplates, insertIndex));
+    model.dataCellTemplates[dataRowIndex] = nextTemplates;
     if (formula) {
       setFormulaCell(model, dataRowIndex, insertIndex, formula);
     }
@@ -842,7 +912,20 @@ function applyAddRowOperation({ model, operation }) {
   }
 
   model.dataRows.splice(insertIndex, 0, nextRow);
-  model.dataRowMeta.splice(insertIndex, 0, {});
+  const neighborRowMeta =
+    cloneObjectValue(model.dataRowMeta[insertIndex - 1]) ||
+    cloneObjectValue(model.dataRowMeta[insertIndex]) ||
+    {};
+  model.dataRowMeta.splice(insertIndex, 0, neighborRowMeta);
+  const neighborRowTemplates =
+    model.dataCellTemplates[insertIndex - 1] ??
+    model.dataCellTemplates[insertIndex] ??
+    model.headerCellTemplates;
+  model.dataCellTemplates.splice(
+    insertIndex,
+    0,
+    cloneTemplateRow(neighborRowTemplates, model.headers.length),
+  );
 
   if (model.cellFormulas.size > 0) {
     const nextEntries = [];
@@ -920,6 +1003,7 @@ function applySortRowsOperation({ model, operation }) {
   const decoratedRows = model.dataRows.map((row, dataRowIndex) => ({
     row: [...row],
     rowMeta: cloneObjectValue(model.dataRowMeta[dataRowIndex]),
+    rowTemplates: cloneTemplateRow(model.dataCellTemplates[dataRowIndex], model.headers.length),
     formulas: getFormulaEntriesForRow(model, dataRowIndex),
     originalIndex: dataRowIndex,
   }));
@@ -942,6 +1026,7 @@ function applySortRowsOperation({ model, operation }) {
 
   model.dataRows = decoratedRows.map((entry) => entry.row);
   model.dataRowMeta = decoratedRows.map((entry) => entry.rowMeta);
+  model.dataCellTemplates = decoratedRows.map((entry) => entry.rowTemplates);
   model.cellFormulas = new Map();
   decoratedRows.forEach((entry, newRowIndex) => {
     const oldRowNumber = getExcelDataRowNumber(model, entry.originalIndex);
@@ -983,6 +1068,7 @@ function applyReorderRowsOperation({ model, operation }) {
   const orderedEntries = requestedIndexes.map((value) => ({
     row: [...model.dataRows[value - 1]],
     rowMeta: cloneObjectValue(model.dataRowMeta[value - 1]),
+    rowTemplates: cloneTemplateRow(model.dataCellTemplates[value - 1], model.headers.length),
     formulas: getFormulaEntriesForRow(model, value - 1),
     originalIndex: value - 1,
   }));
@@ -993,6 +1079,7 @@ function applyReorderRowsOperation({ model, operation }) {
         .map((row, dataRowIndex) => ({
           row: [...row],
           rowMeta: cloneObjectValue(model.dataRowMeta[dataRowIndex]),
+          rowTemplates: cloneTemplateRow(model.dataCellTemplates[dataRowIndex], model.headers.length),
           formulas: getFormulaEntriesForRow(model, dataRowIndex),
           dataRowIndex,
           originalIndex: dataRowIndex,
@@ -1003,6 +1090,7 @@ function applyReorderRowsOperation({ model, operation }) {
   model.dataRows = orderedEntries.concat(remainingEntries).map((entry) => entry.row);
   model.dataRowMeta = orderedEntries.concat(remainingEntries).map((entry) => entry.rowMeta);
   const reorderedEntries = orderedEntries.concat(remainingEntries);
+  model.dataCellTemplates = reorderedEntries.map((entry) => entry.rowTemplates);
   model.cellFormulas = new Map();
   reorderedEntries.forEach((entry, newRowIndex) => {
     const oldRowNumber = getExcelDataRowNumber(model, entry.originalIndex);
@@ -1067,18 +1155,45 @@ function buildMergedSheetModel({
   }
 
   const dataRows = [];
+  const dataCellTemplates = [];
   for (const model of sourceModels) {
-    for (const row of model.dataRows) {
-      const rowObject = buildRowObject(model, row, 0);
+    for (const [dataRowIndex, row] of model.dataRows.entries()) {
+      const rowObject = buildRowObject(model, row, dataRowIndex);
       const nextRow = mergedHeaders.map((header) => {
         if (header === 'Source Sheet') {
           return model.sheetName;
         }
         return rowObject[header] ?? '';
       });
+      const nextTemplates = mergedHeaders.map((header) => {
+        if (header === 'Source Sheet') {
+          return cloneCell(model.headerCellTemplates[0]) ?? null;
+        }
+        const sourceColumnIndex = findColumnIndex(model.headers, header);
+        if (sourceColumnIndex === -1) {
+          return null;
+        }
+        return cloneCell(model.dataCellTemplates[dataRowIndex]?.[sourceColumnIndex]) ?? null;
+      });
       dataRows.push(nextRow);
+      dataCellTemplates.push(nextTemplates);
     }
   }
+
+  const headerCellTemplates = mergedHeaders.map((header) => {
+    if (header === 'Source Sheet') {
+      return cloneCell(sourceModels[0]?.headerCellTemplates?.[0]) ?? null;
+    }
+
+    for (const model of sourceModels) {
+      const sourceColumnIndex = findColumnIndex(model.headers, header);
+      if (sourceColumnIndex !== -1) {
+        return cloneCell(model.headerCellTemplates[sourceColumnIndex]) ?? null;
+      }
+    }
+
+    return null;
+  });
 
   return {
     sheetName: outputSheetName,
@@ -1088,6 +1203,9 @@ function buildMergedSheetModel({
     headerRowMeta: {},
     dataRows,
     dataRowMeta: dataRows.map(() => ({})),
+    prefixCellTemplates: [],
+    headerCellTemplates,
+    dataCellTemplates,
     cols: mergedHeaders.map(() => ({})),
     merges: [],
     autofilter: null,
@@ -1187,6 +1305,7 @@ function applySplitSheetOperation({ sheetModels, sheetOrder, operation, operatio
     groupedRows.get(groupValue).push({
       row: [...row],
       rowMeta: cloneObjectValue(sourceModel.dataRowMeta[dataRowIndex]),
+      rowTemplates: cloneTemplateRow(sourceModel.dataCellTemplates[dataRowIndex], sourceModel.headers.length),
     });
   });
 
@@ -1201,6 +1320,7 @@ function applySplitSheetOperation({ sheetModels, sheetOrder, operation, operatio
     const splitModel = cloneWorksheetModel(sourceModel, outputSheetName);
     splitModel.dataRows = rows.map((entry) => entry.row);
     splitModel.dataRowMeta = rows.map((entry) => entry.rowMeta);
+    splitModel.dataCellTemplates = rows.map((entry) => entry.rowTemplates);
     splitModel.cellFormulas = new Map();
     sheetModels.set(outputSheetName, splitModel);
     sheetOrder.push(outputSheetName);
@@ -1223,6 +1343,50 @@ function applySplitSheetOperation({ sheetModels, sheetOrder, operation, operatio
   });
 }
 
+function setCellValueFromTemplate(cell, value) {
+  delete cell.v;
+  delete cell.w;
+  delete cell.t;
+  delete cell.f;
+  delete cell.r;
+  delete cell.h;
+
+  if (value instanceof Date) {
+    cell.t = 'd';
+    cell.v = value;
+    return;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    cell.t = 'n';
+    cell.v = value;
+    return;
+  }
+
+  if (typeof value === 'boolean') {
+    cell.t = 'b';
+    cell.v = value;
+    return;
+  }
+
+  const normalizedValue = value ?? '';
+  cell.t = 's';
+  cell.v = String(normalizedValue);
+}
+
+function getTemplateCellForAbsoluteRow(model, absoluteRowIndex, columnIndex) {
+  if (absoluteRowIndex < model.prefixRows.length) {
+    return model.prefixCellTemplates[absoluteRowIndex]?.[columnIndex] ?? null;
+  }
+
+  if (absoluteRowIndex === model.prefixRows.length) {
+    return model.headerCellTemplates[columnIndex] ?? null;
+  }
+
+  const dataRowIndex = absoluteRowIndex - model.prefixRows.length - 1;
+  return model.dataCellTemplates[dataRowIndex]?.[columnIndex] ?? null;
+}
+
 function buildWorksheetFromModel({ model, utils }) {
   const width = model.headers.length;
   const aoa = [
@@ -1230,9 +1394,31 @@ function buildWorksheetFromModel({ model, utils }) {
     padRow(model.headers, width),
     ...model.dataRows.map((row) => padRow(row, width)),
   ];
+  const worksheet = {};
+  const rowCount = Math.max(aoa.length, 1);
+  const normalizedWidth = Math.max(width, 1);
 
-  const worksheet = utils.aoa_to_sheet(aoa.length > 0 ? aoa : [[]], {
-    cellDates: true,
+  for (let absoluteRowIndex = 0; absoluteRowIndex < rowCount; absoluteRowIndex += 1) {
+    const row = padRow(aoa[absoluteRowIndex] ?? [], width);
+    for (let columnIndex = 0; columnIndex < normalizedWidth; columnIndex += 1) {
+      const templateCell = getTemplateCellForAbsoluteRow(model, absoluteRowIndex, columnIndex);
+      const value = row[columnIndex] ?? '';
+      const hasNonEmptyValue = normalizeScalarValue(value) !== '';
+      const shouldCreateCell = templateCell != null || hasNonEmptyValue;
+
+      if (!shouldCreateCell) {
+        continue;
+      }
+
+      const cell = cloneCell(templateCell) ?? {};
+      setCellValueFromTemplate(cell, value);
+      worksheet[utils.encode_cell({ r: absoluteRowIndex, c: columnIndex })] = cell;
+    }
+  }
+
+  worksheet['!ref'] = utils.encode_range({
+    s: { r: 0, c: 0 },
+    e: { r: Math.max(rowCount - 1, 0), c: Math.max(normalizedWidth - 1, 0) },
   });
 
   if (model.merges.length > 0) {
@@ -1271,13 +1457,13 @@ function buildWorksheetFromModel({ model, utils }) {
     const columnIndex = Number(columnIndexRaw);
     const rowNumber = getExcelDataRowNumber(model, dataRowIndex);
     const address = utils.encode_cell({ r: rowNumber - 1, c: columnIndex });
-    const cell = worksheet[address] ?? { t: 'n', v: '' };
+    const templateCell =
+      model.dataCellTemplates[dataRowIndex]?.[columnIndex] ??
+      model.headerCellTemplates[columnIndex] ??
+      null;
+    const cell = worksheet[address] ?? (cloneCell(templateCell) ?? {});
     const cachedValue = model.dataRows[dataRowIndex]?.[columnIndex];
-    if (cachedValue != null && cachedValue !== '') {
-      cell.v = cachedValue;
-      cell.t = typeof cachedValue === 'number' ? 'n' : 's';
-      cell.w = String(cachedValue);
-    }
+    setCellValueFromTemplate(cell, cachedValue ?? '');
     cell.f = formula;
     worksheet[address] = cell;
   }

@@ -93,6 +93,28 @@ function uniqueFiles(files) {
   });
 }
 
+function registerGeneratedFile(files, req, file) {
+  if (!file?.file_id) {
+    return;
+  }
+
+  if (!files.some((candidate) => candidate.file_id === file.file_id)) {
+    files.push(file);
+  }
+
+  if (!req?.body) {
+    return;
+  }
+
+  if (!Array.isArray(req.body.files)) {
+    req.body.files = [];
+  }
+
+  if (!req.body.files.some((candidate) => candidate?.file_id === file.file_id)) {
+    req.body.files.push(file);
+  }
+}
+
 function formatWordDocumentContext(files) {
   if (!files.length) {
     return `- Note: The ${WORD_DOCUMENT_TOOL_NAME} tool is available, but no .docx files are attached. Ask the user to upload a Word document before using it.`;
@@ -233,6 +255,8 @@ async function createWordDocumentTool({ req, res, files }) {
         outputFilename,
         conversationId: req?.body?.conversationId,
       });
+
+      registerGeneratedFile(files, req, transformed.file);
 
       return [
         `Created "${transformed.file.filename}" from "${sourceFile.filename}".`,

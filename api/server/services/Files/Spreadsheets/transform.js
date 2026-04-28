@@ -3,6 +3,41 @@ const { create, all } = require('mathjs');
 const { excelMimeTypes } = require('librechat-data-provider');
 
 const math = create(all, {});
+math.import(
+  {
+    __if__: (condition, whenTrue, whenFalse) => (condition ? whenTrue : whenFalse),
+    __and__: (...values) => values.every(Boolean),
+    __or__: (...values) => values.some(Boolean),
+    __not__: (value) => !value,
+    __concat__: (...values) => values.map((value) => (value == null ? '' : String(value))).join(''),
+    __count__: (...values) => values.filter((value) => coerceMaybeNumber(value) != null).length,
+    __counta__: (...values) => values.filter((value) => normalizeScalarValue(value) !== '').length,
+    __median__: (...values) => {
+      const numbers = values.map((value) => coerceMaybeNumber(value)).filter((value) => value != null);
+      if (numbers.length === 0) {
+        return 0;
+      }
+      const sorted = numbers.sort((left, right) => left - right);
+      const middle = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 0
+        ? (sorted[middle - 1] + sorted[middle]) / 2
+        : sorted[middle];
+    },
+    __len__: (value) => String(value ?? '').length,
+    __lower__: (value) => String(value ?? '').toLowerCase(),
+    __upper__: (value) => String(value ?? '').toUpperCase(),
+    __trim__: (value) => String(value ?? '').trim(),
+    __roundup__: (value, precision = 0) => {
+      const factor = 10 ** Number(precision || 0);
+      return Math.ceil(Number(value) * factor) / factor;
+    },
+    __rounddown__: (value, precision = 0) => {
+      const factor = 10 ** Number(precision || 0);
+      return Math.floor(Number(value) * factor) / factor;
+    },
+  },
+  { override: true },
+);
 
 const CSV_MIME_TYPES = new Set(['text/csv', 'application/csv']);
 const SUPPORTED_SPREADSHEET_MIME_TYPES = new Set([
@@ -19,6 +54,21 @@ const FORMULA_FUNCTION_MAP = new Map([
   ['ROUND', 'round'],
   ['CEILING', 'ceil'],
   ['FLOOR', 'floor'],
+  ['IF', '__if__'],
+  ['AND', '__and__'],
+  ['OR', '__or__'],
+  ['NOT', '__not__'],
+  ['CONCAT', '__concat__'],
+  ['CONCATENATE', '__concat__'],
+  ['COUNT', '__count__'],
+  ['COUNTA', '__counta__'],
+  ['MEDIAN', '__median__'],
+  ['LEN', '__len__'],
+  ['LOWER', '__lower__'],
+  ['UPPER', '__upper__'],
+  ['TRIM', '__trim__'],
+  ['ROUNDUP', '__roundup__'],
+  ['ROUNDDOWN', '__rounddown__'],
 ]);
 
 const SHEET_OPERATION_TYPES = new Set([
@@ -386,6 +436,25 @@ function sanitizeFormulaFunctionNames(formula) {
   return nextFormula;
 }
 
+function sanitizeExpressionSyntax(expression) {
+  let nextExpression = String(expression ?? '').trim();
+
+  if (nextExpression.startsWith('=')) {
+    nextExpression = nextExpression.slice(1).trim();
+  }
+
+  nextExpression = nextExpression.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  nextExpression = nextExpression.replace(/;/g, ',');
+  nextExpression = nextExpression.replace(/\bTRUE\b/gi, 'true');
+  nextExpression = nextExpression.replace(/\bFALSE\b/gi, 'false');
+  nextExpression = nextExpression.replace(/<>/g, '!=');
+  nextExpression = nextExpression.replace(/(?<![<>!=])=(?!=)/g, '==');
+  nextExpression = nextExpression.replace(/\s&\s/g, ' + ');
+  nextExpression = nextExpression.replace(/(\d+(?:\.\d+)?)%/g, '($1 / 100)');
+
+  return sanitizeFormulaFunctionNames(nextExpression);
+}
+
 function buildExpressionScope(template, rowObject) {
   const scope = { row_number: Number(rowObject.__row_number) || 0 };
   let variableIndex = 0;
@@ -408,7 +477,7 @@ function buildExpressionScope(template, rowObject) {
 
 function evaluateExpressionTemplate(template, rowObject) {
   const { expression, scope } = buildExpressionScope(template, rowObject);
-  const normalizedExpression = sanitizeFormulaFunctionNames(String(expression).trim());
+  const normalizedExpression = sanitizeExpressionSyntax(expression);
   return math.evaluate(normalizedExpression, scope);
 }
 
@@ -752,7 +821,11 @@ function buildCalculatedCellValue({
     try {
       value = evaluateExpressionTemplate(operation.expression, rowObject);
     } catch (error) {
-      throw new Error(`Failed to evaluate expression "${operation.expression}": ${error.message}`);
+      if (hasFormula && outputFormat !== 'csv') {
+        value = value ?? '';
+      } else {
+        throw new Error(`Failed to evaluate expression "${operation.expression}": ${error.message}`);
+      }
     }
   }
 

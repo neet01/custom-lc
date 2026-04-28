@@ -19,6 +19,8 @@ const { processCodeOutput } = require('~/server/services/Files/Code/process');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { saveBase64Image } = require('~/server/services/Files/process');
 
+const DEFERRED_GENERATED_FILE_TOOLS = new Set(['spreadsheet_transform', 'word_document_transform']);
+
 class ModelEndHandler {
   /**
    * @param {Array<UsageMetadata>} collectedUsage
@@ -312,6 +314,26 @@ function createSavedFileAttachment(file, metadata, toolCallId) {
   };
 }
 
+function shouldDeferGeneratedFileAttachment(toolName) {
+  return DEFERRED_GENERATED_FILE_TOOLS.has(toolName);
+}
+
+function storeArtifactPromise(artifactPromises, deferredArtifactSlots, key, promise, deferred) {
+  if (!deferred) {
+    artifactPromises.push(promise);
+    return;
+  }
+
+  const existingIndex = deferredArtifactSlots.get(key);
+  if (existingIndex != null) {
+    artifactPromises[existingIndex] = promise;
+    return;
+  }
+
+  const nextIndex = artifactPromises.push(promise) - 1;
+  deferredArtifactSlots.set(key, nextIndex);
+}
+
 /**
  *
  * @param {Object} params
@@ -322,6 +344,7 @@ function createSavedFileAttachment(file, metadata, toolCallId) {
  * @returns {ToolEndCallback} The tool end callback.
  */
 function createToolEndCallback({ req, res, artifactPromises, streamId = null }) {
+  const deferredArtifactSlots = new Map();
   /**
    * @type {ToolEndCallback}
    */
@@ -459,23 +482,29 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null }) 
     const isCodeTool =
       output.name === Tools.execute_code || output.name === Constants.PROGRAMMATIC_TOOL_CALLING;
     if (!isCodeTool) {
+      const deferAttachment = shouldDeferGeneratedFileAttachment(output.name);
       for (const file of output.artifact.files) {
         if (!file?.file_id) {
           continue;
         }
-        artifactPromises.push(
-          (async () => {
-            const fileMetadata = createSavedFileAttachment(file, metadata, output.tool_call_id);
-            if (!streamId && !res.headersSent) {
-              return fileMetadata;
-            }
-
-            writeAttachment(res, streamId, fileMetadata);
+        const promise = (async () => {
+          const fileMetadata = createSavedFileAttachment(file, metadata, output.tool_call_id);
+          if (deferAttachment || (!streamId && !res.headersSent)) {
             return fileMetadata;
-          })().catch((error) => {
-            logger.error('Error processing saved file artifact:', error);
-            return null;
-          }),
+          }
+
+          writeAttachment(res, streamId, fileMetadata);
+          return fileMetadata;
+        })().catch((error) => {
+          logger.error('Error processing saved file artifact:', error);
+          return null;
+        });
+        storeArtifactPromise(
+          artifactPromises,
+          deferredArtifactSlots,
+          output.name,
+          promise,
+          deferAttachment,
         );
       }
       return;
@@ -545,6 +574,7 @@ function writeResponsesAttachment(res, tracker, attachment, metadata) {
  * @returns {ToolEndCallback} The tool end callback.
  */
 function createResponsesToolEndCallback({ req, res, tracker, artifactPromises }) {
+  const deferredArtifactSlots = new Map();
   /**
    * @type {ToolEndCallback}
    */
@@ -686,32 +716,38 @@ function createResponsesToolEndCallback({ req, res, tracker, artifactPromises })
     const isCodeTool =
       output.name === Tools.execute_code || output.name === Constants.PROGRAMMATIC_TOOL_CALLING;
     if (!isCodeTool) {
+      const deferAttachment = shouldDeferGeneratedFileAttachment(output.name);
       for (const file of output.artifact.files) {
         if (!file?.file_id) {
           continue;
         }
-        artifactPromises.push(
-          (async () => {
-            const fileMetadata = createSavedFileAttachment(file, metadata, output.tool_call_id);
+        const promise = (async () => {
+          const fileMetadata = createSavedFileAttachment(file, metadata, output.tool_call_id);
 
-            if (res.headersSent && !res.writableEnded) {
-              const attachment = {
-                file_id: fileMetadata.file_id,
-                filename: fileMetadata.filename,
-                type: fileMetadata.type,
-                url: fileMetadata.filepath,
-                width: fileMetadata.width,
-                height: fileMetadata.height,
-                tool_call_id: output.tool_call_id,
-              };
-              writeResponsesAttachment(res, tracker, attachment, metadata);
-            }
+          if (!deferAttachment && res.headersSent && !res.writableEnded) {
+            const attachment = {
+              file_id: fileMetadata.file_id,
+              filename: fileMetadata.filename,
+              type: fileMetadata.type,
+              url: fileMetadata.filepath,
+              width: fileMetadata.width,
+              height: fileMetadata.height,
+              tool_call_id: output.tool_call_id,
+            };
+            writeResponsesAttachment(res, tracker, attachment, metadata);
+          }
 
-            return fileMetadata;
-          })().catch((error) => {
-            logger.error('Error processing saved file artifact:', error);
-            return null;
-          }),
+          return fileMetadata;
+        })().catch((error) => {
+          logger.error('Error processing saved file artifact:', error);
+          return null;
+        });
+        storeArtifactPromise(
+          artifactPromises,
+          deferredArtifactSlots,
+          output.name,
+          promise,
+          deferAttachment,
         );
       }
       return;

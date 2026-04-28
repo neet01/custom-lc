@@ -307,6 +307,54 @@ describe('Spreadsheet transform service', () => {
     expect(outputWorkbook.Sheets.Styled.D2.s).toBeTruthy();
   });
 
+  it('sanitizes Excel-like expressions and avoids failing when xlsx formulas can still be written', async () => {
+    const workbook = utils.book_new();
+    const worksheet = utils.aoa_to_sheet([
+      ['Employee', 'Revenue', 'Expense', 'Status'],
+      ['Alice', 2000, 500, ''],
+      ['Bob', 900, 300, ''],
+    ]);
+    utils.book_append_sheet(workbook, worksheet, 'Sanitized');
+
+    const inputBuffer = Buffer.from(write(workbook, { type: 'buffer', bookType: 'xlsx' }));
+    const result = await transformSpreadsheetBuffer({
+      buffer: inputBuffer,
+      sourceFilename: 'sanitized.xlsx',
+      outputFormat: 'xlsx',
+      operations: [
+        {
+          type: 'update_cells',
+          sheetName: 'Sanitized',
+          columnName: 'Status',
+          rowMatch: { Employee: 'Alice' },
+          expression: '=IF({{Revenue}} >= 1000, "Healthy", "Watch")',
+          formula: '=IF({{Revenue}} >= 1000, "Healthy", "Watch")',
+        },
+        {
+          type: 'add_column',
+          sheetName: 'Sanitized',
+          columnName: 'MarginPct',
+          expression: '=ROUND(({{Revenue}}-{{Expense}})/{{Revenue}}*100%, 2)',
+          formula: '=ROUND(({{Revenue}}-{{Expense}})/{{Revenue}}, 2)',
+        },
+      ],
+    });
+
+    const outputWorkbook = read(result.buffer, { type: 'buffer', cellNF: true });
+    const outputRows = utils.sheet_to_json(outputWorkbook.Sheets.Sanitized, {
+      header: 1,
+      raw: true,
+      defval: '',
+    });
+
+    expect(outputRows).toEqual([
+      ['Employee', 'Revenue', 'Expense', 'Status', 'MarginPct'],
+      ['Alice', 2000, 500, 'Healthy', 0.75],
+      ['Bob', 900, 300, '', 0.67],
+    ]);
+    expect(outputWorkbook.Sheets.Sanitized.E2.f).toBe('ROUND((B2-C2)/B2, 2)');
+  });
+
   it('recognizes supported spreadsheet MIME types', () => {
     expect(isSpreadsheetTransformable('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe(true);
     expect(isSpreadsheetTransformable('text/csv')).toBe(true);

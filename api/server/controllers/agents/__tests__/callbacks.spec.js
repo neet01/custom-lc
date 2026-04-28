@@ -362,5 +362,69 @@ describe('createToolEndCallback', () => {
         conversationId: 'thread789',
       });
     });
+
+    it('should keep only the latest deferred spreadsheet artifact across repeated tool calls', async () => {
+      res.headersSent = true;
+      const toolEndCallback = createToolEndCallback({ req, res, artifactPromises });
+
+      const metadata = {
+        run_id: 'run456',
+        thread_id: 'thread789',
+      };
+
+      await toolEndCallback(
+        {
+          output: {
+            name: 'spreadsheet_transform',
+            tool_call_id: 'tool123',
+            artifact: {
+              files: [
+                {
+                  file_id: 'file-1',
+                  filename: 'runway-transformed.xlsx',
+                  filepath: '/uploads/runway-transformed.xlsx',
+                  type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                },
+              ],
+            },
+          },
+        },
+        metadata,
+      );
+
+      await toolEndCallback(
+        {
+          output: {
+            name: 'spreadsheet_transform',
+            tool_call_id: 'tool124',
+            artifact: {
+              files: [
+                {
+                  file_id: 'file-2',
+                  filename: 'runway-transformed-v2.xlsx',
+                  filepath: '/uploads/runway-transformed-v2.xlsx',
+                  type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                },
+              ],
+            },
+          },
+        },
+        metadata,
+      );
+
+      const results = await Promise.all(artifactPromises);
+
+      expect(artifactPromises).toHaveLength(1);
+      expect(res.write).not.toHaveBeenCalled();
+      expect(results[0]).toEqual({
+        file_id: 'file-2',
+        filename: 'runway-transformed-v2.xlsx',
+        filepath: '/uploads/runway-transformed-v2.xlsx',
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        messageId: 'run456',
+        toolCallId: 'tool124',
+        conversationId: 'thread789',
+      });
+    });
   });
 });

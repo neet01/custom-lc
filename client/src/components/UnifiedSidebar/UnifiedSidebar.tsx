@@ -123,7 +123,7 @@ function UnifiedSidebar() {
   }, []);
 
   useEffect(() => {
-    if (activePanel === 'outlook' && expanded) {
+    if ((activePanel === 'outlook' || activePanel === 'admin-reporting') && expanded) {
       setExpanded(false);
     }
   }, [activePanel, expanded, setExpanded]);

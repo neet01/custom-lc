@@ -79,7 +79,7 @@ const NavIconButton = memo(function NavIconButton({
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
-      const opensMainWorkspace = link.id === 'outlook';
+      const opensMainWorkspace = link.id === 'outlook' || link.id === 'admin-reporting';
       if (link.onClick) {
         link.onClick(e);
         return;

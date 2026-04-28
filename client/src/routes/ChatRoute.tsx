@@ -23,6 +23,7 @@ import {
 import { useGetConvoIdQuery, useGetStartupConfig, useGetEndpointsQuery } from '~/data-provider';
 import { ToolCallsMapProvider, useActivePanel } from '~/Providers';
 import OutlookPanel from '~/components/SidePanel/Outlook/Panel';
+import AdminReportingPanel from '~/components/Nav/SettingsTabs/Admin/Admin';
 import ChatView from '~/components/Chat/ChatView';
 import { NotificationSeverity } from '~/common';
 import useAuthRedirect from './useAuthRedirect';
@@ -223,6 +224,14 @@ export default function ChatRoute() {
     return (
       <div className="h-full w-full overflow-hidden">
         <OutlookPanel />
+      </div>
+    );
+  }
+
+  if (activePanel === 'admin-reporting') {
+    return (
+      <div className="h-full w-full overflow-hidden">
+        <AdminReportingPanel workspaceMode />
       </div>
     );
   }

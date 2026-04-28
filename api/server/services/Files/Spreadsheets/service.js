@@ -155,6 +155,7 @@ async function transformSpreadsheetFile({
   redactionText,
   sheetNames,
   outputFormat,
+  operations,
   conversationId,
   messageId,
 }) {
@@ -168,6 +169,7 @@ async function transformSpreadsheetFile({
     redactionText,
     sheetNames,
     outputFormat,
+    operations,
   });
 
   const file = await saveGeneratedSpreadsheet({

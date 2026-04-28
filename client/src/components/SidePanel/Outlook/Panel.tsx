@@ -29,7 +29,10 @@ import {
 } from 'lucide-react';
 import type {
   OutlookAnalyzeResponse,
+  OutlookAnalyzeSelectionResponse,
+  OutlookBrief,
   OutlookCreateMeetingResponse,
+  OutlookDailyBriefResponse,
   OutlookDraftResponse,
   OutlookMeetingSlotsResponse,
   OutlookMeetingSlot,
@@ -39,9 +42,11 @@ import type {
 import { QueryKeys } from 'librechat-data-provider';
 import {
   useAnalyzeOutlookMessageMutation,
+  useAnalyzeSelectedOutlookMessagesMutation,
   useCreateOutlookDraftMutation,
   useCreateOutlookMeetingMutation,
   useDeleteOutlookMessageMutation,
+  useOutlookDailyBriefMutation,
   useOutlookMessageQuery,
   useOutlookMessagesQuery,
   useOutlookStatusQuery,
@@ -653,6 +658,44 @@ function InsightsCard({ analysis }: { analysis?: OutlookAnalyzeResponse | null }
   );
 }
 
+function BriefCard({ brief, metadata }: { brief?: OutlookBrief | null; metadata?: ReactNode }) {
+  if (!brief) {
+    return null;
+  }
+
+  const progressiveSummary = useProgressiveText(brief.summary);
+  const sections = [
+    { title: 'Priorities', items: brief.priorities },
+    { title: 'Follow-ups', items: brief.followUps },
+    { title: 'Meeting highlights', items: brief.meetingHighlights },
+    { title: 'Notable emails', items: brief.notableEmails },
+    { title: 'Risks', items: brief.risks },
+  ].filter((section) => Array.isArray(section.items) && section.items.length > 0);
+
+  return (
+    <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4">
+      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-300">
+        <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+        {brief.headline}
+      </div>
+      {metadata ? <div className="mt-2 text-xs text-text-secondary">{metadata}</div> : null}
+      <p className="mt-2 text-sm leading-6 text-text-primary">{progressiveSummary}</p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {sections.map((section) => (
+          <div key={section.title}>
+            <div className="text-xs font-semibold text-text-primary">{section.title}</div>
+            <ul className="mt-1 list-disc space-y-1 pl-4 text-xs leading-5 text-text-secondary">
+              {section.items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MeetingSchedulerCard({
   slots,
   result,
@@ -825,6 +868,9 @@ export default function OutlookPanel() {
   const [meetingResultByMessage, setMeetingResultByMessage] = useState<
     Record<string, OutlookCreateMeetingResponse>
   >({});
+  const [selectedSummaryResult, setSelectedSummaryResult] =
+    useState<OutlookAnalyzeSelectionResponse | null>(null);
+  const [dailyBriefResult, setDailyBriefResult] = useState<OutlookDailyBriefResponse | null>(null);
   const [selectedDeleteIds, setSelectedDeleteIds] = useState<string[]>([]);
   const [pendingDeleteBatches, setPendingDeleteBatches] = useState<PendingDeleteBatch[]>([]);
   const [optimisticallyHiddenIds, setOptimisticallyHiddenIds] = useState<string[]>([]);
@@ -856,15 +902,12 @@ export default function OutlookPanel() {
     data: messageList,
     isLoading: messagesLoading,
     refetch,
-  } = useOutlookMessagesQuery(
-    messageListParams,
-    {
-      enabled: mailboxEnabled,
-      keepPreviousData: true,
-      refetchInterval: mailboxEnabled ? MAILBOX_REFRESH_INTERVAL_MS : false,
-      refetchIntervalInBackground: false,
-    },
-  );
+  } = useOutlookMessagesQuery(messageListParams, {
+    enabled: mailboxEnabled,
+    keepPreviousData: true,
+    refetchInterval: mailboxEnabled ? MAILBOX_REFRESH_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+  });
 
   const messages = useMemo(() => messageList?.messages ?? [], [messageList?.messages]);
   const conversations = useMemo(() => groupMessagesByConversation(messages), [messages]);
@@ -900,8 +943,10 @@ export default function OutlookPanel() {
   );
 
   const analyzeMutation = useAnalyzeOutlookMessageMutation();
+  const analyzeSelectedMutation = useAnalyzeSelectedOutlookMessagesMutation();
   const draftMutation = useCreateOutlookDraftMutation();
   const deleteMutation = useDeleteOutlookMessageMutation();
+  const dailyBriefMutation = useOutlookDailyBriefMutation();
   const updateReadStateMutation = useUpdateOutlookMessageReadStateMutation();
   const meetingSlotsMutation = useProposeOutlookMeetingSlotsMutation();
   const createMeetingMutation = useCreateOutlookMeetingMutation();
@@ -937,15 +982,17 @@ export default function OutlookPanel() {
       }
 
       updateCachedReadState(message.id, true);
-      void updateReadStateMutation.mutateAsync({ messageId: message.id, isRead: true }).catch(() => {
-        updateCachedReadState(message.id, false);
-        showToast({
-          message: 'Unable to update Outlook read state.',
-          severity: 'warning',
-          duration: 4000,
+      void updateReadStateMutation
+        .mutateAsync({ messageId: message.id, isRead: true })
+        .catch(() => {
+          updateCachedReadState(message.id, false);
+          showToast({
+            message: 'Unable to update Outlook read state.',
+            severity: 'warning',
+            duration: 4000,
+          });
+          void refetch();
         });
-        void refetch();
-      });
     },
     [refetch, showToast, updateCachedReadState, updateReadStateMutation],
   );
@@ -1256,6 +1303,36 @@ export default function OutlookPanel() {
     queueDeleteBatch(selectedDeleteIds, 'Bulk delete');
   };
 
+  const handleAnalyzeSelected = async () => {
+    if (selectedDeleteIds.length === 0) {
+      return;
+    }
+
+    const result = await analyzeSelectedMutation.mutateAsync({
+      messageIds: selectedDeleteIds,
+    });
+    setAssistantPanelScrolled(false);
+    setAssistantPanelOpen(true);
+    setSelectedSummaryResult(result);
+    markActionSuccess('analyzeSelected');
+    showToast({
+      message: `Generated summary for ${result.messageCount} selected email(s).`,
+      severity: 'success',
+    });
+  };
+
+  const handleDailyBrief = async () => {
+    const result = await dailyBriefMutation.mutateAsync();
+    setAssistantPanelScrolled(false);
+    setAssistantPanelOpen(true);
+    setDailyBriefResult(result);
+    markActionSuccess('dailyBrief');
+    showToast({
+      message: 'Daily brief generated.',
+      severity: 'success',
+    });
+  };
+
   const handleRefresh = async () => {
     await refetch();
     markActionSuccess('refresh');
@@ -1390,17 +1467,6 @@ export default function OutlookPanel() {
               >
                 {allVisibleSelected ? 'Clear visible selection' : 'Select visible'}
               </button>
-              {selectedDeleteIds.length > 0 && (
-                <ActionButton
-                  label={`Delete selected (${selectedDeleteIds.length})`}
-                  loadingLabel="Deleting selected..."
-                  successLabel="Queued"
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 px-2.5 py-1 text-[11px] font-semibold text-red-600 hover:bg-red-500/10 disabled:opacity-60 dark:text-red-300"
-                  onClick={handleBulkDelete}
-                  icon={Trash2}
-                  isSuccess={actionSuccess.delete}
-                />
-              )}
             </div>
             <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
               <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1409,6 +1475,39 @@ export default function OutlookPanel() {
                 : 'Calendar context is disabled.'}
             </div>
           </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <ActionButton
+            label={`Delete selected emails (${selectedDeleteIds.length})`}
+            loadingLabel="Deleting selected..."
+            successLabel="Queued"
+            className="border border-red-500/30 text-red-600 hover:bg-red-500/10 dark:text-red-300"
+            onClick={handleBulkDelete}
+            icon={Trash2}
+            isSuccess={actionSuccess.delete}
+            disabled={selectedDeleteIds.length === 0}
+          />
+          <ActionButton
+            label={`Analyze selected emails (${selectedDeleteIds.length})`}
+            loadingLabel="Generating summary..."
+            successLabel="Summary ready"
+            className="bg-blue-600 text-white hover:bg-blue-700"
+            onClick={handleAnalyzeSelected}
+            icon={Sparkles}
+            isLoading={analyzeSelectedMutation.isLoading}
+            isSuccess={actionSuccess.analyzeSelected}
+            disabled={selectedDeleteIds.length === 0}
+          />
+          <ActionButton
+            label="Generate daily brief"
+            loadingLabel="Building brief..."
+            successLabel="Brief ready"
+            className="border border-amber-500/30 text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
+            onClick={handleDailyBrief}
+            icon={CalendarDays}
+            isLoading={dailyBriefMutation.isLoading}
+            isSuccess={actionSuccess.dailyBrief}
+          />
         </div>
       </div>
 
@@ -1778,6 +1877,30 @@ export default function OutlookPanel() {
                               </button>
                             </div>
                           )}
+                          {analyzeSelectedMutation.error != null && (
+                            <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+                              <span>Unable to summarize the selected emails.</span>
+                              <button
+                                type="button"
+                                className="underline"
+                                onClick={handleAnalyzeSelected}
+                              >
+                                Retry
+                              </button>
+                            </div>
+                          )}
+                          {dailyBriefMutation.error != null && (
+                            <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+                              <span>Unable to generate the daily brief.</span>
+                              <button
+                                type="button"
+                                className="underline"
+                                onClick={handleDailyBrief}
+                              >
+                                Retry
+                              </button>
+                            </div>
+                          )}
                           {draftMutation.error != null && (
                             <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
                               <span>Unable to create a draft reply.</span>
@@ -1813,6 +1936,42 @@ export default function OutlookPanel() {
                               Meeting scheduling is disabled. Set
                               OUTLOOK_AI_ENABLE_MEETING_SCHEDULING=true.
                             </p>
+                          )}
+
+                          {(analyzeSelectedMutation.isLoading ||
+                            selectedSummaryResult ||
+                            analyzeSelectedMutation.error) && (
+                            <CollapsiblePanel title="Selected email summary" defaultOpen>
+                              {analyzeSelectedMutation.isLoading && !selectedSummaryResult && (
+                                <div className="h-24 animate-pulse rounded-xl bg-surface-secondary" />
+                              )}
+                              <BriefCard
+                                brief={selectedSummaryResult?.brief}
+                                metadata={
+                                  selectedSummaryResult
+                                    ? `${selectedSummaryResult.messageCount} selected email(s)`
+                                    : null
+                                }
+                              />
+                            </CollapsiblePanel>
+                          )}
+
+                          {(dailyBriefMutation.isLoading ||
+                            dailyBriefResult ||
+                            dailyBriefMutation.error) && (
+                            <CollapsiblePanel title="Daily brief" defaultOpen>
+                              {dailyBriefMutation.isLoading && !dailyBriefResult && (
+                                <div className="h-24 animate-pulse rounded-xl bg-surface-secondary" />
+                              )}
+                              <BriefCard
+                                brief={dailyBriefResult?.brief}
+                                metadata={
+                                  dailyBriefResult
+                                    ? `${dailyBriefResult.emailCount} email(s) • ${dailyBriefResult.meetingCount} meeting(s) • last 24 hours`
+                                    : null
+                                }
+                              />
+                            </CollapsiblePanel>
                           )}
 
                           <CollapsiblePanel title="AI Inbox insights" defaultOpen>

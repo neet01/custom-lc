@@ -264,6 +264,44 @@ router.post('/messages/:messageId/analyze', async (req, res) => {
   }
 });
 
+router.post('/messages/analyze-selection', async (req, res) => {
+  const startedAt = Date.now();
+  const messageIds = Array.isArray(req.body?.messageIds)
+    ? req.body.messageIds.filter((messageId) => typeof messageId === 'string')
+    : [];
+
+  if (messageIds.length === 0) {
+    return res.status(400).json({ message: 'messageIds must contain at least one message id' });
+  }
+
+  try {
+    const result = await OutlookService.analyzeSelectedMessages(req.user, messageIds);
+    await recordOutlookUsage(req, result, {
+      messageId: result.messageIds?.[0] || 'selection',
+      latencyMs: Date.now() - startedAt,
+    });
+    await recordAudit(req, {
+      action: 'selection_analyzed',
+      status: 'success',
+      graphMessageId: result.messageIds?.[0],
+      metadata: {
+        messageCount: result.messageCount,
+      },
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'selection_analyzed',
+      graphMessageId: messageIds[0],
+      ...getErrorAudit(error),
+      metadata: {
+        messageCount: messageIds.length,
+      },
+    });
+    handleOutlookError(res, error);
+  }
+});
+
 router.post('/messages/:messageId/drafts', async (req, res) => {
   const startedAt = Date.now();
   try {
@@ -292,6 +330,35 @@ router.post('/messages/:messageId/drafts', async (req, res) => {
         tone: req.body?.tone || 'professional',
         hasInstructions: Boolean(req.body?.instructions),
       },
+    });
+    handleOutlookError(res, error);
+  }
+});
+
+router.post('/daily-brief', async (req, res) => {
+  const startedAt = Date.now();
+  try {
+    const result = await OutlookService.generateDailyBrief(req.user, { hours: 24 });
+    await recordOutlookUsage(req, result, {
+      messageId: result.messageIds?.[0] || 'daily-brief',
+      latencyMs: Date.now() - startedAt,
+    });
+    await recordAudit(req, {
+      action: 'daily_brief_generated',
+      status: 'success',
+      graphMessageId: result.messageIds?.[0],
+      metadata: {
+        emailCount: result.emailCount,
+        meetingCount: result.meetingCount,
+        windowStart: result.windowStart,
+        windowEnd: result.windowEnd,
+      },
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'daily_brief_generated',
+      ...getErrorAudit(error),
     });
     handleOutlookError(res, error);
   }

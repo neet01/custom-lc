@@ -1,7 +1,6 @@
 const { BedrockRuntimeClient, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime');
 const { NodeHttpHandler } = require('@smithy/node-http-handler');
 const { HttpsProxyAgent } = require('https-proxy-agent');
-const { isEnabled } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 
 const DEFAULT_REGION = 'us-gov-west-1';
@@ -88,6 +87,10 @@ function compactCalendarEvents(calendarEvents = []) {
     showAs: event.showAs,
     isOnlineMeeting: event.isOnlineMeeting,
   }));
+}
+
+function compactMessagesForBrief(messages = []) {
+  return messages.slice(0, 12).map((message) => compactEmail(message));
 }
 
 function compactOutlookContext(outlookContext = {}) {
@@ -359,11 +362,7 @@ async function generateMeetingInviteNote({
     constraints: {
       maxLength: 1200,
       style: 'direct, concise, neutral, and businesslike',
-      include: [
-        'Objective',
-        'Agenda (2-5 bullets)',
-        'Prep/decisions needed (when relevant)',
-      ],
+      include: ['Objective', 'Agenda (2-5 bullets)', 'Prep/decisions needed (when relevant)'],
     },
     subject,
     scheduledSlot: slot,
@@ -383,6 +382,112 @@ async function generateMeetingInviteNote({
   };
 }
 
+async function generateSelectionBrief({ messages = [], outlookContext = {} }) {
+  if (!isModelBackedAIEnabled()) {
+    return null;
+  }
+
+  const system = [
+    'You are an executive email triage assistant embedded in LibreChat.',
+    'Synthesize multiple emails into an efficient, decision-oriented brief.',
+    'Do not invent facts. Be concrete, concise, and operational.',
+    'Return only valid JSON matching the requested schema.',
+  ].join(' ');
+
+  const prompt = JSON.stringify({
+    task: 'Summarize the selected emails into a short actionable brief.',
+    schema: {
+      headline: 'string, one sentence',
+      summary: 'string, 2-5 sentences',
+      priorities: ['2-6 highest-priority items'],
+      followUps: ['0-6 recommended follow-ups'],
+      meetingHighlights: ['0-4 meeting-related notes if present'],
+      notableEmails: ['2-6 notable emails with sender/topic emphasis'],
+      risks: ['0-5 urgency, dependency, or compliance risks'],
+    },
+    selectedEmailCount: messages.length,
+    emails: compactMessagesForBrief(messages),
+    outlookContext: compactOutlookContext(outlookContext),
+  });
+
+  const response = await callBedrock({ system, prompt });
+  const parsed = parseJsonObject(response.text);
+
+  return {
+    brief: {
+      mode: 'bedrock',
+      headline: String(parsed.headline || '').trim() || 'Selected email summary ready.',
+      summary: String(parsed.summary || '').trim() || 'No summary was generated.',
+      priorities: normalizeStringArray(parsed.priorities, [
+        'Review the selected emails and identify the highest-priority reply.',
+      ]),
+      followUps: normalizeStringArray(parsed.followUps, []),
+      meetingHighlights: normalizeStringArray(parsed.meetingHighlights, []),
+      notableEmails: normalizeStringArray(parsed.notableEmails, []),
+      risks: normalizeStringArray(parsed.risks, ['No obvious risks were detected.']),
+      generatedAt: new Date().toISOString(),
+    },
+    usage: response.usage,
+  };
+}
+
+async function generateDailyBrief({
+  messages = [],
+  meetings = [],
+  outlookContext = {},
+  windowHours = 24,
+}) {
+  if (!isModelBackedAIEnabled()) {
+    return null;
+  }
+
+  const system = [
+    'You are an executive daily-brief assistant embedded in LibreChat.',
+    'Summarize the last 24 hours of email and meeting activity into a compact, high-signal brief.',
+    'Focus on priorities, follow-ups, decisions, and risks.',
+    'Do not invent facts. Return only valid JSON matching the requested schema.',
+  ].join(' ');
+
+  const prompt = JSON.stringify({
+    task: 'Generate a daily brief from the last 24 hours of Outlook activity.',
+    schema: {
+      headline: 'string, one sentence',
+      summary: 'string, 3-6 sentences',
+      priorities: ['2-6 top priorities from emails and meetings'],
+      followUps: ['0-6 recommended follow-ups'],
+      meetingHighlights: ['0-6 meeting outcomes, topics, or follow-up needs'],
+      notableEmails: ['2-6 notable emails with sender/topic emphasis'],
+      risks: ['0-5 urgency, dependency, or compliance risks'],
+    },
+    windowHours,
+    emailCount: messages.length,
+    meetingCount: meetings.length,
+    emails: compactMessagesForBrief(messages),
+    meetings: compactCalendarEvents(meetings),
+    outlookContext: compactOutlookContext(outlookContext),
+  });
+
+  const response = await callBedrock({ system, prompt });
+  const parsed = parseJsonObject(response.text);
+
+  return {
+    brief: {
+      mode: 'bedrock',
+      headline: String(parsed.headline || '').trim() || 'Daily brief ready.',
+      summary: String(parsed.summary || '').trim() || 'No summary was generated.',
+      priorities: normalizeStringArray(parsed.priorities, [
+        'Review the latest email and meeting activity for follow-up items.',
+      ]),
+      followUps: normalizeStringArray(parsed.followUps, []),
+      meetingHighlights: normalizeStringArray(parsed.meetingHighlights, []),
+      notableEmails: normalizeStringArray(parsed.notableEmails, []),
+      risks: normalizeStringArray(parsed.risks, ['No obvious risks were detected.']),
+      generatedAt: new Date().toISOString(),
+    },
+    usage: response.usage,
+  };
+}
+
 function logModelFailure(operation, error) {
   logger.warn('[OutlookAIService] Model-backed Outlook AI failed; falling back safely', {
     operation,
@@ -398,6 +503,8 @@ module.exports = {
   generateAnalysis,
   generateReplyDraft,
   generateMeetingInviteNote,
+  generateSelectionBrief,
+  generateDailyBrief,
   logModelFailure,
   parseJsonObject,
   DEFAULT_DRAFT_STYLE,

@@ -9,6 +9,8 @@ jest.mock('~/server/services/GraphTokenService', () => ({
 jest.mock('~/server/services/OutlookAIService', () => ({
   isModelBackedAIEnabled: jest.fn(() => false),
   generateAnalysis: jest.fn(),
+  generateSelectionBrief: jest.fn(),
+  generateDailyBrief: jest.fn(),
   generateReplyDraft: jest.fn(),
   generateMeetingInviteNote: jest.fn(),
   logModelFailure: jest.fn(),
@@ -260,9 +262,7 @@ describe('OutlookService', () => {
               id: 'draft-message',
               conversationId: 'thread-1',
               subject: 'RE: Budget follow-up',
-              toRecipients: [
-                { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
-              ],
+              toRecipients: [{ emailAddress: { name: 'Finance', address: 'finance@example.mil' } }],
               ccRecipients: [{ emailAddress: { name: 'Ops', address: 'ops@example.mil' } }],
               bodyPreview: 'Draft response preview',
               isDraft: true,
@@ -980,6 +980,187 @@ describe('OutlookService', () => {
     );
   });
 
+  it('summarizes selected emails into a structured brief', async () => {
+    OutlookAIService.isModelBackedAIEnabled.mockReturnValue(true);
+    OutlookAIService.generateSelectionBrief.mockResolvedValue({
+      brief: {
+        mode: 'bedrock',
+        headline: 'Two selected emails need follow-up.',
+        summary: 'One email needs a decision and another requests scheduling.',
+        priorities: ['Reply to Ops with the decision owner.'],
+        followUps: ['Confirm a meeting time with Finance.'],
+        meetingHighlights: [],
+        notableEmails: ['Ops: Decision needed'],
+        risks: ['A deadline appears close.'],
+        generatedAt: '2026-04-21T00:00:00.000Z',
+      },
+      usage: {
+        input_tokens: 120,
+        output_tokens: 45,
+        total_tokens: 165,
+        model: 'amazon.nova-micro-v1:0',
+        provider: 'bedrock',
+      },
+    });
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'message-1',
+          subject: 'Decision needed',
+          from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+          body: { contentType: 'text', content: 'Can you confirm the owner today?' },
+          bodyPreview: 'Can you confirm the owner today?',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'message-2',
+          subject: 'Need scheduling',
+          from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+          body: { contentType: 'text', content: 'Can we schedule time tomorrow?' },
+          bodyPreview: 'Can we schedule time tomorrow?',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+        }),
+      });
+
+    const result = await OutlookService.analyzeSelectedMessages(user, ['message-1', 'message-2']);
+
+    expect(result).toMatchObject({
+      messageCount: 2,
+      brief: expect.objectContaining({
+        headline: 'Two selected emails need follow-up.',
+      }),
+    });
+    expect(result._usage).toEqual([
+      expect.objectContaining({
+        context: 'outlook_selection_summary',
+        usage: expect.objectContaining({
+          input_tokens: 120,
+          output_tokens: 45,
+        }),
+      }),
+    ]);
+    expect(OutlookAIService.generateSelectionBrief).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ subject: 'Decision needed' }),
+          expect.objectContaining({ subject: 'Need scheduling' }),
+        ]),
+      }),
+    );
+  });
+
+  it('builds a daily brief from the past 24 hours of email and meetings', async () => {
+    const recentMessageOne = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const recentMessageTwo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+    const recentMeetingStart = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const recentMeetingEnd = new Date(Date.now() - (3 * 60 * 60 - 30 * 60) * 1000).toISOString();
+
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'recent-message-1',
+              subject: 'Budget follow-up',
+              from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+              receivedDateTime: recentMessageOne,
+              bodyPreview: 'Please review the updated numbers.',
+              importance: 'high',
+              isRead: false,
+              hasAttachments: false,
+            },
+            {
+              id: 'recent-message-2',
+              subject: 'Schedule check-in',
+              from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+              receivedDateTime: recentMessageTwo,
+              bodyPreview: 'Can we find time this afternoon?',
+              importance: 'normal',
+              isRead: true,
+              hasAttachments: false,
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'meeting-1',
+              subject: 'Morning standup',
+              start: { dateTime: recentMeetingStart, timeZone: 'UTC' },
+              end: { dateTime: recentMeetingEnd, timeZone: 'UTC' },
+              organizer: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'me',
+          displayName: 'Test User',
+          mail: 'test.user@example.mil',
+          userPrincipalName: 'test.user@example.mil',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'recent-message-1',
+          subject: 'Budget follow-up',
+          from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+          receivedDateTime: recentMessageOne,
+          body: { contentType: 'text', content: 'Please review the updated numbers.' },
+          bodyPreview: 'Please review the updated numbers.',
+          importance: 'high',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'recent-message-2',
+          subject: 'Schedule check-in',
+          from: { emailAddress: { name: 'Ops', address: 'ops@example.mil' } },
+          receivedDateTime: recentMessageTwo,
+          body: { contentType: 'text', content: 'Can we find time this afternoon?' },
+          bodyPreview: 'Can we find time this afternoon?',
+          importance: 'normal',
+        }),
+      });
+
+    const result = await OutlookService.generateDailyBrief(user, { hours: 24 });
+
+    expect(result.emailCount).toBe(2);
+    expect(result.meetingCount).toBe(1);
+    expect(result.messageIds).toEqual(['recent-message-1', 'recent-message-2']);
+    expect(result.brief).toMatchObject({
+      mode: 'local-extractive',
+    });
+    expect(result.brief.headline).toContain('Daily brief');
+  });
+
   it('builds signed-in user and participant context for Outlook AI prompts', async () => {
     process.env.OUTLOOK_AI_INCLUDE_DIRECTORY_CONTEXT = 'true';
     process.env.OUTLOOK_AI_INCLUDE_MAILBOX_SETTINGS = 'true';
@@ -1077,18 +1258,16 @@ describe('OutlookService', () => {
 
   it('uses model-backed draft text and patches the Outlook draft body', async () => {
     OutlookAIService.isModelBackedAIEnabled.mockReturnValue(true);
-    OutlookAIService.generateReplyDraft.mockResolvedValue(
-      {
-        draft: 'Thanks for the note. I can review this today and follow up with next steps.',
-        usage: {
-          input_tokens: 180,
-          output_tokens: 40,
-          total_tokens: 220,
-          model: 'amazon.nova-micro-v1:0',
-          provider: 'bedrock',
-        },
+    OutlookAIService.generateReplyDraft.mockResolvedValue({
+      draft: 'Thanks for the note. I can review this today and follow up with next steps.',
+      usage: {
+        input_tokens: 180,
+        output_tokens: 40,
+        total_tokens: 220,
+        model: 'amazon.nova-micro-v1:0',
+        provider: 'bedrock',
       },
-    );
+    });
     global.fetch
       .mockResolvedValueOnce({
         ok: true,

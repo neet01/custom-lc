@@ -838,6 +838,34 @@ async function getOutlookAIContext(user, message) {
   };
 }
 
+async function getSignedInOutlookContext(user) {
+  const config = getOutlookConfig();
+  if (!config.includeUserContext) {
+    return {
+      participants: [],
+    };
+  }
+
+  const signedInUser = await getCurrentUserProfile(user);
+  const [manager, mailboxSettings] = await Promise.all([
+    config.includeDirectoryContext ? getCurrentUserManager(user) : Promise.resolve(undefined),
+    getMailboxContext(user),
+  ]);
+
+  return {
+    signedInUser,
+    manager,
+    mailboxSettings,
+    participants: [],
+    rules: [
+      'Draft only as signedInUser.',
+      'Never sign as the sender, another recipient, or another person in the thread.',
+      'If the thread is addressed to multiple people, decide whether signedInUser should respond before drafting.',
+      'Use participant title and relationship context when available; do not invent hierarchy.',
+    ],
+  };
+}
+
 function normalizePositiveInteger(value, fallback, { min = 1, max = 120 } = {}) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -1474,7 +1502,9 @@ function formatDateTimeForDraft(value) {
 }
 
 function formatPlainTextAsHtmlParagraphs(value) {
-  const normalized = String(value || '').replace(/\r/g, '').trim();
+  const normalized = String(value || '')
+    .replace(/\r/g, '')
+    .trim();
   if (!normalized) {
     return '';
   }
@@ -1693,12 +1723,11 @@ async function createTeamsMeeting(user, messageId, options = {}) {
           webLink: draft.webLink,
         }
       : undefined,
-    message:
-      sendInvites
-        ? 'Teams meeting invite sent to attendees.'
-        : shouldCreateReplyDraft
-          ? 'Teams meeting draft prepared. Review it in Outlook and optionally send your companion reply draft.'
-          : 'Teams meeting draft prepared. Review it in Outlook and send when ready.',
+    message: sendInvites
+      ? 'Teams meeting invite sent to attendees.'
+      : shouldCreateReplyDraft
+        ? 'Teams meeting draft prepared. Review it in Outlook and optionally send your companion reply draft.'
+        : 'Teams meeting draft prepared. Review it in Outlook and send when ready.',
     ...(meetingUsageEntry ? { _usage: [meetingUsageEntry] } : {}),
   };
 }
@@ -1775,6 +1804,165 @@ function buildLocalInsights(message) {
   };
 }
 
+function getSenderLabel(message) {
+  return message?.from?.name || message?.from?.address || 'Unknown sender';
+}
+
+function buildLocalBrief({ messages = [], meetings = [], modeLabel = 'brief' } = {}) {
+  const normalizedMessages = [...messages].sort(
+    (a, b) => getMessageTimestamp(b) - getMessageTimestamp(a),
+  );
+  const source = normalizedMessages
+    .map((message) => message.body || message.bodyPreview || '')
+    .filter(Boolean)
+    .join('\n\n');
+  const sentences = splitSentences(source);
+  const summaryBase =
+    sentences.length > 0
+      ? truncateText(sentences.slice(0, 5).join(' '), 900)
+      : 'No message body text was available to summarize.';
+
+  const headline =
+    modeLabel === 'daily'
+      ? `Daily brief: ${normalizedMessages.length} email(s) and ${meetings.length} meeting(s) in the past 24 hours.`
+      : `Selected email summary: ${normalizedMessages.length} email(s) reviewed.`;
+
+  const priorities = [];
+  const risks = [];
+  const followUps = [];
+
+  for (const message of normalizedMessages.slice(0, 6)) {
+    const body = `${message.subject}\n${message.body || message.bodyPreview || ''}`;
+    if (priorities.length < 4 && /\b(urgent|asap|blocked|overdue|escalat|deadline)\b/i.test(body)) {
+      priorities.push(`${getSenderLabel(message)}: ${message.subject}`);
+    }
+    if (risks.length < 4 && message.importance === 'high') {
+      risks.push(`${message.subject} is marked high importance.`);
+    }
+    if (
+      followUps.length < 4 &&
+      (body.includes('?') ||
+        /\b(please|can you|could you|need|request|action required)\b/i.test(body))
+    ) {
+      followUps.push(`Follow up on "${message.subject}" from ${getSenderLabel(message)}.`);
+    }
+  }
+
+  if (priorities.length === 0 && normalizedMessages[0]) {
+    priorities.push(
+      `Start with "${normalizedMessages[0].subject}" from ${getSenderLabel(normalizedMessages[0])}.`,
+    );
+  }
+  if (followUps.length === 0) {
+    followUps.push(
+      'Review the newest emails and respond where direct asks or decisions are pending.',
+    );
+  }
+  if (risks.length === 0) {
+    risks.push('No obvious urgency or escalation signals were detected.');
+  }
+
+  const notableEmails = normalizedMessages
+    .slice(0, 5)
+    .map((message) => `${getSenderLabel(message)}: ${message.subject}`);
+  const meetingHighlights = meetings.slice(0, 5).map((meeting) => {
+    const time = meeting?.start?.dateTime ? formatMeetingDateLabel(meeting.start.dateTime) : '';
+    return time ? `${meeting.subject} (${time})` : meeting.subject;
+  });
+
+  return {
+    mode: 'local-extractive',
+    headline,
+    summary: summaryBase,
+    priorities,
+    followUps,
+    meetingHighlights,
+    notableEmails,
+    risks,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function formatMeetingDateLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value || '');
+  }
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+async function getMessagesByIds(user, messageIds, { includeThread = true, maxMessages = 12 } = {}) {
+  const uniqueIds = Array.from(
+    new Set(
+      (Array.isArray(messageIds) ? messageIds : [])
+        .map((messageId) => String(messageId || '').trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, maxMessages);
+
+  const results = await Promise.allSettled(
+    uniqueIds.map((messageId) => getMessage(user, messageId, { includeThread })),
+  );
+
+  return results
+    .filter((result) => result.status === 'fulfilled')
+    .map((result) => result.value)
+    .filter(Boolean);
+}
+
+async function listRecentMessagesForBrief(user, { hours = 24, limit = 12 } = {}) {
+  const top = Math.min(Math.max(Number(limit) || 12, 1), 25);
+  const recentWindowMs = Math.max(Number(hours) || 24, 1) * 60 * 60 * 1000;
+  const sinceMs = Date.now() - recentWindowMs;
+
+  const payload = await graphRequest(user, '/me/messages', {
+    query: {
+      $top: 100,
+      $select: getMessageSelect(false),
+      $orderby: 'receivedDateTime desc',
+    },
+  });
+
+  const recentMessages = (Array.isArray(payload?.value) ? payload.value : [])
+    .map((message) => normalizeMessage(message, false))
+    .filter((message) => getMessageTimestamp(message) >= sinceMs)
+    .slice(0, top);
+
+  return getMessagesByIds(
+    user,
+    recentMessages.map((message) => message.id),
+    { includeThread: true, maxMessages: top },
+  );
+}
+
+async function listRecentMeetings(user, { hours = 24, limit = 12 } = {}) {
+  const end = new Date();
+  const start = new Date(end.getTime() - Math.max(Number(hours) || 24, 1) * 60 * 60 * 1000);
+  try {
+    const payload = await graphRequest(user, '/me/calendarView', {
+      query: {
+        startDateTime: start.toISOString(),
+        endDateTime: end.toISOString(),
+        $top: Math.min(Math.max(Number(limit) || 12, 1), 25),
+        $orderby: 'start/dateTime desc',
+        $select: 'id,subject,start,end,location,organizer,showAs,isOnlineMeeting,webLink',
+      },
+    });
+    return Array.isArray(payload?.value) ? payload.value.map(normalizeCalendarEvent) : [];
+  } catch (error) {
+    logger.warn('[OutlookService] Recent meetings unavailable for daily brief', {
+      status: error?.status,
+      message: error?.message,
+    });
+    return [];
+  }
+}
+
 async function analyzeMessage(user, messageId) {
   const message = await getMessage(user, messageId, { includeThread: true });
   const [calendarEvents, outlookContext] = await Promise.all([
@@ -1815,6 +2003,99 @@ async function analyzeMessage(user, messageId) {
   };
 }
 
+async function analyzeSelectedMessages(user, messageIds = []) {
+  const messages = await getMessagesByIds(user, messageIds, {
+    includeThread: true,
+    maxMessages: 12,
+  });
+  if (messages.length === 0) {
+    throw new OutlookServiceError('At least one valid message must be selected', 400);
+  }
+
+  const outlookContext = await getSignedInOutlookContext(user);
+  if (OutlookAIService.isModelBackedAIEnabled()) {
+    try {
+      const generated = await OutlookAIService.generateSelectionBrief({
+        messages,
+        outlookContext,
+      });
+      if (generated?.brief) {
+        const usageEntry = buildOutlookUsageEntry({
+          context: 'outlook_selection_summary',
+          usage: generated.usage,
+        });
+        return {
+          messageIds: messages.map((message) => message.id),
+          conversationIds: messages.map(
+            (message) => message.conversationId || `outlook:${message.id}`,
+          ),
+          messageCount: messages.length,
+          brief: generated.brief,
+          ...(usageEntry ? { _usage: [usageEntry] } : {}),
+        };
+      }
+    } catch (error) {
+      OutlookAIService.logModelFailure('analyzeSelectedMessages', error);
+    }
+  }
+
+  return {
+    messageIds: messages.map((message) => message.id),
+    conversationIds: messages.map((message) => message.conversationId || `outlook:${message.id}`),
+    messageCount: messages.length,
+    brief: buildLocalBrief({ messages, modeLabel: 'selection' }),
+  };
+}
+
+async function generateDailyBrief(user, { hours = 24 } = {}) {
+  const [messages, meetings, outlookContext] = await Promise.all([
+    listRecentMessagesForBrief(user, { hours, limit: 12 }),
+    listRecentMeetings(user, { hours, limit: 12 }),
+    getSignedInOutlookContext(user),
+  ]);
+  const windowEnd = new Date().toISOString();
+  const windowStart = new Date(
+    Date.now() - Math.max(Number(hours) || 24, 1) * 60 * 60 * 1000,
+  ).toISOString();
+
+  if (OutlookAIService.isModelBackedAIEnabled()) {
+    try {
+      const generated = await OutlookAIService.generateDailyBrief({
+        messages,
+        meetings,
+        outlookContext,
+        windowHours: hours,
+      });
+      if (generated?.brief) {
+        const usageEntry = buildOutlookUsageEntry({
+          context: 'outlook_daily_brief',
+          usage: generated.usage,
+        });
+        return {
+          windowStart,
+          windowEnd,
+          emailCount: messages.length,
+          meetingCount: meetings.length,
+          messageIds: messages.map((message) => message.id),
+          brief: generated.brief,
+          ...(usageEntry ? { _usage: [usageEntry] } : {}),
+        };
+      }
+    } catch (error) {
+      OutlookAIService.logModelFailure('generateDailyBrief', error);
+    }
+  }
+
+  return {
+    windowStart,
+    windowEnd,
+    emailCount: messages.length,
+    meetingCount: meetings.length,
+    messageIds: messages.map((message) => message.id),
+    brief: buildLocalBrief({ messages, meetings, modeLabel: 'daily' }),
+  };
+}
+
 function buildDraftComment(message, { instructions = '', tone = 'professional' } = {}) {
   const trimmedInstructions = truncateText(instructions, 600);
   const opener =
@@ -1830,7 +2111,9 @@ function buildDraftComment(message, { instructions = '', tone = 'professional' }
 }
 
 function normalizeReplyMode(options = {}) {
-  const mode = String(options.replyMode || '').trim().toLowerCase();
+  const mode = String(options.replyMode || '')
+    .trim()
+    .toLowerCase();
   if (mode === 'reply' || mode === 'reply_all' || mode === 'smart') {
     return mode;
   }
@@ -1848,7 +2131,11 @@ function getSignedInEmailSet(outlookContext = {}) {
     outlookContext?.signedInUser?.email,
     outlookContext?.signedInUser?.userPrincipalName,
   ]
-    .map((value) => String(value || '').trim().toLowerCase())
+    .map((value) =>
+      String(value || '')
+        .trim()
+        .toLowerCase(),
+    )
     .filter(Boolean);
   return new Set(emails);
 }
@@ -2019,7 +2306,9 @@ function buildExpectedSalutation(toRecipients = []) {
 
 function alignDraftSalutation(comment, toRecipients = []) {
   const expectedSalutation = buildExpectedSalutation(toRecipients);
-  const text = String(comment || '').replace(/\r/g, '').trim();
+  const text = String(comment || '')
+    .replace(/\r/g, '')
+    .trim();
   if (!expectedSalutation || !text) {
     return text;
   }
@@ -2060,12 +2349,16 @@ async function createReplyDraft(user, messageId, options = {}) {
   let draftDetails = draftPayload;
   if (draftPayload?.id) {
     try {
-      draftDetails = await graphRequest(user, `/me/messages/${encodeURIComponent(draftPayload.id)}`, {
-        query: {
-          $select: 'id,subject,webLink,toRecipients,ccRecipients',
+      draftDetails = await graphRequest(
+        user,
+        `/me/messages/${encodeURIComponent(draftPayload.id)}`,
+        {
+          query: {
+            $select: 'id,subject,webLink,toRecipients,ccRecipients',
+          },
+          suppressErrorLog: true,
         },
-        suppressErrorLog: true,
-      });
+      );
     } catch (error) {
       logger.warn('[OutlookService] Failed to fetch draft recipients after draft creation', {
         status: error?.status,
@@ -2183,6 +2476,8 @@ module.exports = {
   updateMessageReadState,
   deleteMessage,
   analyzeMessage,
+  analyzeSelectedMessages,
+  generateDailyBrief,
   createReplyDraft,
   proposeMeetingSlots,
   createTeamsMeeting,

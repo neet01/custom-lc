@@ -143,6 +143,14 @@ describe('spreadsheet tool', () => {
       const result = await spreadsheetTool.func({
         action: 'transform',
         removeColumns: ['Salary'],
+        operations: [
+          {
+            type: 'add_column',
+            sheetName: 'Runway',
+            columnName: 'Net',
+            expression: '{{Revenue}} - {{Expense}}',
+          },
+        ],
       });
 
       expect(result[0]).toContain('runway-transformed.xlsx');
@@ -153,6 +161,14 @@ describe('spreadsheet tool', () => {
         expect.objectContaining({
           sourceFile: spreadsheetFile,
           removeColumns: ['Salary'],
+          operations: [
+            {
+              type: 'add_column',
+              sheetName: 'Runway',
+              columnName: 'Net',
+              expression: '{{Revenue}} - {{Expense}}',
+            },
+          ],
           conversationId: 'convo-1',
         }),
       );

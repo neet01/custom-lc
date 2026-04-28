@@ -192,6 +192,57 @@ describe('Spreadsheet transform route', () => {
     );
   });
 
+  it('supports advanced spreadsheet operations through the transform route', async () => {
+    const csvData = Buffer.from(
+      ['Employee,Revenue,Expense', 'Alice,200,50', 'Bob,150,90'].join('\n'),
+      'utf8',
+    );
+    const saveBuffer = jest.fn().mockResolvedValue('/uploads/user-123/pipeline-transformed.csv');
+
+    getStrategyFunctions.mockImplementation(() => ({
+      getDownloadStream: jest.fn().mockResolvedValue(Readable.from([csvData])),
+      saveBuffer,
+    }));
+
+    const { res } = await invokeRoute({
+      testFile: {
+        file_id: 'source-file-1',
+        filename: 'pipeline.csv',
+        filepath: '/uploads/user-123/pipeline.csv',
+        type: 'text/csv',
+        source: FileSources.local,
+        conversationId: 'convo-1',
+        messageId: 'msg-1',
+      },
+      body: {
+        outputFormat: 'csv',
+        operations: [
+          {
+            type: 'add_column',
+            sheetName: 'Sheet1',
+            columnName: 'Net',
+            expression: '{{Revenue}} - {{Expense}}',
+          },
+          {
+            type: 'sort_rows',
+            sheetName: 'Sheet1',
+            columnName: 'Net',
+            direction: 'desc',
+            numeric: true,
+          },
+        ],
+      },
+    });
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.file.filename).toBe('pipeline-transformed.csv');
+    expect(payload.summary.operationsApplied.map((operation) => operation.type)).toEqual(
+      expect.arrayContaining(['add_column', 'sort_rows']),
+    );
+    expect(saveBuffer).toHaveBeenCalled();
+  });
+
   it('rejects non-spreadsheet source files', async () => {
     const { res } = await invokeRoute({
       testFile: {

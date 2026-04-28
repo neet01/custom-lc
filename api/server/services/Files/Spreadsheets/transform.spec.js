@@ -96,6 +96,175 @@ describe('Spreadsheet transform service', () => {
     expect(outputWorkbook.Sheets.Runway['!merges']).toEqual([{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }]);
   });
 
+  it('supports advanced row, cell, calculation, formula, and ordering operations', async () => {
+    const workbook = utils.book_new();
+    const worksheet = utils.aoa_to_sheet([
+      ['Employee', 'Revenue', 'Expense', 'Department'],
+      ['Alice', 200, 50, 'Sales'],
+      ['Bob', 150, 90, 'Sales'],
+    ]);
+    utils.book_append_sheet(workbook, worksheet, 'Pipeline');
+
+    const inputBuffer = Buffer.from(write(workbook, { type: 'buffer', bookType: 'xlsx' }));
+    const result = await transformSpreadsheetBuffer({
+      buffer: inputBuffer,
+      sourceFilename: 'pipeline.xlsx',
+      outputFormat: 'xlsx',
+      operations: [
+        {
+          type: 'add_column',
+          sheetName: 'Pipeline',
+          columnName: 'Net',
+          expression: '{{Revenue}} - {{Expense}}',
+        },
+        {
+          type: 'add_column',
+          sheetName: 'Pipeline',
+          columnName: 'NetPct',
+          expression: 'round(({{Revenue}} - {{Expense}}) / {{Revenue}}, 2)',
+          formula: '=ROUND(({{Revenue}}-{{Expense}})/{{Revenue}}, 2)',
+        },
+        {
+          type: 'update_cells',
+          sheetName: 'Pipeline',
+          columnName: 'Department',
+          rowMatch: { Employee: 'Bob' },
+          value: 'Operations',
+        },
+        {
+          type: 'add_row',
+          sheetName: 'Pipeline',
+          values: {
+            Employee: 'Cara',
+            Revenue: 400,
+            Expense: 75,
+            Department: 'Sales',
+          },
+        },
+        {
+          type: 'update_cells',
+          sheetName: 'Pipeline',
+          columnName: 'Net',
+          rowMatch: { Employee: 'Cara' },
+          expression: '{{Revenue}} - {{Expense}}',
+        },
+        {
+          type: 'update_cells',
+          sheetName: 'Pipeline',
+          columnName: 'NetPct',
+          rowMatch: { Employee: 'Cara' },
+          expression: 'round(({{Revenue}} - {{Expense}}) / {{Revenue}}, 2)',
+          formula: '=ROUND(({{Revenue}}-{{Expense}})/{{Revenue}}, 2)',
+        },
+        {
+          type: 'sort_rows',
+          sheetName: 'Pipeline',
+          columnName: 'Net',
+          direction: 'desc',
+          numeric: true,
+        },
+        {
+          type: 'reorder_rows',
+          sheetName: 'Pipeline',
+          orderedRowNumbers: [2, 1],
+          appendRemaining: true,
+        },
+      ],
+    });
+
+    const outputWorkbook = read(result.buffer, { type: 'buffer' });
+    const outputRows = utils.sheet_to_json(outputWorkbook.Sheets.Pipeline, {
+      header: 1,
+      raw: true,
+      defval: '',
+    });
+
+    expect(outputRows).toEqual([
+      ['Employee', 'Revenue', 'Expense', 'Department', 'Net', 'NetPct'],
+      ['Alice', 200, 50, 'Sales', 150, 0.75],
+      ['Cara', 400, 75, 'Sales', 325, 0.81],
+      ['Bob', 150, 90, 'Operations', 60, 0.4],
+    ]);
+    expect(outputWorkbook.Sheets.Pipeline.F2.f).toBe('ROUND((B2-C2)/B2, 2)');
+    expect(outputWorkbook.Sheets.Pipeline.F3.f).toBe('ROUND((B3-C3)/B3, 2)');
+    expect(result.summary.operationsApplied.map((operation) => operation.type)).toContain('add_column');
+    expect(result.summary.operationsApplied.map((operation) => operation.type)).toContain('sort_rows');
+  });
+
+  it('supports merging sheets and splitting a sheet by column value', async () => {
+    const workbook = utils.book_new();
+    utils.book_append_sheet(
+      workbook,
+      utils.aoa_to_sheet([
+        ['Owner', 'Region', 'Amount'],
+        ['Alice', 'East', 100],
+        ['Bob', 'West', 90],
+      ]),
+      'Q1',
+    );
+    utils.book_append_sheet(
+      workbook,
+      utils.aoa_to_sheet([
+        ['Owner', 'Region', 'Amount'],
+        ['Cara', 'East', 120],
+        ['Dan', 'West', 80],
+      ]),
+      'Q2',
+    );
+
+    const inputBuffer = Buffer.from(write(workbook, { type: 'buffer', bookType: 'xlsx' }));
+    const result = await transformSpreadsheetBuffer({
+      buffer: inputBuffer,
+      sourceFilename: 'regional.xlsx',
+      outputFormat: 'xlsx',
+      operations: [
+        {
+          type: 'merge_sheets',
+          sourceSheets: ['Q1', 'Q2'],
+          outputSheetName: 'Combined',
+          preserveSourceSheets: false,
+        },
+        {
+          type: 'split_sheet',
+          sourceSheetName: 'Combined',
+          byColumn: 'Region',
+          outputSheetPrefix: 'Region',
+          preserveSourceSheet: true,
+        },
+      ],
+    });
+
+    const outputWorkbook = read(result.buffer, { type: 'buffer' });
+    expect(outputWorkbook.SheetNames).toEqual(['Combined', 'Region East', 'Region West']);
+
+    const combinedRows = utils.sheet_to_json(outputWorkbook.Sheets.Combined, {
+      header: 1,
+      raw: true,
+      defval: '',
+    });
+    expect(combinedRows).toEqual([
+      ['Source Sheet', 'Owner', 'Region', 'Amount'],
+      ['Q1', 'Alice', 'East', 100],
+      ['Q1', 'Bob', 'West', 90],
+      ['Q2', 'Cara', 'East', 120],
+      ['Q2', 'Dan', 'West', 80],
+    ]);
+
+    const eastRows = utils.sheet_to_json(outputWorkbook.Sheets['Region East'], {
+      header: 1,
+      raw: true,
+      defval: '',
+    });
+    expect(eastRows).toEqual([
+      ['Source Sheet', 'Owner', 'Region', 'Amount'],
+      ['Q1', 'Alice', 'East', 100],
+      ['Q2', 'Cara', 'East', 120],
+    ]);
+    expect(result.summary.operationsApplied.map((operation) => operation.type)).toEqual(
+      expect.arrayContaining(['merge_sheets', 'split_sheet']),
+    );
+  });
+
   it('recognizes supported spreadsheet MIME types', () => {
     expect(isSpreadsheetTransformable('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe(true);
     expect(isSpreadsheetTransformable('text/csv')).toBe(true);

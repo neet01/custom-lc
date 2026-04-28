@@ -8,8 +8,11 @@ import type {
 } from '@tanstack/react-query';
 import type {
   OutlookAnalyzeResponse,
+  OutlookAnalyzeSelectionRequest,
+  OutlookAnalyzeSelectionResponse,
   OutlookCreateMeetingRequest,
   OutlookCreateMeetingResponse,
+  OutlookDailyBriefResponse,
   OutlookDeleteResponse,
   OutlookDraftRequest,
   OutlookDraftResponse,
@@ -81,6 +84,16 @@ export const useAnalyzeOutlookMessageMutation = (): UseMutationResult<
   return useMutation((messageId: string) => dataService.analyzeOutlookMessage(messageId));
 };
 
+export const useAnalyzeSelectedOutlookMessagesMutation = (): UseMutationResult<
+  OutlookAnalyzeSelectionResponse,
+  unknown,
+  OutlookAnalyzeSelectionRequest
+> => {
+  return useMutation((payload: OutlookAnalyzeSelectionRequest) =>
+    dataService.analyzeSelectedOutlookMessages(payload),
+  );
+};
+
 export const useCreateOutlookDraftMutation = (): UseMutationResult<
   OutlookDraftResponse,
   unknown,
@@ -107,6 +120,14 @@ export const useUpdateOutlookMessageReadStateMutation = (): UseMutationResult<
   return useMutation(({ messageId, isRead }) =>
     dataService.updateOutlookMessageReadState(messageId, { isRead }),
   );
+};
+
+export const useOutlookDailyBriefMutation = (): UseMutationResult<
+  OutlookDailyBriefResponse,
+  unknown,
+  void
+> => {
+  return useMutation(() => dataService.getOutlookDailyBrief());
 };
 
 export const useProposeOutlookMeetingSlotsMutation = (): UseMutationResult<

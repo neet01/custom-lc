@@ -56,6 +56,12 @@ export function analyzeOutlookMessage(messageId: string): Promise<o.OutlookAnaly
   return request.post(endpoints.outlookAnalyzeMessage(messageId), {});
 }
 
+export function analyzeSelectedOutlookMessages(
+  payload: o.OutlookAnalyzeSelectionRequest,
+): Promise<o.OutlookAnalyzeSelectionResponse> {
+  return request.post(endpoints.outlookAnalyzeSelected(), payload);
+}
+
 export function createOutlookDraft(
   messageId: string,
   payload: o.OutlookDraftRequest,
@@ -72,6 +78,10 @@ export function updateOutlookMessageReadState(
   payload: o.OutlookUpdateReadStateRequest,
 ): Promise<o.OutlookUpdateReadStateResponse> {
   return request.patch(endpoints.outlookUpdateMessageReadState(messageId), payload);
+}
+
+export function getOutlookDailyBrief(): Promise<o.OutlookDailyBriefResponse> {
+  return request.post(endpoints.outlookDailyBrief(), {});
 }
 
 export function proposeOutlookMeetingSlots(

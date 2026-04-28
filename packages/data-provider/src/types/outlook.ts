@@ -74,6 +74,38 @@ export type OutlookAnalyzeResponse = {
   insights: OutlookInsights;
 };
 
+export type OutlookBrief = {
+  mode: 'local-extractive' | string;
+  headline: string;
+  summary: string;
+  priorities: string[];
+  followUps: string[];
+  meetingHighlights: string[];
+  notableEmails: string[];
+  risks: string[];
+  generatedAt: string;
+};
+
+export type OutlookAnalyzeSelectionRequest = {
+  messageIds: string[];
+};
+
+export type OutlookAnalyzeSelectionResponse = {
+  messageIds: string[];
+  conversationIds: string[];
+  messageCount: number;
+  brief: OutlookBrief;
+};
+
+export type OutlookDailyBriefResponse = {
+  windowStart: string;
+  windowEnd: string;
+  emailCount: number;
+  meetingCount: number;
+  messageIds: string[];
+  brief: OutlookBrief;
+};
+
 export type OutlookDraftRequest = {
   instructions?: string;
   tone?: 'professional' | 'concise' | string;

@@ -402,6 +402,7 @@ router.post('/:file_id/transform/spreadsheet', fileAccess, async (req, res) => {
       redactionText: req.body.redactionText,
       sheetNames: req.body.sheetNames,
       outputFormat: req.body.outputFormat,
+      operations: req.body.operations,
       conversationId: req.body.conversationId,
       messageId: req.body.messageId,
     });

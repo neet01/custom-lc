@@ -81,12 +81,16 @@ export const outlookMessage = (messageId: string) =>
 
 export const outlookAnalyzeMessage = (messageId: string) => `${outlookMessage(messageId)}/analyze`;
 
+export const outlookAnalyzeSelected = () => `${outlookRoot}/messages/analyze-selection`;
+
 export const outlookCreateDraft = (messageId: string) => `${outlookMessage(messageId)}/drafts`;
 
 export const outlookDeleteMessage = (messageId: string) => outlookMessage(messageId);
 
 export const outlookUpdateMessageReadState = (messageId: string) =>
   `${outlookMessage(messageId)}/read`;
+
+export const outlookDailyBrief = () => `${outlookRoot}/daily-brief`;
 
 export const outlookMeetingSlots = (messageId: string) =>
   `${outlookMessage(messageId)}/meeting-slots`;

@@ -12,6 +12,10 @@ const requireReadUsage = requireCapability(SystemCapabilities.READ_USAGE);
 const USER_FIELDS = '_id name username email avatar role provider';
 const ACTIONS = new Set([
   'mailbox_listed',
+  'calendar_viewed',
+  'calendar_event_created',
+  'calendar_event_updated',
+  'calendar_event_deleted',
   'message_viewed',
   'message_deleted',
   'message_analyzed',

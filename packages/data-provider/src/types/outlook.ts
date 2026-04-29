@@ -59,6 +59,68 @@ export type OutlookMessagesResponse = {
   search?: string;
 };
 
+export type OutlookCalendarAttendee = {
+  name: string;
+  address: string;
+  response?: 'none' | 'organizer' | 'tentativelyAccepted' | 'accepted' | 'declined' | string;
+};
+
+export type OutlookCalendarEvent = {
+  id: string;
+  subject: string;
+  start?: OutlookDateTimeTimeZone;
+  end?: OutlookDateTimeTimeZone;
+  location?: string;
+  organizer?: OutlookEmailAddress;
+  showAs?: string;
+  isAllDay?: boolean;
+  isOnlineMeeting?: boolean;
+  webLink?: string;
+  bodyPreview?: string;
+  type?: string;
+  attendees?: OutlookCalendarAttendee[];
+};
+
+export type OutlookCalendarParams = {
+  startDateTime?: string;
+  endDateTime?: string;
+  view?: 'day' | 'week' | 'agenda';
+  limit?: number;
+};
+
+export type OutlookCalendarResponse = {
+  startDateTime: string;
+  endDateTime: string;
+  view: 'day' | 'week' | 'agenda';
+  events: OutlookCalendarEvent[];
+  workingHours?: {
+    daysOfWeek: string[];
+    startTime: string;
+    endTime: string;
+    timeZone: string;
+  };
+};
+
+export type OutlookCalendarEventMutationRequest = {
+  subject: string;
+  start: OutlookDateTimeTimeZone;
+  end: OutlookDateTimeTimeZone;
+  location?: string;
+  attendees?: OutlookMeetingAttendee[];
+  isOnlineMeeting?: boolean;
+  body?: string;
+};
+
+export type OutlookCalendarEventMutationResponse = {
+  message: string;
+  event: OutlookCalendarEvent & {
+    onlineMeeting?: {
+      joinUrl?: string;
+      conferenceId?: string;
+    };
+  };
+};
+
 export type OutlookInsights = {
   mode: 'local-extractive' | string;
   summary: string;

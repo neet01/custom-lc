@@ -48,6 +48,31 @@ export function getOutlookMessages(
   return request.get(endpoints.outlookMessages(params));
 }
 
+export function getOutlookCalendar(
+  params: o.OutlookCalendarParams = {},
+): Promise<o.OutlookCalendarResponse> {
+  return request.get(endpoints.outlookCalendar(params));
+}
+
+export function createOutlookCalendarEvent(
+  payload: o.OutlookCalendarEventMutationRequest,
+): Promise<o.OutlookCalendarEventMutationResponse> {
+  return request.post(endpoints.outlookCalendarEvents(), payload);
+}
+
+export function updateOutlookCalendarEvent(
+  eventId: string,
+  payload: o.OutlookCalendarEventMutationRequest,
+): Promise<o.OutlookCalendarEventMutationResponse> {
+  return request.patch(endpoints.outlookCalendarEvent(eventId), payload);
+}
+
+export function deleteOutlookCalendarEvent(
+  eventId: string,
+): Promise<{ eventId: string; message: string }> {
+  return request.delete(endpoints.outlookCalendarEvent(eventId));
+}
+
 export function getOutlookMessage(messageId: string): Promise<o.OutlookMessage> {
   return request.get(endpoints.outlookMessage(messageId));
 }

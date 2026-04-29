@@ -76,6 +76,14 @@ export const outlookStatus = () => `${outlookRoot}/status`;
 export const outlookMessages = (params: o.OutlookMessagesParams = {}) =>
   `${outlookRoot}/messages${buildQuery(params)}`;
 
+export const outlookCalendar = (params: o.OutlookCalendarParams = {}) =>
+  `${outlookRoot}/calendar${buildQuery(params)}`;
+
+export const outlookCalendarEvents = () => `${outlookRoot}/calendar/events`;
+
+export const outlookCalendarEvent = (eventId: string) =>
+  `${outlookRoot}/calendar/events/${encodeURIComponent(eventId)}`;
+
 export const outlookMessage = (messageId: string) =>
   `${outlookRoot}/messages/${encodeURIComponent(messageId)}`;
 

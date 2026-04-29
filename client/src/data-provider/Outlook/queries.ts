@@ -10,6 +10,10 @@ import type {
   OutlookAnalyzeResponse,
   OutlookAnalyzeSelectionRequest,
   OutlookAnalyzeSelectionResponse,
+  OutlookCalendarParams,
+  OutlookCalendarResponse,
+  OutlookCalendarEventMutationRequest,
+  OutlookCalendarEventMutationResponse,
   OutlookCreateMeetingRequest,
   OutlookCreateMeetingResponse,
   OutlookDailyBriefResponse,
@@ -57,6 +61,51 @@ export const useOutlookMessagesQuery = (
       enabled: (config?.enabled ?? true) === true && queriesEnabled,
     },
   );
+};
+
+export const useOutlookCalendarQuery = (
+  params: OutlookCalendarParams = {},
+  config?: UseQueryOptions<OutlookCalendarResponse>,
+): QueryObserverResult<OutlookCalendarResponse> => {
+  const queriesEnabled = useRecoilValue<boolean>(store.queriesEnabled);
+
+  return useQuery<OutlookCalendarResponse>(
+    [QueryKeys.outlookCalendar, params],
+    () => dataService.getOutlookCalendar(params),
+    {
+      refetchOnWindowFocus: false,
+      ...config,
+      enabled: (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};
+
+export const useCreateOutlookCalendarEventMutation = (): UseMutationResult<
+  OutlookCalendarEventMutationResponse,
+  unknown,
+  OutlookCalendarEventMutationRequest
+> => {
+  return useMutation((payload: OutlookCalendarEventMutationRequest) =>
+    dataService.createOutlookCalendarEvent(payload),
+  );
+};
+
+export const useUpdateOutlookCalendarEventMutation = (): UseMutationResult<
+  OutlookCalendarEventMutationResponse,
+  unknown,
+  { eventId: string; payload: OutlookCalendarEventMutationRequest }
+> => {
+  return useMutation(({ eventId, payload }) =>
+    dataService.updateOutlookCalendarEvent(eventId, payload),
+  );
+};
+
+export const useDeleteOutlookCalendarEventMutation = (): UseMutationResult<
+  { eventId: string; message: string },
+  unknown,
+  string
+> => {
+  return useMutation((eventId: string) => dataService.deleteOutlookCalendarEvent(eventId));
 };
 
 export const useOutlookMessageQuery = (

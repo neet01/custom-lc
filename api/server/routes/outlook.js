@@ -167,6 +167,115 @@ router.get('/messages', async (req, res) => {
   }
 });
 
+router.get('/calendar', async (req, res) => {
+  try {
+    const result = await OutlookService.listCalendarEvents(req.user, {
+      startDateTime: req.query.startDateTime,
+      endDateTime: req.query.endDateTime,
+      view: req.query.view,
+      limit: req.query.limit,
+    });
+    await recordAudit(req, {
+      action: 'calendar_viewed',
+      status: 'success',
+      metadata: {
+        view: result.view,
+        eventCount: result.events.length,
+        startDateTime: result.startDateTime,
+        endDateTime: result.endDateTime,
+      },
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'calendar_viewed',
+      ...getErrorAudit(error),
+      metadata: {
+        view: typeof req.query.view === 'string' ? req.query.view : 'week',
+        startDateTime: typeof req.query.startDateTime === 'string' ? req.query.startDateTime : '',
+        endDateTime: typeof req.query.endDateTime === 'string' ? req.query.endDateTime : '',
+      },
+    });
+    handleOutlookError(res, error);
+  }
+});
+
+router.post('/calendar/events', async (req, res) => {
+  try {
+    const result = await OutlookService.createCalendarEvent(req.user, req.body);
+    await recordAudit(req, {
+      action: 'calendar_event_created',
+      status: 'success',
+      metadata: {
+        graphEventId: result.event?.id,
+        subject: result.event?.subject,
+        attendeeCount: Array.isArray(result.event?.attendees) ? result.event.attendees.length : 0,
+        isOnlineMeeting: Boolean(result.event?.isOnlineMeeting),
+      },
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'calendar_event_created',
+      ...getErrorAudit(error),
+      metadata: {
+        subject: typeof req.body?.subject === 'string' ? req.body.subject : '',
+      },
+    });
+    handleOutlookError(res, error);
+  }
+});
+
+router.patch('/calendar/events/:eventId', async (req, res) => {
+  try {
+    const result = await OutlookService.updateCalendarEvent(req.user, req.params.eventId, req.body);
+    await recordAudit(req, {
+      action: 'calendar_event_updated',
+      status: 'success',
+      metadata: {
+        graphEventId: result.event?.id || req.params.eventId,
+        subject: result.event?.subject,
+        attendeeCount: Array.isArray(result.event?.attendees) ? result.event.attendees.length : 0,
+        isOnlineMeeting: Boolean(result.event?.isOnlineMeeting),
+      },
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'calendar_event_updated',
+      ...getErrorAudit(error),
+      metadata: {
+        graphEventId: req.params.eventId,
+        subject: typeof req.body?.subject === 'string' ? req.body.subject : '',
+      },
+    });
+    handleOutlookError(res, error);
+  }
+});
+
+router.delete('/calendar/events/:eventId', async (req, res) => {
+  try {
+    const result = await OutlookService.deleteCalendarEvent(req.user, req.params.eventId);
+    await recordAudit(req, {
+      action: 'calendar_event_deleted',
+      status: 'success',
+      metadata: {
+        graphEventId: result.eventId,
+      },
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'calendar_event_deleted',
+      ...getErrorAudit(error),
+      metadata: {
+        graphEventId: req.params.eventId,
+      },
+    });
+    handleOutlookError(res, error);
+  }
+});
+
 router.get('/messages/:messageId', async (req, res) => {
   try {
     const result = await OutlookService.getMessage(req.user, req.params.messageId);

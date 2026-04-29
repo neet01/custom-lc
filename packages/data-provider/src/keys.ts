@@ -65,6 +65,7 @@ export enum QueryKeys {
   adminOutlookAudit = 'adminOutlookAudit',
   outlookStatus = 'outlookStatus',
   outlookMessages = 'outlookMessages',
+  outlookCalendar = 'outlookCalendar',
   outlookMessage = 'outlookMessage',
   /* MCP Servers */
   mcpServers = 'mcpServers',

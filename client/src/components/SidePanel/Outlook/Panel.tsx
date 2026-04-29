@@ -31,6 +31,9 @@ import type {
   OutlookAnalyzeResponse,
   OutlookAnalyzeSelectionResponse,
   OutlookBrief,
+  OutlookCalendarEvent,
+  OutlookCalendarEventMutationRequest,
+  OutlookCalendarResponse,
   OutlookCreateMeetingResponse,
   OutlookDailyBriefResponse,
   OutlookDraftResponse,
@@ -43,19 +46,38 @@ import { QueryKeys } from 'librechat-data-provider';
 import {
   useAnalyzeOutlookMessageMutation,
   useAnalyzeSelectedOutlookMessagesMutation,
+  useCreateOutlookCalendarEventMutation,
   useCreateOutlookDraftMutation,
   useCreateOutlookMeetingMutation,
+  useDeleteOutlookCalendarEventMutation,
   useDeleteOutlookMessageMutation,
+  useOutlookCalendarQuery,
   useOutlookDailyBriefMutation,
   useOutlookMessageQuery,
   useOutlookMessagesQuery,
   useOutlookStatusQuery,
+  useUpdateOutlookCalendarEventMutation,
   useProposeOutlookMeetingSlotsMutation,
   useUpdateOutlookMessageReadStateMutation,
 } from '~/data-provider';
 import { cn } from '~/utils';
 
 type InboxView = 'focused' | 'other' | 'all';
+type OutlookWorkspaceTab = 'inbox' | 'calendar';
+type CalendarViewMode = 'day' | 'week';
+type CalendarEditorMode = 'create' | 'edit' | null;
+
+type CalendarEventFormState = {
+  subject: string;
+  location: string;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  attendees: string;
+  body: string;
+  isOnlineMeeting: boolean;
+};
 
 type OutlookConversation = {
   id: string;
@@ -65,8 +87,13 @@ type OutlookConversation = {
 
 const OUTLOOK_ANALYSIS_CACHE_KEY = 'cortex.outlook.analysisByMessage';
 const OUTLOOK_DENSITY_KEY = 'cortex.outlook.listDensity';
+const OUTLOOK_ASSISTANT_PANEL_SIZE_KEY = 'cortex.outlook.assistantPanelSize';
 const DELETE_UNDO_WINDOW_MS = 8000;
 const MAILBOX_REFRESH_INTERVAL_MS = 15000;
+const ASSISTANT_PANEL_DEFAULT_WIDTH = 420;
+const ASSISTANT_PANEL_DEFAULT_HEIGHT = 640;
+const ASSISTANT_PANEL_MIN_WIDTH = 360;
+const ASSISTANT_PANEL_MIN_HEIGHT = 420;
 
 type DensityMode = 'comfortable' | 'compact';
 
@@ -77,12 +104,49 @@ type PendingDeleteBatch = {
   expiresAt: number;
 };
 
+type AssistantPanelSize = {
+  width: number;
+  height: number;
+};
+
 function loadDensityMode(): DensityMode {
   if (typeof window === 'undefined') {
     return 'comfortable';
   }
   const value = window.localStorage.getItem(OUTLOOK_DENSITY_KEY);
   return value === 'compact' ? 'compact' : 'comfortable';
+}
+
+function loadAssistantPanelSize(): AssistantPanelSize {
+  if (typeof window === 'undefined') {
+    return {
+      width: ASSISTANT_PANEL_DEFAULT_WIDTH,
+      height: ASSISTANT_PANEL_DEFAULT_HEIGHT,
+    };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(OUTLOOK_ASSISTANT_PANEL_SIZE_KEY);
+    if (!raw) {
+      return {
+        width: ASSISTANT_PANEL_DEFAULT_WIDTH,
+        height: ASSISTANT_PANEL_DEFAULT_HEIGHT,
+      };
+    }
+
+    const parsed = JSON.parse(raw);
+    const width = Number(parsed?.width);
+    const height = Number(parsed?.height);
+    return {
+      width: Number.isFinite(width) ? width : ASSISTANT_PANEL_DEFAULT_WIDTH,
+      height: Number.isFinite(height) ? height : ASSISTANT_PANEL_DEFAULT_HEIGHT,
+    };
+  } catch {
+    return {
+      width: ASSISTANT_PANEL_DEFAULT_WIDTH,
+      height: ASSISTANT_PANEL_DEFAULT_HEIGHT,
+    };
+  }
 }
 
 function useProgressiveText(value?: string) {
@@ -375,6 +439,677 @@ function ViewTabs({
           {tab.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+function WorkspaceTabs({
+  active,
+  onChange,
+}: {
+  active: OutlookWorkspaceTab;
+  onChange: (tab: OutlookWorkspaceTab) => void;
+}) {
+  const tabs: Array<{
+    id: OutlookWorkspaceTab;
+    label: string;
+    icon: ComponentType<{ className?: string }>;
+  }> = [
+    { id: 'inbox', label: 'Inbox', icon: Mail },
+    { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  ];
+
+  return (
+    <div className="inline-flex rounded-xl border border-border-light bg-surface-secondary p-1">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          className={cn(
+            'inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
+            active === tab.id
+              ? 'bg-surface-primary text-text-primary shadow-sm'
+              : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
+          )}
+          onClick={() => onChange(tab.id)}
+        >
+          <tab.icon className="h-3.5 w-3.5" aria-hidden="true" />
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CalendarModeTabs({
+  active,
+  onChange,
+}: {
+  active: CalendarViewMode;
+  onChange: (view: CalendarViewMode) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-border-light bg-surface-primary p-0.5">
+      {(['day', 'week'] as CalendarViewMode[]).map((view) => (
+        <button
+          key={view}
+          type="button"
+          className={cn(
+            'rounded-md px-2.5 py-1 text-[11px] font-semibold capitalize transition-colors',
+            active === view
+              ? 'bg-surface-primary-alt text-text-primary shadow-sm'
+              : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
+          )}
+          onClick={() => onChange(view)}
+        >
+          {view}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function startOfLocalDay(date: Date) {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function startOfLocalWeek(date: Date) {
+  const next = startOfLocalDay(date);
+  const dayOffset = (next.getDay() + 6) % 7;
+  return addDays(next, -dayOffset);
+}
+
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function fromDateInputValue(value?: string) {
+  if (!value) {
+    return startOfLocalDay(new Date());
+  }
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? startOfLocalDay(new Date()) : parsed;
+}
+
+function buildCalendarWindow(dateValue: string, view: CalendarViewMode) {
+  const anchor = fromDateInputValue(dateValue);
+  const start = view === 'week' ? startOfLocalWeek(anchor) : startOfLocalDay(anchor);
+  const end = addDays(start, view === 'week' ? 7 : 1);
+  return { start, end };
+}
+
+function formatCalendarHeaderDate(date: Date, view: CalendarViewMode) {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: view === 'week' ? 'short' : 'long',
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+}
+
+function formatCalendarTimeRange(event: OutlookCalendarEvent) {
+  if (!event.start?.dateTime || !event.end?.dateTime) {
+    return 'Time unavailable';
+  }
+  if (event.isAllDay) {
+    return 'All day';
+  }
+
+  const start = new Date(event.start.dateTime);
+  const end = new Date(event.end.dateTime);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return `${event.start.dateTime} - ${event.end.dateTime}`;
+  }
+
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `${formatter.format(start)} - ${formatter.format(end)}`;
+}
+
+function buildCalendarBuckets(
+  calendarData: OutlookCalendarResponse | undefined,
+  view: CalendarViewMode,
+) {
+  if (!calendarData) {
+    return [];
+  }
+
+  const start = new Date(calendarData.startDateTime);
+  const bucketCount = view === 'week' ? 7 : 1;
+  const eventMap = new Map<string, OutlookCalendarEvent[]>();
+
+  for (const event of calendarData.events ?? []) {
+    const eventStart = event.start?.dateTime ? new Date(event.start.dateTime) : null;
+    const key = eventStart && !Number.isNaN(eventStart.getTime())
+      ? toDateInputValue(eventStart)
+      : '';
+    if (!key) {
+      continue;
+    }
+    eventMap.set(key, [...(eventMap.get(key) ?? []), event]);
+  }
+
+  return Array.from({ length: bucketCount }).map((_, index) => {
+    const date = addDays(start, index);
+    const key = toDateInputValue(date);
+    const events = [...(eventMap.get(key) ?? [])].sort((a, b) => {
+      const first = new Date(a.start?.dateTime || 0).getTime();
+      const second = new Date(b.start?.dateTime || 0).getTime();
+      return first - second;
+    });
+
+    return {
+      key,
+      date,
+      label: formatCalendarHeaderDate(date, view),
+      events,
+    };
+  });
+}
+
+function formatWorkingHours(workingHours?: OutlookCalendarResponse['workingHours']) {
+  if (!workingHours?.startTime || !workingHours?.endTime) {
+    return 'Working hours unavailable';
+  }
+
+  const days = Array.isArray(workingHours.daysOfWeek) ? workingHours.daysOfWeek : [];
+  const shortDays = days.slice(0, 5).join(', ');
+  return `${shortDays || 'Configured days'} • ${workingHours.startTime}-${workingHours.endTime} ${workingHours.timeZone || ''}`.trim();
+}
+
+function toLocalInputParts(value?: { dateTime?: string }) {
+  const parsed = value?.dateTime ? new Date(value.dateTime) : null;
+  if (!parsed || Number.isNaN(parsed.getTime())) {
+    return {
+      date: toDateInputValue(new Date()),
+      time: '09:00',
+    };
+  }
+
+  const hours = `${parsed.getHours()}`.padStart(2, '0');
+  const minutes = `${parsed.getMinutes()}`.padStart(2, '0');
+  return {
+    date: toDateInputValue(parsed),
+    time: `${hours}:${minutes}`,
+  };
+}
+
+function serializeCalendarAttendees(event?: OutlookCalendarEvent) {
+  return (event?.attendees ?? [])
+    .map((attendee) => {
+      if (!attendee?.address) {
+        return '';
+      }
+      return attendee.name && attendee.name !== attendee.address
+        ? `${attendee.name} <${attendee.address}>`
+        : attendee.address;
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+function buildCalendarFormState(event?: OutlookCalendarEvent): CalendarEventFormState {
+  const start = toLocalInputParts(event?.start);
+  const end = toLocalInputParts(event?.end);
+  return {
+    subject: event?.subject || '',
+    location: event?.location || '',
+    startDate: start.date,
+    startTime: start.time,
+    endDate: end.date,
+    endTime: end.time,
+    attendees: serializeCalendarAttendees(event),
+    body: '',
+    isOnlineMeeting: Boolean(event?.isOnlineMeeting),
+  };
+}
+
+function parseCalendarAttendeesInput(value: string) {
+  return value
+    .split(/[\n,;]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const match = part.match(/^(.*?)<([^>]+)>$/);
+      if (match) {
+        return {
+          name: match[1].trim(),
+          address: match[2].trim(),
+        };
+      }
+      return {
+        name: '',
+        address: part,
+      };
+    })
+    .filter((attendee) => attendee.address.includes('@'));
+}
+
+function toCalendarDateTime(date: string, time: string) {
+  const safeDate = String(date || '').trim();
+  const safeTime = String(time || '').trim() || '09:00';
+  return new Date(`${safeDate}T${safeTime}:00`);
+}
+
+function buildCalendarMutationPayload(
+  form: CalendarEventFormState,
+): OutlookCalendarEventMutationRequest {
+  const start = toCalendarDateTime(form.startDate, form.startTime);
+  const end = toCalendarDateTime(form.endDate, form.endTime);
+
+  return {
+    subject: form.subject.trim(),
+    location: form.location.trim(),
+    attendees: parseCalendarAttendeesInput(form.attendees),
+    body: form.body.trim(),
+    isOnlineMeeting: form.isOnlineMeeting,
+    start: {
+      dateTime: start.toISOString(),
+      timeZone: 'UTC',
+    },
+    end: {
+      dateTime: end.toISOString(),
+      timeZone: 'UTC',
+    },
+  };
+}
+
+function CalendarWorkspace({
+  calendarData,
+  isLoading,
+  viewMode,
+  selectedEventId,
+  onSelectEvent,
+  editorMode,
+  form,
+  onFormChange,
+  onStartCreate,
+  onStartEdit,
+  onCancelEdit,
+  onSubmit,
+  onDelete,
+  isSubmitting,
+  isDeleting,
+  mutationError,
+}: {
+  calendarData?: OutlookCalendarResponse;
+  isLoading: boolean;
+  viewMode: CalendarViewMode;
+  selectedEventId?: string;
+  onSelectEvent: (eventId: string) => void;
+  editorMode: CalendarEditorMode;
+  form: CalendarEventFormState;
+  onFormChange: (field: keyof CalendarEventFormState, value: string | boolean) => void;
+  onStartCreate: () => void;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSubmit: () => void;
+  onDelete: () => void;
+  isSubmitting: boolean;
+  isDeleting: boolean;
+  mutationError?: string;
+}) {
+  const buckets = useMemo(
+    () => buildCalendarBuckets(calendarData, viewMode),
+    [calendarData, viewMode],
+  );
+  const selectedEvent = useMemo(
+    () => calendarData?.events.find((event) => event.id === selectedEventId) ?? calendarData?.events[0],
+    [calendarData?.events, selectedEventId],
+  );
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden px-4 py-4">
+        <div className="min-h-0 flex-1 space-y-3 overflow-hidden">
+          {Array.from({ length: viewMode === 'week' ? 3 : 5 }).map((_, index) => (
+            <div
+              key={index}
+              className="h-28 animate-pulse rounded-2xl border border-border-light bg-surface-secondary"
+            />
+          ))}
+        </div>
+        <div className="hidden w-[360px] animate-pulse rounded-2xl border border-border-light bg-surface-secondary xl:block" />
+      </div>
+    );
+  }
+
+  if (!calendarData || calendarData.events.length === 0) {
+    return (
+      <EmptyState
+        title="No calendar events"
+        description="No events were returned for the selected date range."
+      />
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+        <div
+          className={cn(
+            'gap-3',
+            viewMode === 'week'
+              ? 'grid min-w-[980px] grid-cols-7'
+              : 'grid grid-cols-1',
+          )}
+        >
+          {buckets.map((bucket) => (
+            <section
+              key={bucket.key}
+              className="flex min-h-[420px] flex-col rounded-2xl border border-border-light bg-surface-secondary"
+            >
+              <div className="border-b border-border-light px-3 py-3">
+                <div className="text-sm font-semibold text-text-primary">{bucket.label}</div>
+                <div className="mt-0.5 text-[11px] text-text-secondary">
+                  {bucket.events.length} event{bucket.events.length === 1 ? '' : 's'}
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
+                {bucket.events.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border-light bg-surface-primary px-3 py-4 text-xs text-text-secondary">
+                    No events for this day.
+                  </div>
+                ) : (
+                  bucket.events.map((event) => {
+                    const isSelected = event.id === selectedEvent?.id;
+                    return (
+                      <button
+                        key={event.id}
+                        type="button"
+                        className={cn(
+                          'w-full rounded-xl border px-3 py-3 text-left transition-colors',
+                          isSelected
+                            ? 'border-[#f5d000]/40 bg-[#f5d000]/10'
+                            : 'border-border-light bg-surface-primary hover:bg-surface-hover',
+                        )}
+                        onClick={() => onSelectEvent(event.id)}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="line-clamp-2 text-sm font-semibold text-text-primary">
+                              {event.subject}
+                            </div>
+                            <div className="mt-1 text-[11px] font-medium text-text-secondary">
+                              {formatCalendarTimeRange(event)}
+                            </div>
+                          </div>
+                          {event.isOnlineMeeting ? (
+                            <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+                              Teams
+                            </span>
+                          ) : null}
+                        </div>
+                        {event.location ? (
+                          <div className="mt-2 line-clamp-1 text-xs text-text-secondary">
+                            {event.location}
+                          </div>
+                        ) : null}
+                        {event.attendees != null && event.attendees.length > 0 ? (
+                          <div className="mt-2 text-[11px] text-text-secondary">
+                            {event.attendees.length} attendee{event.attendees.length === 1 ? '' : 's'}
+                          </div>
+                        ) : null}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+
+      <aside className="hidden w-[360px] flex-shrink-0 border-l border-border-light bg-surface-primary xl:flex xl:flex-col">
+        {editorMode ? (
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]">
+              {editorMode === 'create' ? 'New calendar event' : 'Edit calendar event'}
+            </div>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                  Subject
+                </label>
+                <input
+                  type="text"
+                  className="mt-1 h-10 w-full rounded-xl border border-border-light bg-surface-secondary px-3 text-sm outline-none focus:border-blue-500"
+                  value={form.subject}
+                  onChange={(event) => onFormChange('subject', event.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                  Location
+                </label>
+                <input
+                  type="text"
+                  className="mt-1 h-10 w-full rounded-xl border border-border-light bg-surface-secondary px-3 text-sm outline-none focus:border-blue-500"
+                  value={form.location}
+                  onChange={(event) => onFormChange('location', event.target.value)}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                    Start date
+                  </label>
+                  <input
+                    type="date"
+                    className="mt-1 h-10 w-full rounded-xl border border-border-light bg-surface-secondary px-3 text-sm outline-none focus:border-blue-500"
+                    value={form.startDate}
+                    onChange={(event) => onFormChange('startDate', event.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                    Start time
+                  </label>
+                  <input
+                    type="time"
+                    className="mt-1 h-10 w-full rounded-xl border border-border-light bg-surface-secondary px-3 text-sm outline-none focus:border-blue-500"
+                    value={form.startTime}
+                    onChange={(event) => onFormChange('startTime', event.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                    End date
+                  </label>
+                  <input
+                    type="date"
+                    className="mt-1 h-10 w-full rounded-xl border border-border-light bg-surface-secondary px-3 text-sm outline-none focus:border-blue-500"
+                    value={form.endDate}
+                    onChange={(event) => onFormChange('endDate', event.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                    End time
+                  </label>
+                  <input
+                    type="time"
+                    className="mt-1 h-10 w-full rounded-xl border border-border-light bg-surface-secondary px-3 text-sm outline-none focus:border-blue-500"
+                    value={form.endTime}
+                    onChange={(event) => onFormChange('endTime', event.target.value)}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                  Attendees
+                </label>
+                <textarea
+                  className="mt-1 min-h-24 w-full rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-sm outline-none focus:border-blue-500"
+                  value={form.attendees}
+                  onChange={(event) => onFormChange('attendees', event.target.value)}
+                  placeholder="name@company.com, vendor@example.com"
+                />
+              </div>
+              {editorMode === 'create' && (
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                    Notes
+                  </label>
+                  <textarea
+                    className="mt-1 min-h-24 w-full rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-sm outline-none focus:border-blue-500"
+                    value={form.body}
+                    onChange={(event) => onFormChange('body', event.target.value)}
+                    placeholder="Optional meeting description"
+                  />
+                </div>
+              )}
+              <label className="flex items-center gap-2 text-sm text-text-primary">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-border-light accent-[#f5d000]"
+                  checked={form.isOnlineMeeting}
+                  onChange={(event) => onFormChange('isOnlineMeeting', event.target.checked)}
+                />
+                Create Teams meeting link
+              </label>
+              {mutationError ? (
+                <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+                  {mutationError}
+                </div>
+              ) : null}
+              <div className="flex flex-wrap gap-2 pt-2">
+                <ActionButton
+                  label={editorMode === 'create' ? 'Create event' : 'Save changes'}
+                  loadingLabel={editorMode === 'create' ? 'Creating...' : 'Saving...'}
+                  className="bg-blue-600 text-white hover:bg-blue-700"
+                  onClick={onSubmit}
+                  isLoading={isSubmitting}
+                />
+                <ActionButton
+                  label="Cancel"
+                  loadingLabel="Cancel"
+                  className="border border-border-light hover:bg-surface-hover"
+                  onClick={onCancelEdit}
+                />
+              </div>
+            </div>
+          </div>
+        ) : selectedEvent ? (
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]">
+                Calendar event
+              </div>
+              <button
+                type="button"
+                className="rounded-lg border border-border-light px-2 py-1 text-[11px] font-semibold hover:bg-surface-hover"
+                onClick={onStartCreate}
+              >
+                New event
+              </button>
+            </div>
+            <h3 className="mt-2 text-lg font-semibold text-text-primary">{selectedEvent.subject}</h3>
+            <div className="mt-2 text-sm text-text-secondary">
+              {formatCalendarTimeRange(selectedEvent)}
+            </div>
+            {selectedEvent.location ? (
+              <div className="mt-3 rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-sm text-text-primary">
+                {selectedEvent.location}
+              </div>
+            ) : null}
+            <div className="mt-4 space-y-3 text-sm">
+              {selectedEvent.organizer?.address ? (
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                    Organizer
+                  </div>
+                  <div className="mt-1 text-text-primary">
+                    {selectedEvent.organizer.name || selectedEvent.organizer.address}
+                  </div>
+                </div>
+              ) : null}
+              {selectedEvent.attendees != null && selectedEvent.attendees.length > 0 ? (
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                    Attendees
+                  </div>
+                  <div className="mt-1 space-y-1">
+                    {selectedEvent.attendees.slice(0, 12).map((attendee) => (
+                      <div key={`${attendee.address}-${attendee.response || 'none'}`} className="text-text-primary">
+                        {attendee.name || attendee.address}
+                        {attendee.response ? (
+                          <span className="ml-1 text-xs text-text-secondary">
+                            ({attendee.response})
+                          </span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {selectedEvent.bodyPreview ? (
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                    Preview
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-text-primary">
+                    {selectedEvent.bodyPreview}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+            {selectedEvent.webLink ? (
+              <a
+                className="mt-4 inline-block text-sm font-medium text-blue-600 hover:underline dark:text-blue-300"
+                href={selectedEvent.webLink}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open in Outlook
+              </a>
+            ) : null}
+            {mutationError ? (
+              <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+                {mutationError}
+              </div>
+            ) : null}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <ActionButton
+                label="Edit event"
+                loadingLabel="Opening..."
+                className="border border-border-light hover:bg-surface-hover"
+                onClick={onStartEdit}
+              />
+              <ActionButton
+                label="Cancel event"
+                loadingLabel="Cancelling..."
+                className="border border-red-500/30 text-red-600 hover:bg-red-500/10 dark:text-red-300"
+                onClick={onDelete}
+                isLoading={isDeleting}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="px-5 py-4 text-sm text-text-secondary">
+            <div>Select an event to inspect it.</div>
+            <button
+              type="button"
+              className="mt-3 rounded-lg border border-border-light px-2.5 py-1.5 text-[11px] font-semibold hover:bg-surface-hover"
+              onClick={onStartCreate}
+            >
+              New event
+            </button>
+          </div>
+        )}
+      </aside>
     </div>
   );
 }
@@ -852,8 +1587,17 @@ function DraftResultCard({ draftResult }: { draftResult: OutlookDraftResponse })
 export default function OutlookPanel() {
   const queryClient = useQueryClient();
   const { showToast } = useToastContext();
+  const [workspaceTab, setWorkspaceTab] = useState<OutlookWorkspaceTab>('inbox');
   const [selectedId, setSelectedId] = useState<string | undefined>();
+  const [selectedCalendarEventId, setSelectedCalendarEventId] = useState<string | undefined>();
+  const [calendarEditorMode, setCalendarEditorMode] = useState<CalendarEditorMode>(null);
+  const [calendarMutationError, setCalendarMutationError] = useState<string>('');
+  const [calendarForm, setCalendarForm] = useState<CalendarEventFormState>(() =>
+    buildCalendarFormState(),
+  );
   const [inboxView, setInboxView] = useState<InboxView>('focused');
+  const [calendarViewMode, setCalendarViewMode] = useState<CalendarViewMode>('week');
+  const [calendarDate, setCalendarDate] = useState(() => toDateInputValue(new Date()));
   const [densityMode, setDensityMode] = useState<DensityMode>(loadDensityMode);
   const [actionSuccess, setActionSuccess] = useState<Record<string, boolean>>({});
   const [mailboxControlsOpen, setMailboxControlsOpen] = useState(false);
@@ -877,17 +1621,25 @@ export default function OutlookPanel() {
   const [nowMs, setNowMs] = useState(Date.now());
   const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
   const [assistantPanelScrolled, setAssistantPanelScrolled] = useState(false);
+  const [assistantPanelSize, setAssistantPanelSize] =
+    useState<AssistantPanelSize>(loadAssistantPanelSize);
+  const [assistantPanelResizing, setAssistantPanelResizing] = useState(false);
   const [draftInstructions, setDraftInstructions] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const successTimerRef = useRef<Record<string, number>>({});
   const deleteTimerRef = useRef<Record<string, number>>({});
   const pendingDeleteRef = useRef<PendingDeleteBatch[]>([]);
+  const assistantResizeCleanupRef = useRef<(() => void) | null>(null);
 
   const { data: status, isLoading: statusLoading } = useOutlookStatusQuery();
   const mailboxEnabled = Boolean(status?.enabled && status?.connected);
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const normalizedSearchTerm = deferredSearchTerm.trim();
+  const calendarWindow = useMemo(
+    () => buildCalendarWindow(calendarDate, calendarViewMode),
+    [calendarDate, calendarViewMode],
+  );
   const messageListParams = useMemo(
     () => ({
       folder: 'inbox' as const,
@@ -896,6 +1648,15 @@ export default function OutlookPanel() {
       search: normalizedSearchTerm || undefined,
     }),
     [inboxView, normalizedSearchTerm],
+  );
+  const calendarQueryParams = useMemo(
+    () => ({
+      startDateTime: calendarWindow.start.toISOString(),
+      endDateTime: calendarWindow.end.toISOString(),
+      view: calendarViewMode,
+      limit: calendarViewMode === 'week' ? 100 : 40,
+    }),
+    [calendarWindow.end, calendarWindow.start, calendarViewMode],
   );
 
   const {
@@ -906,6 +1667,16 @@ export default function OutlookPanel() {
     enabled: mailboxEnabled,
     keepPreviousData: true,
     refetchInterval: mailboxEnabled ? MAILBOX_REFRESH_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+  });
+  const {
+    data: calendarData,
+    isLoading: calendarLoading,
+    refetch: refetchCalendar,
+  } = useOutlookCalendarQuery(calendarQueryParams, {
+    enabled: mailboxEnabled && workspaceTab === 'calendar',
+    keepPreviousData: true,
+    refetchInterval: mailboxEnabled && workspaceTab === 'calendar' ? MAILBOX_REFRESH_INTERVAL_MS : false,
     refetchIntervalInBackground: false,
   });
 
@@ -929,6 +1700,11 @@ export default function OutlookPanel() {
   const draftResult = selectedId ? draftResultByMessage[selectedId] : null;
   const meetingSlots = selectedId ? meetingSlotsByMessage[selectedId] : null;
   const meetingResult = selectedId ? meetingResultByMessage[selectedId] : null;
+  const calendarEvents = useMemo(() => calendarData?.events ?? [], [calendarData?.events]);
+  const selectedCalendarEvent = useMemo(
+    () => calendarEvents.find((event) => event.id === selectedCalendarEventId) ?? calendarEvents[0],
+    [calendarEvents, selectedCalendarEventId],
+  );
 
   const { data: selectedMessage, isLoading: messageLoading } = useOutlookMessageQuery(selectedId, {
     enabled: mailboxEnabled && Boolean(selectedId),
@@ -944,7 +1720,10 @@ export default function OutlookPanel() {
 
   const analyzeMutation = useAnalyzeOutlookMessageMutation();
   const analyzeSelectedMutation = useAnalyzeSelectedOutlookMessagesMutation();
+  const createCalendarEventMutation = useCreateOutlookCalendarEventMutation();
   const draftMutation = useCreateOutlookDraftMutation();
+  const updateCalendarEventMutation = useUpdateOutlookCalendarEventMutation();
+  const deleteCalendarEventMutation = useDeleteOutlookCalendarEventMutation();
   const deleteMutation = useDeleteOutlookMessageMutation();
   const dailyBriefMutation = useOutlookDailyBriefMutation();
   const updateReadStateMutation = useUpdateOutlookMessageReadStateMutation();
@@ -1014,11 +1793,43 @@ export default function OutlookPanel() {
     setStatusMessage('');
     setAssistantPanelScrolled(false);
     setAssistantPanelOpen(false);
-  }, [inboxView, selectedId]);
+    setMailboxControlsOpen(false);
+  }, [workspaceTab, inboxView, selectedId]);
+
+  useEffect(() => {
+    if (workspaceTab !== 'calendar') {
+      return;
+    }
+    if (calendarEvents.length === 0) {
+      setSelectedCalendarEventId(undefined);
+      return;
+    }
+    if (!selectedCalendarEventId || !calendarEvents.some((event) => event.id === selectedCalendarEventId)) {
+      setSelectedCalendarEventId(calendarEvents[0].id);
+    }
+  }, [calendarEvents, selectedCalendarEventId, workspaceTab]);
+
+  useEffect(() => {
+    if (workspaceTab !== 'calendar') {
+      setCalendarEditorMode(null);
+      setCalendarMutationError('');
+    }
+  }, [workspaceTab]);
 
   useEffect(() => {
     window.localStorage.setItem(OUTLOOK_DENSITY_KEY, densityMode);
   }, [densityMode]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        OUTLOOK_ASSISTANT_PANEL_SIZE_KEY,
+        JSON.stringify(assistantPanelSize),
+      );
+    } catch {
+      // Best-effort persistence only.
+    }
+  }, [assistantPanelSize]);
 
   useEffect(() => {
     const visibleIds = new Set(visibleConversationIds);
@@ -1039,6 +1850,7 @@ export default function OutlookPanel() {
 
   useEffect(() => {
     return () => {
+      assistantResizeCleanupRef.current?.();
       Object.values(successTimerRef.current).forEach((timerId) => window.clearTimeout(timerId));
       Object.values(deleteTimerRef.current).forEach((timerId) => window.clearTimeout(timerId));
     };
@@ -1184,6 +1996,66 @@ export default function OutlookPanel() {
       });
     },
     [showToast, upsertPendingBatches],
+  );
+
+  const handleAssistantResizeStart = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      assistantResizeCleanupRef.current?.();
+      setAssistantPanelResizing(true);
+
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const startWidth = assistantPanelSize.width;
+      const startHeight = assistantPanelSize.height;
+
+      const maxWidth = Math.max(
+        ASSISTANT_PANEL_MIN_WIDTH,
+        Math.min(window.innerWidth - 48, 760),
+      );
+      const maxHeight = Math.max(
+        ASSISTANT_PANEL_MIN_HEIGHT,
+        Math.min(window.innerHeight - 48, 860),
+      );
+
+      const handleMove = (moveEvent: MouseEvent) => {
+        const nextWidth = Math.max(
+          ASSISTANT_PANEL_MIN_WIDTH,
+          Math.min(startWidth - (moveEvent.clientX - startX), maxWidth),
+        );
+        const nextHeight = Math.max(
+          ASSISTANT_PANEL_MIN_HEIGHT,
+          Math.min(startHeight - (moveEvent.clientY - startY), maxHeight),
+        );
+
+        setAssistantPanelSize({
+          width: nextWidth,
+          height: nextHeight,
+        });
+      };
+
+      const cleanup = () => {
+        window.removeEventListener('mousemove', handleMove);
+        window.removeEventListener('mouseup', handleUp);
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+        assistantResizeCleanupRef.current = null;
+        setAssistantPanelResizing(false);
+      };
+
+      const handleUp = () => {
+        cleanup();
+      };
+
+      assistantResizeCleanupRef.current = cleanup;
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'nwse-resize';
+      window.addEventListener('mousemove', handleMove);
+      window.addEventListener('mouseup', handleUp);
+    },
+    [assistantPanelSize.height, assistantPanelSize.width],
   );
 
   const handleAnalyze = async () => {
@@ -1333,10 +2205,123 @@ export default function OutlookPanel() {
     });
   };
 
+  const updateCalendarFormField = useCallback(
+    (field: keyof CalendarEventFormState, value: string | boolean) => {
+      setCalendarForm((current) => ({ ...current, [field]: value }));
+    },
+    [],
+  );
+
+  const beginCalendarCreate = useCallback(() => {
+    setCalendarMutationError('');
+    setCalendarEditorMode('create');
+    setCalendarForm(buildCalendarFormState());
+  }, []);
+
+  const beginCalendarEdit = useCallback(() => {
+    if (!selectedCalendarEvent) {
+      return;
+    }
+    setCalendarMutationError('');
+    setCalendarEditorMode('edit');
+    setCalendarForm(buildCalendarFormState(selectedCalendarEvent));
+  }, [selectedCalendarEvent]);
+
+  const cancelCalendarEdit = useCallback(() => {
+    setCalendarMutationError('');
+    setCalendarEditorMode(null);
+    setCalendarForm(buildCalendarFormState(selectedCalendarEvent));
+  }, [selectedCalendarEvent]);
+
+  const handleSubmitCalendarEvent = async () => {
+    try {
+      setCalendarMutationError('');
+      const payload = buildCalendarMutationPayload(calendarForm);
+      const startTime = new Date(payload.start.dateTime).getTime();
+      const endTime = new Date(payload.end.dateTime).getTime();
+      if (!payload.subject.trim()) {
+        setCalendarMutationError('Subject is required.');
+        return;
+      }
+      if (Number.isNaN(startTime) || Number.isNaN(endTime) || endTime <= startTime) {
+        setCalendarMutationError('End time must be after start time.');
+        return;
+      }
+
+      if (calendarEditorMode === 'create') {
+        const result = await createCalendarEventMutation.mutateAsync(payload);
+        await refetchCalendar();
+        setSelectedCalendarEventId(result.event.id);
+        setCalendarEditorMode(null);
+        setCalendarForm(buildCalendarFormState(result.event));
+        markActionSuccess('calendarSave');
+        showToast({ message: 'Calendar event created.', severity: 'success' });
+        return;
+      }
+
+      if (calendarEditorMode === 'edit' && selectedCalendarEventId) {
+        const result = await updateCalendarEventMutation.mutateAsync({
+          eventId: selectedCalendarEventId,
+          payload,
+        });
+        await refetchCalendar();
+        setSelectedCalendarEventId(result.event.id);
+        setCalendarEditorMode(null);
+        setCalendarForm(buildCalendarFormState(result.event));
+        markActionSuccess('calendarSave');
+        showToast({ message: 'Calendar event updated.', severity: 'success' });
+      }
+    } catch (error) {
+      const nextMessage =
+        error instanceof Error ? error.message : 'Unable to save the calendar event.';
+      setCalendarMutationError(nextMessage);
+    }
+  };
+
+  const handleDeleteCalendarEvent = async () => {
+    if (!selectedCalendarEventId) {
+      return;
+    }
+    const confirmed = window.confirm(
+      'Remove this calendar event? This will update Outlook immediately.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setCalendarMutationError('');
+      await deleteCalendarEventMutation.mutateAsync(selectedCalendarEventId);
+      await refetchCalendar();
+      setSelectedCalendarEventId(undefined);
+      setCalendarEditorMode(null);
+      markActionSuccess('calendarDelete');
+      showToast({ message: 'Calendar event removed.', severity: 'success' });
+    } catch (error) {
+      const nextMessage =
+        error instanceof Error ? error.message : 'Unable to remove the calendar event.';
+      setCalendarMutationError(nextMessage);
+    }
+  };
+
   const handleRefresh = async () => {
+    if (workspaceTab === 'calendar') {
+      await refetchCalendar();
+      markActionSuccess('refresh');
+      return;
+    }
+
     await refetch();
     markActionSuccess('refresh');
   };
+
+  const handleCalendarToday = () => {
+    setCalendarDate(toDateInputValue(new Date()));
+  };
+
+  const calendarSummary = calendarData
+    ? `${calendarData.events.length} event${calendarData.events.length === 1 ? '' : 's'} • ${formatWorkingHours(calendarData.workingHours)}`
+    : 'Calendar range loading';
 
   if (statusLoading) {
     return <EmptyState title="Loading Outlook" description="Checking mailbox configuration..." />;
@@ -1365,9 +2350,11 @@ export default function OutlookPanel() {
       <div className="border-b border-border-light px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold">AI Inbox</h2>
+            <h2 className="text-base font-semibold">Outlook workspace</h2>
             <p className="truncate text-xs text-text-secondary">
-              Focus: email content first. AI tools open on demand.
+              {workspaceTab === 'inbox'
+                ? 'Inbox operations with on-demand AI actions.'
+                : 'Calendar visibility first. Editing remains in Outlook for now.'}
             </p>
           </div>
           <ActionButton
@@ -1377,141 +2364,194 @@ export default function OutlookPanel() {
             className="border border-border-light hover:bg-surface-hover"
             icon={RefreshCw}
             onClick={handleRefresh}
-            isLoading={messagesLoading}
+            isLoading={workspaceTab === 'calendar' ? calendarLoading : messagesLoading}
             isSuccess={actionSuccess.refresh}
           />
         </div>
-        <div className="mt-2">
-          <div className="relative mb-2">
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary"
-              aria-hidden="true"
-            />
-            <input
-              type="search"
-              className="h-10 w-full rounded-xl border border-border-light bg-surface-secondary py-2 pl-9 pr-10 text-sm outline-none transition-colors placeholder:text-text-secondary focus:border-blue-500 focus:bg-surface-primary"
-              placeholder="Search inbox by sender, subject, or message text"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              aria-label="Search Outlook inbox"
-            />
-            {searchTerm.trim().length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <WorkspaceTabs active={workspaceTab} onChange={setWorkspaceTab} />
+          {workspaceTab === 'calendar' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                className="h-9 rounded-xl border border-border-light bg-surface-secondary px-3 text-sm outline-none focus:border-blue-500"
+                value={calendarDate}
+                onChange={(event) => setCalendarDate(event.target.value)}
+                aria-label="Select calendar date"
+              />
               <button
                 type="button"
-                className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-                onClick={() => setSearchTerm('')}
-                aria-label="Clear inbox search"
+                className="rounded-lg border border-border-light px-2.5 py-1.5 text-[11px] font-semibold hover:bg-surface-hover"
+                onClick={handleCalendarToday}
               >
-                <X className="h-4 w-4" aria-hidden="true" />
+                Today
               </button>
-            )}
-          </div>
-          <button
-            type="button"
-            className="inline-flex items-center gap-2 rounded-lg border border-border-light px-2.5 py-1.5 text-[11px] font-semibold transition-colors hover:bg-surface-hover"
-            onClick={() => setMailboxControlsOpen((current) => !current)}
-          >
-            <span>Mailbox controls</span>
-            <span className="rounded bg-surface-secondary px-1.5 py-0.5 text-[10px]">
-              {inboxViewLabel}
-            </span>
-            <ChevronDown
-              className={cn(
-                'h-3.5 w-3.5 transition-transform duration-150',
-                mailboxControlsOpen ? 'rotate-180' : 'rotate-0',
-              )}
-              aria-hidden="true"
-            />
-          </button>
-        </div>
-        <div
-          className={cn(
-            'overflow-hidden transition-[max-height,opacity] duration-200',
-            mailboxControlsOpen ? 'mt-2 max-h-80 opacity-100' : 'max-h-0 opacity-0',
+              <CalendarModeTabs active={calendarViewMode} onChange={setCalendarViewMode} />
+            </div>
           )}
-        >
-          <div className="space-y-2 rounded-xl border border-border-light bg-surface-secondary p-2">
-            <ViewTabs active={inboxView} onChange={setInboxView} />
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex rounded-lg border border-border-light bg-surface-primary p-0.5">
-                <button
-                  type="button"
-                  className={cn(
-                    'rounded-md px-2 py-1 text-[11px] font-semibold transition-colors',
-                    densityMode === 'comfortable'
-                      ? 'bg-surface-primary-alt text-text-primary shadow-sm'
-                      : 'text-text-secondary hover:bg-surface-hover',
-                  )}
-                  onClick={() => setDensityMode('comfortable')}
-                >
-                  Comfortable
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    'rounded-md px-2 py-1 text-[11px] font-semibold transition-colors',
-                    densityMode === 'compact'
-                      ? 'bg-surface-primary-alt text-text-primary shadow-sm'
-                      : 'text-text-secondary hover:bg-surface-hover',
-                  )}
-                  onClick={() => setDensityMode('compact')}
-                >
-                  Compact
-                </button>
+        </div>
+
+        {workspaceTab === 'inbox' ? (
+          <>
+            <div className="mt-2">
+              <div className="relative mb-2">
+                <Search
+                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  className="h-10 w-full rounded-xl border border-border-light bg-surface-secondary py-2 pl-9 pr-10 text-sm outline-none transition-colors placeholder:text-text-secondary focus:border-blue-500 focus:bg-surface-primary"
+                  placeholder="Search inbox by sender, subject, or message text"
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  aria-label="Search Outlook inbox"
+                />
+                {searchTerm.trim().length > 0 && (
+                  <button
+                    type="button"
+                    className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                    onClick={() => setSearchTerm('')}
+                    aria-label="Clear inbox search"
+                  >
+                    <X className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                )}
               </div>
               <button
                 type="button"
-                className="rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold hover:bg-surface-hover disabled:opacity-60"
-                onClick={toggleSelectVisible}
-                disabled={visibleConversationIds.length === 0}
+                className="inline-flex items-center gap-2 rounded-lg border border-border-light px-2.5 py-1.5 text-[11px] font-semibold transition-colors hover:bg-surface-hover"
+                onClick={() => setMailboxControlsOpen((current) => !current)}
               >
-                {allVisibleSelected ? 'Clear visible selection' : 'Select visible'}
+                <span>Mailbox controls</span>
+                <span className="rounded bg-surface-secondary px-1.5 py-0.5 text-[10px]">
+                  {inboxViewLabel}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    'h-3.5 w-3.5 transition-transform duration-150',
+                    mailboxControlsOpen ? 'rotate-180' : 'rotate-0',
+                  )}
+                  aria-hidden="true"
+                />
               </button>
             </div>
-            <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
-              <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
-              {status.calendarContextEnabled
-                ? 'Calendar context is enabled for scheduling analysis.'
-                : 'Calendar context is disabled.'}
+            <div
+              className={cn(
+                'overflow-hidden transition-[max-height,opacity] duration-200',
+                mailboxControlsOpen ? 'mt-2 max-h-80 opacity-100' : 'max-h-0 opacity-0',
+              )}
+            >
+              <div className="space-y-2 rounded-xl border border-border-light bg-surface-secondary p-2">
+                <ViewTabs active={inboxView} onChange={setInboxView} />
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex rounded-lg border border-border-light bg-surface-primary p-0.5">
+                    <button
+                      type="button"
+                      className={cn(
+                        'rounded-md px-2 py-1 text-[11px] font-semibold transition-colors',
+                        densityMode === 'comfortable'
+                          ? 'bg-surface-primary-alt text-text-primary shadow-sm'
+                          : 'text-text-secondary hover:bg-surface-hover',
+                      )}
+                      onClick={() => setDensityMode('comfortable')}
+                    >
+                      Comfortable
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        'rounded-md px-2 py-1 text-[11px] font-semibold transition-colors',
+                        densityMode === 'compact'
+                          ? 'bg-surface-primary-alt text-text-primary shadow-sm'
+                          : 'text-text-secondary hover:bg-surface-hover',
+                      )}
+                      onClick={() => setDensityMode('compact')}
+                    >
+                      Compact
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold hover:bg-surface-hover disabled:opacity-60"
+                    onClick={toggleSelectVisible}
+                    disabled={visibleConversationIds.length === 0}
+                  >
+                    {allVisibleSelected ? 'Clear visible selection' : 'Select visible'}
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
+                  <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+                  {status.calendarContextEnabled
+                    ? 'Calendar context is enabled for scheduling analysis.'
+                    : 'Calendar context is disabled.'}
+                </div>
+              </div>
             </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <ActionButton
+                label={`Delete selected emails (${selectedDeleteIds.length})`}
+                loadingLabel="Deleting selected..."
+                successLabel="Queued"
+                className="border border-red-500/30 text-red-600 hover:bg-red-500/10 dark:text-red-300"
+                onClick={handleBulkDelete}
+                icon={Trash2}
+                isSuccess={actionSuccess.delete}
+                disabled={selectedDeleteIds.length === 0}
+              />
+              <ActionButton
+                label={`Analyze selected emails (${selectedDeleteIds.length})`}
+                loadingLabel="Generating summary..."
+                successLabel="Summary ready"
+                className="bg-blue-600 text-white hover:bg-blue-700"
+                onClick={handleAnalyzeSelected}
+                icon={Sparkles}
+                isLoading={analyzeSelectedMutation.isLoading}
+                isSuccess={actionSuccess.analyzeSelected}
+                disabled={selectedDeleteIds.length === 0}
+              />
+              <ActionButton
+                label="Generate daily brief"
+                loadingLabel="Building brief..."
+                successLabel="Brief ready"
+                className="border border-amber-500/30 text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
+                onClick={handleDailyBrief}
+                icon={CalendarDays}
+                isLoading={dailyBriefMutation.isLoading}
+                isSuccess={actionSuccess.dailyBrief}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="mt-3 rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-[11px] text-text-secondary">
+            {calendarSummary}
           </div>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <ActionButton
-            label={`Delete selected emails (${selectedDeleteIds.length})`}
-            loadingLabel="Deleting selected..."
-            successLabel="Queued"
-            className="border border-red-500/30 text-red-600 hover:bg-red-500/10 dark:text-red-300"
-            onClick={handleBulkDelete}
-            icon={Trash2}
-            isSuccess={actionSuccess.delete}
-            disabled={selectedDeleteIds.length === 0}
-          />
-          <ActionButton
-            label={`Analyze selected emails (${selectedDeleteIds.length})`}
-            loadingLabel="Generating summary..."
-            successLabel="Summary ready"
-            className="bg-blue-600 text-white hover:bg-blue-700"
-            onClick={handleAnalyzeSelected}
-            icon={Sparkles}
-            isLoading={analyzeSelectedMutation.isLoading}
-            isSuccess={actionSuccess.analyzeSelected}
-            disabled={selectedDeleteIds.length === 0}
-          />
-          <ActionButton
-            label="Generate daily brief"
-            loadingLabel="Building brief..."
-            successLabel="Brief ready"
-            className="border border-amber-500/30 text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
-            onClick={handleDailyBrief}
-            icon={CalendarDays}
-            isLoading={dailyBriefMutation.isLoading}
-            isSuccess={actionSuccess.dailyBrief}
-          />
-        </div>
+        )}
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(240px,34%)_minmax(0,1fr)]">
+      {workspaceTab === 'calendar' ? (
+        <CalendarWorkspace
+          calendarData={calendarData}
+          isLoading={calendarLoading}
+          viewMode={calendarViewMode}
+          selectedEventId={selectedCalendarEventId}
+          onSelectEvent={setSelectedCalendarEventId}
+          editorMode={calendarEditorMode}
+          form={calendarForm}
+          onFormChange={updateCalendarFormField}
+          onStartCreate={beginCalendarCreate}
+          onStartEdit={beginCalendarEdit}
+          onCancelEdit={cancelCalendarEdit}
+          onSubmit={handleSubmitCalendarEvent}
+          onDelete={handleDeleteCalendarEvent}
+          isSubmitting={
+            createCalendarEventMutation.isLoading || updateCalendarEventMutation.isLoading
+          }
+          isDeleting={deleteCalendarEventMutation.isLoading}
+          mutationError={calendarMutationError}
+        />
+      ) : (
+        <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(240px,34%)_minmax(0,1fr)]">
         <div className="min-h-0 overflow-y-auto border-b border-border-light md:border-b-0 md:border-r">
           {messagesLoading && <MessageListSkeleton density={densityMode} />}
           {!messagesLoading && visibleConversations.length === 0 && (
@@ -1781,7 +2821,10 @@ export default function OutlookPanel() {
                   </div>
                 </div>
 
-                <div className="pointer-events-none absolute bottom-4 right-4 z-10 flex w-[420px] max-w-[calc(100%-2rem)] flex-col items-end">
+                <div
+                  className="pointer-events-none absolute bottom-4 right-4 z-10 flex max-w-[calc(100%-2rem)] flex-col items-end"
+                  style={{ width: `${assistantPanelSize.width}px` }}
+                >
                   {!assistantPanelOpen && (
                     <button
                       type="button"
@@ -1797,13 +2840,24 @@ export default function OutlookPanel() {
                   )}
 
                   {assistantPanelOpen && (
-                    <div className="pointer-events-auto w-full overflow-hidden rounded-2xl border border-border-light bg-surface-primary shadow-2xl">
-                      <div
-                        className="max-h-[72vh] overflow-y-auto"
-                        onScroll={(event) =>
-                          setAssistantPanelScrolled(event.currentTarget.scrollTop > 4)
-                        }
+                    <div
+                      className={cn(
+                        'pointer-events-auto relative w-full overflow-hidden rounded-2xl border border-border-light bg-surface-primary shadow-2xl',
+                        assistantPanelResizing && 'select-none',
+                      )}
+                      style={{ height: `${assistantPanelSize.height}px` }}
+                    >
+                      <button
+                        type="button"
+                        className="absolute left-0 top-0 z-[3] h-5 w-5 cursor-nwse-resize rounded-br-lg border-b border-r border-border-light bg-surface-secondary/90 text-text-secondary hover:bg-surface-hover"
+                        onMouseDown={handleAssistantResizeStart}
+                        aria-label="Resize AI assistant panel"
+                        title="Drag to resize"
                       >
+                        <span className="sr-only">Resize AI assistant panel</span>
+                        <span className="pointer-events-none absolute left-1 top-1 h-2.5 w-2.5 border-l border-t border-current opacity-70" />
+                      </button>
+                      <div className="flex h-full flex-col overflow-hidden">
                         <div
                           className={cn(
                             'sticky top-0 z-[2] border-b border-border-light bg-surface-primary px-4 py-3',
@@ -1868,7 +2922,12 @@ export default function OutlookPanel() {
                           />
                         </div>
 
-                        <div className="space-y-3 px-4 pb-4 pt-3">
+                        <div
+                          className="min-h-0 flex-1 overflow-y-auto space-y-3 px-4 pb-4 pt-3"
+                          onScroll={(event) =>
+                            setAssistantPanelScrolled(event.currentTarget.scrollTop > 4)
+                          }
+                        >
                           {analyzeMutation.error != null && (
                             <div className="mt-2 flex items-center justify-between rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
                               <span>Unable to analyze this email.</span>
@@ -2012,6 +3071,7 @@ export default function OutlookPanel() {
           </AnimatePresence>
         </div>
       </div>
+      )}
       {pendingDeleteBatches.length > 0 && (
         <div className="pointer-events-none absolute bottom-4 left-4 z-20 flex w-[340px] max-w-[calc(100%-2rem)] flex-col gap-2">
           {pendingDeleteBatches.map((batch) => {

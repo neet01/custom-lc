@@ -207,6 +207,13 @@ function normalizeEmailAddress(recipient) {
   };
 }
 
+function normalizeCalendarAttendee(attendee) {
+  return {
+    ...normalizeEmailAddress(attendee),
+    response: attendee?.status?.response,
+  };
+}
+
 function normalizeDirectoryUser(profile, fallback = {}) {
   return {
     id: profile?.id,
@@ -303,8 +310,14 @@ function normalizeCalendarEvent(event) {
     location: event.location?.displayName || '',
     organizer: normalizeEmailAddress(event.organizer),
     showAs: event.showAs,
+    isAllDay: Boolean(event.isAllDay),
     isOnlineMeeting: Boolean(event.isOnlineMeeting),
     webLink: event.webLink,
+    bodyPreview: event.bodyPreview || '',
+    type: event.type,
+    attendees: Array.isArray(event.attendees)
+      ? event.attendees.map(normalizeCalendarAttendee)
+      : [],
   };
 }
 
@@ -316,6 +329,18 @@ function normalizeOnlineMeetingEvent(event) {
     end: event.end,
     webLink: event.webLink,
     onlineMeeting: event.onlineMeeting
+      ? {
+          joinUrl: event.onlineMeeting.joinUrl,
+          conferenceId: event.onlineMeeting.conferenceId,
+        }
+      : undefined,
+  };
+}
+
+function normalizeCalendarMutationEvent(event) {
+  return {
+    ...normalizeCalendarEvent(event),
+    onlineMeeting: event?.onlineMeeting
       ? {
           joinUrl: event.onlineMeeting.joinUrl,
           conferenceId: event.onlineMeeting.conferenceId,
@@ -437,6 +462,119 @@ async function listMessages(
   return {
     messages: filterMessagesByInboxView(sortedMessages, folder, searchTerm ? 'all' : inboxView),
     search: searchTerm || undefined,
+  };
+}
+
+async function listCalendarEvents(user, params = {}) {
+  assertEnabled();
+  assertDelegatedUser(user);
+
+  const requestedLimit = Number(params.limit);
+  const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 50, 1), 100);
+  const view = ['day', 'week', 'agenda'].includes(String(params.view || 'week'))
+    ? String(params.view || 'week')
+    : 'week';
+
+  const fallbackStart = new Date();
+  fallbackStart.setHours(0, 0, 0, 0);
+
+  const startDate = params.startDateTime ? new Date(params.startDateTime) : fallbackStart;
+  if (Number.isNaN(startDate.getTime())) {
+    throw new OutlookServiceError('Invalid calendar startDateTime', 400);
+  }
+
+  const endDate = params.endDateTime
+    ? new Date(params.endDateTime)
+    : new Date(startDate.getTime() + (view === 'day' ? 24 : 7 * 24) * 60 * 60 * 1000);
+  if (Number.isNaN(endDate.getTime())) {
+    throw new OutlookServiceError('Invalid calendar endDateTime', 400);
+  }
+  if (endDate <= startDate) {
+    throw new OutlookServiceError('Calendar endDateTime must be after startDateTime', 400);
+  }
+
+  const [payload, mailboxContext] = await Promise.all([
+    graphRequest(user, '/me/calendarView', {
+      query: {
+        startDateTime: startDate.toISOString(),
+        endDateTime: endDate.toISOString(),
+        $top: limit,
+        $orderby: 'start/dateTime',
+        $select:
+          'id,subject,start,end,location,organizer,showAs,isOnlineMeeting,isAllDay,webLink,bodyPreview,type,attendees',
+      },
+    }),
+    getMailboxContext(user, { force: true }),
+  ]);
+
+  return {
+    startDateTime: startDate.toISOString(),
+    endDateTime: endDate.toISOString(),
+    view,
+    events: Array.isArray(payload?.value) ? payload.value.map(normalizeCalendarEvent) : [],
+    workingHours: mailboxContext?.workingHours,
+  };
+}
+
+async function createCalendarEvent(user, options = {}) {
+  assertEnabled();
+  assertDelegatedUser(user);
+
+  const payload = buildCalendarEventPayload(options, { allowBody: true });
+  const created = await graphRequest(user, '/me/events', {
+    method: 'POST',
+    body: payload,
+  });
+
+  return {
+    message: 'Calendar event created.',
+    event: normalizeCalendarMutationEvent(created),
+  };
+}
+
+async function updateCalendarEvent(user, eventId, options = {}) {
+  assertEnabled();
+  assertDelegatedUser(user);
+  if (!eventId) {
+    throw new OutlookServiceError('Calendar event id is required', 400);
+  }
+
+  const payload = buildCalendarEventPayload(options, { allowBody: false });
+  const updated = await graphRequest(user, `/me/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    body: payload,
+  });
+
+  const event =
+    updated && typeof updated === 'object' && updated.id
+      ? updated
+      : await graphRequest(user, `/me/events/${encodeURIComponent(eventId)}`, {
+          query: {
+            $select:
+              'id,subject,start,end,location,organizer,showAs,isOnlineMeeting,isAllDay,webLink,bodyPreview,type,attendees,onlineMeeting',
+          },
+        });
+
+  return {
+    message: 'Calendar event updated.',
+    event: normalizeCalendarMutationEvent(event),
+  };
+}
+
+async function deleteCalendarEvent(user, eventId) {
+  assertEnabled();
+  assertDelegatedUser(user);
+  if (!eventId) {
+    throw new OutlookServiceError('Calendar event id is required', 400);
+  }
+
+  await graphRequest(user, `/me/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+  });
+
+  return {
+    eventId,
+    message: 'Calendar event removed.',
   };
 }
 
@@ -1110,6 +1248,75 @@ function normalizeGraphTime(value, fallback) {
   const minutes = Math.min(Math.max(Number(match[2]), 0), 59);
   const seconds = Math.min(Math.max(Number(match[3] || 0), 0), 59);
   return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':');
+}
+
+function normalizeCalendarMutationSlot(value, label) {
+  const dateTime = String(value?.dateTime || '').trim();
+  if (!dateTime) {
+    throw new OutlookServiceError(`${label} dateTime is required`, 400);
+  }
+  const parsed = new Date(dateTime);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new OutlookServiceError(`Invalid ${label} dateTime`, 400);
+  }
+  return {
+    dateTime: parsed.toISOString(),
+    timeZone: String(value?.timeZone || 'UTC').trim() || 'UTC',
+  };
+}
+
+function buildCalendarEventPayload(options = {}, { allowBody = true } = {}) {
+  const subject = String(options.subject || '').trim();
+  if (!subject) {
+    throw new OutlookServiceError('Calendar event subject is required', 400);
+  }
+
+  const start = normalizeCalendarMutationSlot(options.start, 'Calendar start');
+  const end = normalizeCalendarMutationSlot(options.end, 'Calendar end');
+  if (new Date(end.dateTime) <= new Date(start.dateTime)) {
+    throw new OutlookServiceError('Calendar end time must be after start time', 400);
+  }
+
+  const payload = {
+    subject,
+    start,
+    end,
+  };
+
+  const location = String(options.location || '').trim();
+  if (location) {
+    payload.location = { displayName: location };
+  }
+
+  const attendees = Array.isArray(options.attendees)
+    ? options.attendees.map(normalizeMeetingAttendee).filter(Boolean).slice(0, 40)
+    : [];
+  if (attendees.length > 0) {
+    payload.attendees = attendees.map((attendee) => ({
+      type: 'required',
+      emailAddress: {
+        name: attendee.name || attendee.address,
+        address: attendee.address,
+      },
+    }));
+  }
+
+  if (options.isOnlineMeeting === true) {
+    payload.isOnlineMeeting = true;
+    payload.onlineMeetingProvider = 'teamsForBusiness';
+  }
+
+  if (allowBody) {
+    const body = String(options.body || '').trim();
+    if (body) {
+      payload.body = {
+        contentType: 'HTML',
+        content: formatPlainTextAsHtmlParagraphs(body),
+      };
+    }
+  }
+
+  return payload;
 }
 
 function formatGraphDate(date) {
@@ -2471,6 +2678,10 @@ module.exports = {
   getOutlookConfig,
   getStatus,
   listMessages,
+  listCalendarEvents,
+  createCalendarEvent,
+  updateCalendarEvent,
+  deleteCalendarEvent,
   getConversationMessages,
   getMessage,
   updateMessageReadState,

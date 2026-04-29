@@ -2116,6 +2116,7 @@ export default function OutlookPanel() {
     visibleConversationIds.length > 0 &&
     visibleConversationIds.every((messageId) => selectedDeleteIdSet.has(messageId));
   const inboxViewLabel = inboxView.charAt(0).toUpperCase() + inboxView.slice(1);
+  const calendarTimeZone = calendarData?.timeZone || calendarData?.workingHours?.timeZone;
   const analysis = selectedId ? analysisByMessage[selectedId] : null;
   const draftResult = selectedId ? draftResultByMessage[selectedId] : null;
   const meetingSlots = selectedId ? meetingSlotsByMessage[selectedId] : null;

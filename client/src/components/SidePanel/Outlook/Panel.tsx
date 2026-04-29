@@ -94,6 +94,9 @@ const ASSISTANT_PANEL_DEFAULT_WIDTH = 420;
 const ASSISTANT_PANEL_DEFAULT_HEIGHT = 640;
 const ASSISTANT_PANEL_MIN_WIDTH = 360;
 const ASSISTANT_PANEL_MIN_HEIGHT = 420;
+const CALENDAR_START_HOUR = 6;
+const CALENDAR_END_HOUR = 20;
+const CALENDAR_HOUR_SLOT_HEIGHT = 56;
 
 type DensityMode = 'comfortable' | 'compact';
 
@@ -629,6 +632,76 @@ function formatWorkingHours(workingHours?: OutlookCalendarResponse['workingHours
   return `${shortDays || 'Configured days'} • ${workingHours.startTime}-${workingHours.endTime} ${workingHours.timeZone || ''}`.trim();
 }
 
+function isSameLocalDay(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
+function getCalendarGridHeight() {
+  return (CALENDAR_END_HOUR - CALENDAR_START_HOUR) * CALENDAR_HOUR_SLOT_HEIGHT;
+}
+
+function getHourLabels() {
+  return Array.from({ length: CALENDAR_END_HOUR - CALENDAR_START_HOUR + 1 }).map((_, index) => {
+    const date = new Date();
+    date.setHours(CALENDAR_START_HOUR + index, 0, 0, 0);
+    return {
+      value: CALENDAR_START_HOUR + index,
+      label: new Intl.DateTimeFormat(undefined, {
+        hour: 'numeric',
+      }).format(date),
+    };
+  });
+}
+
+function getEventLayout(event: OutlookCalendarEvent) {
+  if (event.isAllDay || !event.start?.dateTime || !event.end?.dateTime) {
+    return null;
+  }
+
+  const start = new Date(event.start.dateTime);
+  const end = new Date(event.end.dateTime);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+    return null;
+  }
+
+  const startMinutes = start.getHours() * 60 + start.getMinutes();
+  const endMinutes = end.getHours() * 60 + end.getMinutes();
+  const gridStartMinutes = CALENDAR_START_HOUR * 60;
+  const gridEndMinutes = CALENDAR_END_HOUR * 60;
+
+  if (endMinutes <= gridStartMinutes || startMinutes >= gridEndMinutes) {
+    return null;
+  }
+
+  const boundedStart = Math.max(startMinutes, gridStartMinutes);
+  const boundedEnd = Math.min(endMinutes, gridEndMinutes);
+  const minuteHeight = CALENDAR_HOUR_SLOT_HEIGHT / 60;
+  const top = (boundedStart - gridStartMinutes) * minuteHeight;
+  const height = Math.max((boundedEnd - boundedStart) * minuteHeight, 28);
+
+  return { top, height };
+}
+
+function getCurrentTimeOffset(date: Date) {
+  const now = new Date();
+  if (!isSameLocalDay(date, now)) {
+    return null;
+  }
+
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  const gridStartMinutes = CALENDAR_START_HOUR * 60;
+  const gridEndMinutes = CALENDAR_END_HOUR * 60;
+  if (minutes < gridStartMinutes || minutes > gridEndMinutes) {
+    return null;
+  }
+
+  return ((minutes - gridStartMinutes) / 60) * CALENDAR_HOUR_SLOT_HEIGHT;
+}
+
 function toLocalInputParts(value?: { dateTime?: string }) {
   const parsed = value?.dateTime ? new Date(value.dateTime) : null;
   if (!parsed || Number.isNaN(parsed.getTime())) {
@@ -761,6 +834,8 @@ function CalendarWorkspace({
   isDeleting: boolean;
   mutationError?: string;
 }) {
+  const hourLabels = useMemo(() => getHourLabels(), []);
+  const gridHeight = useMemo(() => getCalendarGridHeight(), []);
   const buckets = useMemo(
     () => buildCalendarBuckets(calendarData, viewMode),
     [calendarData, viewMode],
@@ -806,69 +881,136 @@ function CalendarWorkspace({
               : 'grid grid-cols-1',
           )}
         >
-          {buckets.map((bucket) => (
-            <section
-              key={bucket.key}
-              className="flex min-h-[420px] flex-col rounded-2xl border border-border-light bg-surface-secondary"
-            >
-              <div className="border-b border-border-light px-3 py-3">
-                <div className="text-sm font-semibold text-text-primary">{bucket.label}</div>
-                <div className="mt-0.5 text-[11px] text-text-secondary">
-                  {bucket.events.length} event{bucket.events.length === 1 ? '' : 's'}
-                </div>
-              </div>
-              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
-                {bucket.events.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-border-light bg-surface-primary px-3 py-4 text-xs text-text-secondary">
-                    No events for this day.
+          {buckets.map((bucket) => {
+            const timedEvents = bucket.events.filter((event) => !event.isAllDay);
+            const allDayEvents = bucket.events.filter((event) => event.isAllDay);
+            const nowOffset = getCurrentTimeOffset(bucket.date);
+
+            return (
+              <section
+                key={bucket.key}
+                className="flex min-h-[420px] flex-col rounded-2xl border border-border-light bg-surface-secondary"
+              >
+                <div className="border-b border-border-light px-3 py-3">
+                  <div className="text-sm font-semibold text-text-primary">{bucket.label}</div>
+                  <div className="mt-0.5 text-[11px] text-text-secondary">
+                    {bucket.events.length} event{bucket.events.length === 1 ? '' : 's'}
                   </div>
-                ) : (
-                  bucket.events.map((event) => {
-                    const isSelected = event.id === selectedEvent?.id;
-                    return (
-                      <button
-                        key={event.id}
-                        type="button"
-                        className={cn(
-                          'w-full rounded-xl border px-3 py-3 text-left transition-colors',
-                          isSelected
-                            ? 'border-[#f5d000]/40 bg-[#f5d000]/10'
-                            : 'border-border-light bg-surface-primary hover:bg-surface-hover',
-                        )}
-                        onClick={() => onSelectEvent(event.id)}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="line-clamp-2 text-sm font-semibold text-text-primary">
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+                  {allDayEvents.length > 0 ? (
+                    <div className="mb-3 space-y-2">
+                      {allDayEvents.map((event) => {
+                        const isSelected = event.id === selectedEvent?.id;
+                        return (
+                          <button
+                            key={event.id}
+                            type="button"
+                            className={cn(
+                              'w-full rounded-xl border px-3 py-2 text-left transition-colors',
+                              isSelected
+                                ? 'border-[#f5d000]/40 bg-[#f5d000]/10'
+                                : 'border-border-light bg-surface-primary hover:bg-surface-hover',
+                            )}
+                            onClick={() => onSelectEvent(event.id)}
+                          >
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]">
+                              All day
+                            </div>
+                            <div className="mt-1 text-sm font-semibold text-text-primary">
                               {event.subject}
                             </div>
-                            <div className="mt-1 text-[11px] font-medium text-text-secondary">
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  <div
+                    className="relative rounded-xl border border-border-light bg-surface-primary"
+                    style={{ height: `${gridHeight}px` }}
+                  >
+                    <div className="absolute inset-0">
+                      {hourLabels.slice(0, -1).map((hour, index) => (
+                        <div
+                          key={hour.value}
+                          className="absolute left-0 right-0 border-t border-dashed border-[#f5d000]/20"
+                          style={{ top: `${index * CALENDAR_HOUR_SLOT_HEIGHT}px` }}
+                        />
+                      ))}
+                    </div>
+
+                    <div className="absolute inset-y-0 left-0 w-14 border-r border-[#f5d000]/20 bg-[#f5d000]/[0.03]">
+                      {hourLabels.slice(0, -1).map((hour, index) => (
+                        <div
+                          key={hour.value}
+                          className="absolute left-0 right-0 px-2 text-[10px] font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]"
+                          style={{ top: `${Math.max(index * CALENDAR_HOUR_SLOT_HEIGHT - 7, 2)}px` }}
+                        >
+                          {hour.label}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="absolute inset-y-0 left-14 right-0">
+                      {timedEvents.length === 0 ? (
+                        <div className="flex h-full items-center justify-center px-4 text-xs text-text-secondary">
+                          No scheduled events in this time range.
+                        </div>
+                      ) : null}
+
+                      {timedEvents.map((event) => {
+                        const layout = getEventLayout(event);
+                        if (!layout) {
+                          return null;
+                        }
+                        const isSelected = event.id === selectedEvent?.id;
+                        return (
+                          <button
+                            key={event.id}
+                            type="button"
+                            className={cn(
+                              'absolute left-2 right-2 overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-colors',
+                              isSelected
+                                ? 'border-[#f5d000]/60 bg-[#f5d000]/12'
+                                : 'border-border-light bg-surface-secondary hover:bg-surface-hover',
+                            )}
+                            style={{
+                              top: `${layout.top}px`,
+                              height: `${layout.height}px`,
+                            }}
+                            onClick={() => onSelectEvent(event.id)}
+                          >
+                            <div className="line-clamp-1 text-sm font-semibold text-text-primary">
+                              {event.subject}
+                            </div>
+                            <div className="mt-1 text-[11px] font-medium text-[#b88a00] dark:text-[#f5d000]">
                               {formatCalendarTimeRange(event)}
                             </div>
-                          </div>
-                          {event.isOnlineMeeting ? (
-                            <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
-                              Teams
-                            </span>
-                          ) : null}
+                            {event.location ? (
+                              <div className="mt-1 line-clamp-1 text-[11px] text-text-secondary">
+                                {event.location}
+                              </div>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+
+                      {nowOffset != null ? (
+                        <div
+                          className="pointer-events-none absolute left-0 right-0 z-[1]"
+                          style={{ top: `${nowOffset}px` }}
+                        >
+                          <div className="absolute -left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-[#f5d000] shadow-[0_0_0_3px_rgba(245,208,0,0.18)]" />
+                          <div className="h-0.5 w-full bg-[#f5d000] shadow-[0_0_12px_rgba(245,208,0,0.45)]" />
                         </div>
-                        {event.location ? (
-                          <div className="mt-2 line-clamp-1 text-xs text-text-secondary">
-                            {event.location}
-                          </div>
-                        ) : null}
-                        {event.attendees != null && event.attendees.length > 0 ? (
-                          <div className="mt-2 text-[11px] text-text-secondary">
-                            {event.attendees.length} attendee{event.attendees.length === 1 ? '' : 's'}
-                          </div>
-                        ) : null}
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </section>
-          ))}
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            );
+          })}
         </div>
       </div>
 
@@ -2393,16 +2535,16 @@ export default function OutlookPanel() {
 
         {workspaceTab === 'inbox' ? (
           <>
-            <div className="mt-2">
-              <div className="relative mb-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[220px] flex-1 sm:max-w-[320px]">
                 <Search
                   className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary"
                   aria-hidden="true"
                 />
                 <input
                   type="search"
-                  className="h-10 w-full rounded-xl border border-border-light bg-surface-secondary py-2 pl-9 pr-10 text-sm outline-none transition-colors placeholder:text-text-secondary focus:border-blue-500 focus:bg-surface-primary"
-                  placeholder="Search inbox by sender, subject, or message text"
+                  className="h-9 w-full rounded-xl border border-border-light bg-surface-secondary py-2 pl-9 pr-10 text-xs outline-none transition-colors placeholder:text-text-secondary focus:border-blue-500 focus:bg-surface-primary"
+                  placeholder="Search inbox"
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
                   aria-label="Search Outlook inbox"
@@ -2420,7 +2562,7 @@ export default function OutlookPanel() {
               </div>
               <button
                 type="button"
-                className="inline-flex items-center gap-2 rounded-lg border border-border-light px-2.5 py-1.5 text-[11px] font-semibold transition-colors hover:bg-surface-hover"
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-border-light px-2.5 py-1.5 text-[11px] font-semibold transition-colors hover:bg-surface-hover"
                 onClick={() => setMailboxControlsOpen((current) => !current)}
               >
                 <span>Mailbox controls</span>
@@ -2435,6 +2577,37 @@ export default function OutlookPanel() {
                   aria-hidden="true"
                 />
               </button>
+              <ActionButton
+                label={`Delete (${selectedDeleteIds.length})`}
+                loadingLabel="Deleting selected..."
+                successLabel="Queued"
+                className="border border-red-500/30 text-red-600 hover:bg-red-500/10 dark:text-red-300"
+                onClick={handleBulkDelete}
+                icon={Trash2}
+                isSuccess={actionSuccess.delete}
+                disabled={selectedDeleteIds.length === 0}
+              />
+              <ActionButton
+                label={`Summarize (${selectedDeleteIds.length})`}
+                loadingLabel="Generating summary..."
+                successLabel="Summary ready"
+                className="bg-blue-600 text-white hover:bg-blue-700"
+                onClick={handleAnalyzeSelected}
+                icon={Sparkles}
+                isLoading={analyzeSelectedMutation.isLoading}
+                isSuccess={actionSuccess.analyzeSelected}
+                disabled={selectedDeleteIds.length === 0}
+              />
+              <ActionButton
+                label="Daily brief"
+                loadingLabel="Building brief..."
+                successLabel="Brief ready"
+                className="border border-amber-500/30 text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
+                onClick={handleDailyBrief}
+                icon={CalendarDays}
+                isLoading={dailyBriefMutation.isLoading}
+                isSuccess={actionSuccess.dailyBrief}
+              />
             </div>
             <div
               className={cn(
@@ -2487,39 +2660,6 @@ export default function OutlookPanel() {
                     : 'Calendar context is disabled.'}
                 </div>
               </div>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <ActionButton
-                label={`Delete selected emails (${selectedDeleteIds.length})`}
-                loadingLabel="Deleting selected..."
-                successLabel="Queued"
-                className="border border-red-500/30 text-red-600 hover:bg-red-500/10 dark:text-red-300"
-                onClick={handleBulkDelete}
-                icon={Trash2}
-                isSuccess={actionSuccess.delete}
-                disabled={selectedDeleteIds.length === 0}
-              />
-              <ActionButton
-                label={`Analyze selected emails (${selectedDeleteIds.length})`}
-                loadingLabel="Generating summary..."
-                successLabel="Summary ready"
-                className="bg-blue-600 text-white hover:bg-blue-700"
-                onClick={handleAnalyzeSelected}
-                icon={Sparkles}
-                isLoading={analyzeSelectedMutation.isLoading}
-                isSuccess={actionSuccess.analyzeSelected}
-                disabled={selectedDeleteIds.length === 0}
-              />
-              <ActionButton
-                label="Generate daily brief"
-                loadingLabel="Building brief..."
-                successLabel="Brief ready"
-                className="border border-amber-500/30 text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
-                onClick={handleDailyBrief}
-                icon={CalendarDays}
-                isLoading={dailyBriefMutation.isLoading}
-                isSuccess={actionSuccess.dailyBrief}
-              />
             </div>
           </>
         ) : (

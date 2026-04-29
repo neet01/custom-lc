@@ -657,7 +657,7 @@ function getHourLabels() {
   });
 }
 
-function getEventLayout(event: OutlookCalendarEvent) {
+function getEventTimeBounds(event: OutlookCalendarEvent) {
   if (event.isAllDay || !event.start?.dateTime || !event.end?.dateTime) {
     return null;
   }
@@ -679,11 +679,102 @@ function getEventLayout(event: OutlookCalendarEvent) {
 
   const boundedStart = Math.max(startMinutes, gridStartMinutes);
   const boundedEnd = Math.min(endMinutes, gridEndMinutes);
-  const minuteHeight = CALENDAR_HOUR_SLOT_HEIGHT / 60;
-  const top = (boundedStart - gridStartMinutes) * minuteHeight;
-  const height = Math.max((boundedEnd - boundedStart) * minuteHeight, 28);
 
-  return { top, height };
+  return {
+    startMinutes: boundedStart,
+    endMinutes: boundedEnd,
+  };
+}
+
+function getCalendarEventLayouts(events: OutlookCalendarEvent[]) {
+  const minuteHeight = CALENDAR_HOUR_SLOT_HEIGHT / 60;
+  const gridStartMinutes = CALENDAR_START_HOUR * 60;
+
+  const entries = events
+    .map((event) => {
+      const bounds = getEventTimeBounds(event);
+      if (!bounds) {
+        return null;
+      }
+
+      return {
+        event,
+        ...bounds,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    .sort((left, right) => {
+      if (left.startMinutes !== right.startMinutes) {
+        return left.startMinutes - right.startMinutes;
+      }
+
+      if (left.endMinutes !== right.endMinutes) {
+        return left.endMinutes - right.endMinutes;
+      }
+
+      return left.event.subject.localeCompare(right.event.subject);
+    });
+
+  const groups: typeof entries[] = [];
+  let currentGroup: typeof entries = [];
+  let currentGroupEnd = -1;
+
+  for (const entry of entries) {
+    if (currentGroup.length === 0 || entry.startMinutes < currentGroupEnd) {
+      currentGroup.push(entry);
+      currentGroupEnd = Math.max(currentGroupEnd, entry.endMinutes);
+      continue;
+    }
+
+    groups.push(currentGroup);
+    currentGroup = [entry];
+    currentGroupEnd = entry.endMinutes;
+  }
+
+  if (currentGroup.length > 0) {
+    groups.push(currentGroup);
+  }
+
+  const layouts = new Map<
+    string,
+    { top: number; height: number; left: number; width: number; overlapColumns: number }
+  >();
+
+  for (const group of groups) {
+    const columnEndMinutes: number[] = [];
+    const assignments = new Map<string, number>();
+
+    for (const entry of group) {
+      let columnIndex = columnEndMinutes.findIndex((endMinute) => entry.startMinutes >= endMinute);
+
+      if (columnIndex === -1) {
+        columnIndex = columnEndMinutes.length;
+        columnEndMinutes.push(entry.endMinutes);
+      } else {
+        columnEndMinutes[columnIndex] = entry.endMinutes;
+      }
+
+      assignments.set(entry.event.id, columnIndex);
+    }
+
+    const overlapColumns = Math.max(columnEndMinutes.length, 1);
+
+    for (const entry of group) {
+      const top = (entry.startMinutes - gridStartMinutes) * minuteHeight;
+      const height = Math.max((entry.endMinutes - entry.startMinutes) * minuteHeight, 28);
+      const columnIndex = assignments.get(entry.event.id) ?? 0;
+
+      layouts.set(entry.event.id, {
+        top,
+        height,
+        left: columnIndex / overlapColumns,
+        width: 1 / overlapColumns,
+        overlapColumns,
+      });
+    }
+  }
+
+  return layouts;
 }
 
 function getCurrentTimeOffset(date: Date) {
@@ -840,6 +931,25 @@ function CalendarWorkspace({
     () => buildCalendarBuckets(calendarData, viewMode),
     [calendarData, viewMode],
   );
+  const maxAllDayCount = useMemo(
+    () =>
+      buckets.reduce(
+        (maxCount, bucket) =>
+          Math.max(
+            maxCount,
+            bucket.events.filter((event) => event.isAllDay).length,
+          ),
+        0,
+      ),
+    [buckets],
+  );
+  const allDayAreaHeight = useMemo(() => {
+    if (maxAllDayCount === 0) {
+      return 0;
+    }
+
+    return maxAllDayCount * 56 + Math.max(maxAllDayCount - 1, 0) * 8;
+  }, [maxAllDayCount]);
   const selectedEvent = useMemo(
     () => calendarData?.events.find((event) => event.id === selectedEventId) ?? calendarData?.events[0],
     [calendarData?.events, selectedEventId],
@@ -875,142 +985,177 @@ function CalendarWorkspace({
       <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
         <div
           className={cn(
-            'gap-3',
-            viewMode === 'week'
-              ? 'grid min-w-[980px] grid-cols-7'
-              : 'grid grid-cols-1',
+            'flex items-start gap-3',
+            viewMode === 'week' ? 'min-w-[1040px]' : 'min-w-0',
           )}
         >
-          {buckets.map((bucket) => {
-            const timedEvents = bucket.events.filter((event) => !event.isAllDay);
-            const allDayEvents = bucket.events.filter((event) => event.isAllDay);
-            const nowOffset = getCurrentTimeOffset(bucket.date);
-
-            return (
-              <section
-                key={bucket.key}
-                className="flex min-h-[420px] flex-col rounded-2xl border border-border-light bg-surface-secondary"
+          <section className="sticky left-0 top-0 z-[2] w-14 flex-shrink-0 overflow-hidden rounded-2xl border border-border-light bg-surface-secondary">
+            <div className="border-b border-border-light px-3 py-3 opacity-0 select-none" aria-hidden="true">
+              <div className="text-sm font-semibold">Time</div>
+              <div className="mt-0.5 text-[11px]">0 events</div>
+            </div>
+            <div className="px-0 py-3">
+              {allDayAreaHeight > 0 ? <div className="mb-3" style={{ minHeight: `${allDayAreaHeight}px` }} /> : null}
+              <div
+                className="relative rounded-r-xl border-y border-r border-border-light bg-surface-primary"
+                style={{ height: `${gridHeight}px` }}
               >
-                <div className="border-b border-border-light px-3 py-3">
-                  <div className="text-sm font-semibold text-text-primary">{bucket.label}</div>
-                  <div className="mt-0.5 text-[11px] text-text-secondary">
-                    {bucket.events.length} event{bucket.events.length === 1 ? '' : 's'}
-                  </div>
+                <div className="absolute inset-0">
+                  {hourLabels.slice(0, -1).map((hour, index) => (
+                    <div
+                      key={hour.value}
+                      className="absolute left-0 right-0 border-t border-dashed border-[#f5d000]/20"
+                      style={{ top: `${index * CALENDAR_HOUR_SLOT_HEIGHT}px` }}
+                    />
+                  ))}
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-                  {allDayEvents.length > 0 ? (
-                    <div className="mb-3 space-y-2">
-                      {allDayEvents.map((event) => {
-                        const isSelected = event.id === selectedEvent?.id;
-                        return (
-                          <button
-                            key={event.id}
-                            type="button"
-                            className={cn(
-                              'w-full rounded-xl border px-3 py-2 text-left transition-colors',
-                              isSelected
-                                ? 'border-[#f5d000]/40 bg-[#f5d000]/10'
-                                : 'border-border-light bg-surface-primary hover:bg-surface-hover',
-                            )}
-                            onClick={() => onSelectEvent(event.id)}
-                          >
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]">
-                              All day
-                            </div>
-                            <div className="mt-1 text-sm font-semibold text-text-primary">
-                              {event.subject}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
 
+                {hourLabels.slice(0, -1).map((hour, index) => (
                   <div
-                    className="relative rounded-xl border border-border-light bg-surface-primary"
-                    style={{ height: `${gridHeight}px` }}
+                    key={hour.value}
+                    className="absolute left-0 right-0 px-2 text-[10px] font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]"
+                    style={{ top: `${Math.max(index * CALENDAR_HOUR_SLOT_HEIGHT - 7, 2)}px` }}
                   >
-                    <div className="absolute inset-0">
-                      {hourLabels.slice(0, -1).map((hour, index) => (
-                        <div
-                          key={hour.value}
-                          className="absolute left-0 right-0 border-t border-dashed border-[#f5d000]/20"
-                          style={{ top: `${index * CALENDAR_HOUR_SLOT_HEIGHT}px` }}
-                        />
-                      ))}
-                    </div>
+                    {hour.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
 
-                    <div className="absolute inset-y-0 left-0 w-14 border-r border-[#f5d000]/20 bg-[#f5d000]/[0.03]">
-                      {hourLabels.slice(0, -1).map((hour, index) => (
-                        <div
-                          key={hour.value}
-                          className="absolute left-0 right-0 px-2 text-[10px] font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]"
-                          style={{ top: `${Math.max(index * CALENDAR_HOUR_SLOT_HEIGHT - 7, 2)}px` }}
-                        >
-                          {hour.label}
-                        </div>
-                      ))}
-                    </div>
+          <div
+            className={cn(
+              'flex-1 gap-3',
+              viewMode === 'week' ? 'grid min-w-0 grid-cols-7' : 'grid grid-cols-1',
+            )}
+          >
+            {buckets.map((bucket) => {
+              const timedEvents = bucket.events.filter((event) => !event.isAllDay);
+              const allDayEvents = bucket.events.filter((event) => event.isAllDay);
+              const nowOffset = getCurrentTimeOffset(bucket.date);
+              const eventLayouts = getCalendarEventLayouts(timedEvents);
 
-                    <div className="absolute inset-y-0 left-14 right-0">
-                      {timedEvents.length === 0 ? (
-                        <div className="flex h-full items-center justify-center px-4 text-xs text-text-secondary">
-                          No scheduled events in this time range.
-                        </div>
-                      ) : null}
-
-                      {timedEvents.map((event) => {
-                        const layout = getEventLayout(event);
-                        if (!layout) {
-                          return null;
-                        }
-                        const isSelected = event.id === selectedEvent?.id;
-                        return (
-                          <button
-                            key={event.id}
-                            type="button"
-                            className={cn(
-                              'absolute left-2 right-2 overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-colors',
-                              isSelected
-                                ? 'border-[#f5d000]/60 bg-[#f5d000]/12'
-                                : 'border-border-light bg-surface-secondary hover:bg-surface-hover',
-                            )}
-                            style={{
-                              top: `${layout.top}px`,
-                              height: `${layout.height}px`,
-                            }}
-                            onClick={() => onSelectEvent(event.id)}
-                          >
-                            <div className="line-clamp-1 text-sm font-semibold text-text-primary">
-                              {event.subject}
-                            </div>
-                            <div className="mt-1 text-[11px] font-medium text-[#b88a00] dark:text-[#f5d000]">
-                              {formatCalendarTimeRange(event)}
-                            </div>
-                            {event.location ? (
-                              <div className="mt-1 line-clamp-1 text-[11px] text-text-secondary">
-                                {event.location}
-                              </div>
-                            ) : null}
-                          </button>
-                        );
-                      })}
-
-                      {nowOffset != null ? (
-                        <div
-                          className="pointer-events-none absolute left-0 right-0 z-[1]"
-                          style={{ top: `${nowOffset}px` }}
-                        >
-                          <div className="absolute -left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-[#f5d000] shadow-[0_0_0_3px_rgba(245,208,0,0.18)]" />
-                          <div className="h-0.5 w-full bg-[#f5d000] shadow-[0_0_12px_rgba(245,208,0,0.45)]" />
-                        </div>
-                      ) : null}
+              return (
+                <section
+                  key={bucket.key}
+                  className="flex min-h-[420px] flex-col rounded-2xl border border-border-light bg-surface-secondary"
+                >
+                  <div className="border-b border-border-light px-3 py-3">
+                    <div className="text-sm font-semibold text-text-primary">{bucket.label}</div>
+                    <div className="mt-0.5 text-[11px] text-text-secondary">
+                      {bucket.events.length} event{bucket.events.length === 1 ? '' : 's'}
                     </div>
                   </div>
-                </div>
-              </section>
-            );
-          })}
+                  <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+                    {allDayAreaHeight > 0 ? (
+                      <div className="mb-3" style={{ minHeight: `${allDayAreaHeight}px` }}>
+                        {allDayEvents.length > 0 ? (
+                          <div className="space-y-2">
+                            {allDayEvents.map((event) => {
+                              const isSelected = event.id === selectedEvent?.id;
+                              return (
+                                <button
+                                  key={event.id}
+                                  type="button"
+                                  className={cn(
+                                    'w-full rounded-xl border px-3 py-2 text-left transition-colors',
+                                    isSelected
+                                      ? 'border-[#f5d000]/40 bg-[#f5d000]/10'
+                                      : 'border-border-light bg-surface-primary hover:bg-surface-hover',
+                                  )}
+                                  onClick={() => onSelectEvent(event.id)}
+                                >
+                                  <div className="text-[11px] font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]">
+                                    All day
+                                  </div>
+                                  <div className="mt-1 text-sm font-semibold text-text-primary">
+                                    {event.subject}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <div
+                      className="relative rounded-xl border border-border-light bg-surface-primary"
+                      style={{ height: `${gridHeight}px` }}
+                    >
+                      <div className="absolute inset-0">
+                        {hourLabels.slice(0, -1).map((hour, index) => (
+                          <div
+                            key={hour.value}
+                            className="absolute left-0 right-0 border-t border-dashed border-[#f5d000]/20"
+                            style={{ top: `${index * CALENDAR_HOUR_SLOT_HEIGHT}px` }}
+                          />
+                        ))}
+                      </div>
+
+                      <div className="absolute inset-0">
+                        {timedEvents.length === 0 ? (
+                          <div className="flex h-full items-center justify-center px-4 text-xs text-text-secondary">
+                            No scheduled events in this time range.
+                          </div>
+                        ) : null}
+
+                        {timedEvents.map((event) => {
+                          const layout = eventLayouts.get(event.id);
+                          if (!layout) {
+                            return null;
+                          }
+                          const isSelected = event.id === selectedEvent?.id;
+                          const columnGap = layout.overlapColumns > 1 ? 6 : 0;
+                          return (
+                            <button
+                              key={event.id}
+                              type="button"
+                              className={cn(
+                                'absolute left-2 right-2 overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-colors',
+                                isSelected
+                                  ? 'border-[#f5d000]/60 bg-[#f5d000]/12'
+                                  : 'border-border-light bg-surface-secondary hover:bg-surface-hover',
+                              )}
+                              style={{
+                                top: `${layout.top}px`,
+                                height: `${layout.height}px`,
+                                left: `calc(8px + ((100% - 16px) * ${layout.left}))`,
+                                width: `calc(((100% - 16px) * ${layout.width}) - ${columnGap}px)`,
+                              }}
+                              onClick={() => onSelectEvent(event.id)}
+                            >
+                              <div className="line-clamp-1 text-sm font-semibold text-text-primary">
+                                {event.subject}
+                              </div>
+                              <div className="mt-1 text-[11px] font-medium text-[#b88a00] dark:text-[#f5d000]">
+                                {formatCalendarTimeRange(event)}
+                              </div>
+                              {event.location ? (
+                                <div className="mt-1 line-clamp-1 text-[11px] text-text-secondary">
+                                  {event.location}
+                                </div>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+
+                        {nowOffset != null ? (
+                          <div
+                            className="pointer-events-none absolute left-0 right-0 z-[1]"
+                            style={{ top: `${nowOffset}px` }}
+                          >
+                            <div className="absolute -left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-[#f5d000] shadow-[0_0_0_3px_rgba(245,208,0,0.18)]" />
+                            <div className="h-0.5 w-full bg-[#f5d000] shadow-[0_0_12px_rgba(245,208,0,0.45)]" />
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              );
+            })}
+          </div>
         </div>
       </div>
 

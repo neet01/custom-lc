@@ -560,7 +560,113 @@ function formatCalendarHeaderDate(date: Date, view: CalendarViewMode) {
   }).format(date);
 }
 
-function formatCalendarTimeRange(event: OutlookCalendarEvent) {
+function parseCalendarDateTimeParts(value?: string) {
+  const match = String(value || '').match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{1,2}):(\d{2})(?::(\d{2}))?/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hours: Number(match[4]),
+    minutes: Number(match[5]),
+    seconds: Number(match[6] || 0),
+    date: `${match[1]}-${match[2]}-${match[3]}`,
+  };
+}
+
+function getDateTimePartsInTimeZone(date: Date, timeZone?: string) {
+  if (!timeZone || Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  try {
+    const values = Object.fromEntries(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        hour12: false,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+        .formatToParts(date)
+        .filter((part) => part.type !== 'literal')
+        .map((part) => [part.type, part.value]),
+    );
+
+    return {
+      year: Number(values.year),
+      month: Number(values.month),
+      day: Number(values.day),
+      hours: Number(values.hour === '24' ? '0' : values.hour),
+      minutes: Number(values.minute),
+      seconds: Number(values.second),
+      date: `${values.year}-${values.month}-${values.day}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getCalendarDisplayParts(
+  value?: { dateTime?: string; timeZone?: string },
+  preferredTimeZone?: string,
+) {
+  const rawParts = parseCalendarDateTimeParts(value?.dateTime);
+  if (!rawParts) {
+    return null;
+  }
+
+  const sourceTimeZone = String(value?.timeZone || '').trim();
+  if (
+    sourceTimeZone &&
+    preferredTimeZone &&
+    sourceTimeZone === 'UTC' &&
+    preferredTimeZone !== sourceTimeZone
+  ) {
+    const utcInstant = new Date(
+      Date.UTC(
+        rawParts.year,
+        rawParts.month - 1,
+        rawParts.day,
+        rawParts.hours,
+        rawParts.minutes,
+        rawParts.seconds,
+      ),
+    );
+    const convertedParts = getDateTimePartsInTimeZone(utcInstant, preferredTimeZone);
+    if (convertedParts) {
+      return convertedParts;
+    }
+  }
+
+  return rawParts;
+}
+
+function formatCalendarTimeParts(parts: ReturnType<typeof parseCalendarDateTimeParts>) {
+  if (!parts) {
+    return '';
+  }
+
+  const displayDate = new Date(Date.UTC(2000, 0, 1, parts.hours, parts.minutes, parts.seconds));
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+  }).format(displayDate);
+}
+
+function formatCalendarTimeRange(
+  event: OutlookCalendarEvent,
+  preferredTimeZone?: string,
+) {
   if (!event.start?.dateTime || !event.end?.dateTime) {
     return 'Time unavailable';
   }
@@ -568,17 +674,13 @@ function formatCalendarTimeRange(event: OutlookCalendarEvent) {
     return 'All day';
   }
 
-  const start = new Date(event.start.dateTime);
-  const end = new Date(event.end.dateTime);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+  const startParts = getCalendarDisplayParts(event.start, preferredTimeZone);
+  const endParts = getCalendarDisplayParts(event.end, preferredTimeZone);
+  if (!startParts || !endParts) {
     return `${event.start.dateTime} - ${event.end.dateTime}`;
   }
 
-  const formatter = new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-  return `${formatter.format(start)} - ${formatter.format(end)}`;
+  return `${formatCalendarTimeParts(startParts)} - ${formatCalendarTimeParts(endParts)}`;
 }
 
 function buildCalendarBuckets(
@@ -592,12 +694,11 @@ function buildCalendarBuckets(
   const start = new Date(calendarData.startDateTime);
   const bucketCount = view === 'week' ? 7 : 1;
   const eventMap = new Map<string, OutlookCalendarEvent[]>();
+  const calendarTimeZone = calendarData.timeZone || calendarData.workingHours?.timeZone;
 
   for (const event of calendarData.events ?? []) {
-    const eventStart = event.start?.dateTime ? new Date(event.start.dateTime) : null;
-    const key = eventStart && !Number.isNaN(eventStart.getTime())
-      ? toDateInputValue(eventStart)
-      : '';
+    const eventStart = getCalendarDisplayParts(event.start, calendarTimeZone);
+    const key = eventStart?.date || '';
     if (!key) {
       continue;
     }
@@ -608,9 +709,11 @@ function buildCalendarBuckets(
     const date = addDays(start, index);
     const key = toDateInputValue(date);
     const events = [...(eventMap.get(key) ?? [])].sort((a, b) => {
-      const first = new Date(a.start?.dateTime || 0).getTime();
-      const second = new Date(b.start?.dateTime || 0).getTime();
-      return first - second;
+      const first = getCalendarDisplayParts(a.start, calendarTimeZone);
+      const second = getCalendarDisplayParts(b.start, calendarTimeZone);
+      const firstMinutes = first ? first.hours * 60 + first.minutes : 0;
+      const secondMinutes = second ? second.hours * 60 + second.minutes : 0;
+      return firstMinutes - secondMinutes;
     });
 
     return {
@@ -657,19 +760,19 @@ function getHourLabels() {
   });
 }
 
-function getEventTimeBounds(event: OutlookCalendarEvent) {
+function getEventTimeBounds(event: OutlookCalendarEvent, preferredTimeZone?: string) {
   if (event.isAllDay || !event.start?.dateTime || !event.end?.dateTime) {
     return null;
   }
 
-  const start = new Date(event.start.dateTime);
-  const end = new Date(event.end.dateTime);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+  const start = getCalendarDisplayParts(event.start, preferredTimeZone);
+  const end = getCalendarDisplayParts(event.end, preferredTimeZone);
+  if (!start || !end) {
     return null;
   }
 
-  const startMinutes = start.getHours() * 60 + start.getMinutes();
-  const endMinutes = end.getHours() * 60 + end.getMinutes();
+  const startMinutes = start.hours * 60 + start.minutes;
+  const endMinutes = end.hours * 60 + end.minutes;
   const gridStartMinutes = CALENDAR_START_HOUR * 60;
   const gridEndMinutes = CALENDAR_END_HOUR * 60;
 
@@ -686,13 +789,13 @@ function getEventTimeBounds(event: OutlookCalendarEvent) {
   };
 }
 
-function getCalendarEventLayouts(events: OutlookCalendarEvent[]) {
+function getCalendarEventLayouts(events: OutlookCalendarEvent[], preferredTimeZone?: string) {
   const minuteHeight = CALENDAR_HOUR_SLOT_HEIGHT / 60;
   const gridStartMinutes = CALENDAR_START_HOUR * 60;
 
   const entries = events
     .map((event) => {
-      const bounds = getEventTimeBounds(event);
+      const bounds = getEventTimeBounds(event, preferredTimeZone);
       if (!bounds) {
         return null;
       }
@@ -777,13 +880,29 @@ function getCalendarEventLayouts(events: OutlookCalendarEvent[]) {
   return layouts;
 }
 
-function getCurrentTimeOffset(date: Date) {
+function getCurrentTimeOffset(date: Date, timeZone?: string) {
   const now = new Date();
-  if (!isSameLocalDay(date, now)) {
+  const currentParts = getDateTimePartsInTimeZone(now, timeZone);
+  if (!currentParts) {
+    if (!isSameLocalDay(date, now)) {
+      return null;
+    }
+
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    const gridStartMinutes = CALENDAR_START_HOUR * 60;
+    const gridEndMinutes = CALENDAR_END_HOUR * 60;
+    if (minutes < gridStartMinutes || minutes > gridEndMinutes) {
+      return null;
+    }
+
+    return ((minutes - gridStartMinutes) / 60) * CALENDAR_HOUR_SLOT_HEIGHT;
+  }
+
+  if (toDateInputValue(date) !== currentParts.date) {
     return null;
   }
 
-  const minutes = now.getHours() * 60 + now.getMinutes();
+  const minutes = currentParts.hours * 60 + currentParts.minutes;
   const gridStartMinutes = CALENDAR_START_HOUR * 60;
   const gridEndMinutes = CALENDAR_END_HOUR * 60;
   if (minutes < gridStartMinutes || minutes > gridEndMinutes) {
@@ -927,6 +1046,7 @@ function CalendarWorkspace({
 }) {
   const hourLabels = useMemo(() => getHourLabels(), []);
   const gridHeight = useMemo(() => getCalendarGridHeight(), []);
+  const calendarTimeZone = calendarData?.timeZone || calendarData?.workingHours?.timeZone;
   const buckets = useMemo(
     () => buildCalendarBuckets(calendarData, viewMode),
     [calendarData, viewMode],
@@ -1032,8 +1152,8 @@ function CalendarWorkspace({
             {buckets.map((bucket) => {
               const timedEvents = bucket.events.filter((event) => !event.isAllDay);
               const allDayEvents = bucket.events.filter((event) => event.isAllDay);
-              const nowOffset = getCurrentTimeOffset(bucket.date);
-              const eventLayouts = getCalendarEventLayouts(timedEvents);
+              const nowOffset = getCurrentTimeOffset(bucket.date, calendarTimeZone);
+              const eventLayouts = getCalendarEventLayouts(timedEvents, calendarTimeZone);
 
               return (
                 <section
@@ -1129,7 +1249,7 @@ function CalendarWorkspace({
                                 {event.subject}
                               </div>
                               <div className="mt-1 text-[11px] font-medium text-[#b88a00] dark:text-[#f5d000]">
-                                {formatCalendarTimeRange(event)}
+                                {formatCalendarTimeRange(event, calendarTimeZone)}
                               </div>
                               {event.location ? (
                                 <div className="mt-1 line-clamp-1 text-[11px] text-text-secondary">
@@ -1305,7 +1425,7 @@ function CalendarWorkspace({
             </div>
             <h3 className="mt-2 text-lg font-semibold text-text-primary">{selectedEvent.subject}</h3>
             <div className="mt-2 text-sm text-text-secondary">
-              {formatCalendarTimeRange(selectedEvent)}
+              {formatCalendarTimeRange(selectedEvent, calendarTimeZone)}
             </div>
             {selectedEvent.location ? (
               <div className="mt-3 rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-sm text-text-primary">

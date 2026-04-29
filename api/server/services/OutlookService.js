@@ -305,8 +305,8 @@ function normalizeCalendarEvent(event) {
   return {
     id: event.id,
     subject: event.subject || '(No subject)',
-    start: event.start,
-    end: event.end,
+    start: normalizeDateTimeTimeZone(event.start),
+    end: normalizeDateTimeTimeZone(event.end),
     location: event.location?.displayName || '',
     organizer: normalizeEmailAddress(event.organizer),
     showAs: event.showAs,
@@ -325,8 +325,8 @@ function normalizeOnlineMeetingEvent(event) {
   return {
     id: event.id,
     subject: event.subject || '(No subject)',
-    start: event.start,
-    end: event.end,
+    start: normalizeDateTimeTimeZone(event.start),
+    end: normalizeDateTimeTimeZone(event.end),
     webLink: event.webLink,
     onlineMeeting: event.onlineMeeting
       ? {
@@ -346,6 +346,17 @@ function normalizeCalendarMutationEvent(event) {
           conferenceId: event.onlineMeeting.conferenceId,
         }
       : undefined,
+  };
+}
+
+function normalizeDateTimeTimeZone(value) {
+  if (!value?.dateTime) {
+    return value;
+  }
+
+  return {
+    ...value,
+    timeZone: getIanaTimeZone(value?.timeZone) || value?.timeZone || 'UTC',
   };
 }
 
@@ -493,19 +504,26 @@ async function listCalendarEvents(user, params = {}) {
     throw new OutlookServiceError('Calendar endDateTime must be after startDateTime', 400);
   }
 
-  const [payload, mailboxContext] = await Promise.all([
-    graphRequest(user, '/me/calendarView', {
-      query: {
-        startDateTime: startDate.toISOString(),
-        endDateTime: endDate.toISOString(),
-        $top: limit,
-        $orderby: 'start/dateTime',
-        $select:
-          'id,subject,start,end,location,organizer,showAs,isOnlineMeeting,isAllDay,webLink,bodyPreview,type,attendees',
-      },
-    }),
-    getMailboxContext(user, { force: true }),
-  ]);
+  const mailboxContext = await getMailboxContext(user, { force: true });
+  const preferredTimeZone =
+    getIanaTimeZone(mailboxContext?.timeZone) ||
+    getIanaTimeZone(mailboxContext?.workingHours?.timeZone) ||
+    undefined;
+  const payload = await graphRequest(user, '/me/calendarView', {
+    headers: preferredTimeZone
+      ? {
+          Prefer: `outlook.timezone="${preferredTimeZone}"`,
+        }
+      : undefined,
+    query: {
+      startDateTime: startDate.toISOString(),
+      endDateTime: endDate.toISOString(),
+      $top: limit,
+      $orderby: 'start/dateTime',
+      $select:
+        'id,subject,start,end,location,organizer,showAs,isOnlineMeeting,isAllDay,webLink,bodyPreview,type,attendees',
+    },
+  });
 
   return {
     startDateTime: startDate.toISOString(),
@@ -513,6 +531,7 @@ async function listCalendarEvents(user, params = {}) {
     view,
     events: Array.isArray(payload?.value) ? payload.value.map(normalizeCalendarEvent) : [],
     workingHours: mailboxContext?.workingHours,
+    timeZone: preferredTimeZone,
   };
 }
 

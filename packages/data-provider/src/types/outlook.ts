@@ -93,6 +93,7 @@ export type OutlookCalendarResponse = {
   endDateTime: string;
   view: 'day' | 'week' | 'agenda';
   events: OutlookCalendarEvent[];
+  timeZone?: string;
   workingHours?: {
     daysOfWeek: string[];
     startTime: string;

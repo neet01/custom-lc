@@ -27,6 +27,12 @@ const WINDOWS_TO_IANA_TIME_ZONE = {
   'US Eastern Standard Time': 'America/Indianapolis',
   'US Mountain Standard Time': 'America/Phoenix',
 };
+const IANA_TO_WINDOWS_TIME_ZONE = Object.fromEntries(
+  Object.entries(WINDOWS_TO_IANA_TIME_ZONE).map(([windowsTimeZone, ianaTimeZone]) => [
+    ianaTimeZone,
+    windowsTimeZone,
+  ]),
+);
 
 class OutlookServiceError extends Error {
   constructor(message, status = 500, details) {
@@ -366,13 +372,16 @@ function normalizeMailboxSettings(settings) {
   }
 
   return {
-    timeZone: settings.timeZone,
+    timeZone: getIanaTimeZone(settings.timeZone) || settings.timeZone,
     workingHours: settings.workingHours
       ? {
           daysOfWeek: settings.workingHours.daysOfWeek,
           startTime: settings.workingHours.startTime,
           endTime: settings.workingHours.endTime,
-          timeZone: settings.workingHours.timeZone?.name || settings.workingHours.timeZone,
+          timeZone:
+            getIanaTimeZone(settings.workingHours.timeZone?.name || settings.workingHours.timeZone) ||
+            settings.workingHours.timeZone?.name ||
+            settings.workingHours.timeZone,
         }
       : undefined,
   };
@@ -506,13 +515,12 @@ async function listCalendarEvents(user, params = {}) {
 
   const mailboxContext = await getMailboxContext(user, { force: true });
   const preferredTimeZone =
-    getIanaTimeZone(mailboxContext?.timeZone) ||
-    getIanaTimeZone(mailboxContext?.workingHours?.timeZone) ||
-    undefined;
+    mailboxContext?.timeZone || mailboxContext?.workingHours?.timeZone || undefined;
+  const graphPreferredTimeZone = getGraphPreferredTimeZone(preferredTimeZone);
   const payload = await graphRequest(user, '/me/calendarView', {
-    headers: preferredTimeZone
+    headers: graphPreferredTimeZone
       ? {
-          Prefer: `outlook.timezone="${preferredTimeZone}"`,
+          Prefer: `outlook.timezone="${graphPreferredTimeZone}"`,
         }
       : undefined,
     query: {
@@ -531,7 +539,7 @@ async function listCalendarEvents(user, params = {}) {
     view,
     events: Array.isArray(payload?.value) ? payload.value.map(normalizeCalendarEvent) : [],
     workingHours: mailboxContext?.workingHours,
-    timeZone: preferredTimeZone,
+    timeZone: getIanaTimeZone(preferredTimeZone) || preferredTimeZone,
   };
 }
 
@@ -1274,13 +1282,17 @@ function normalizeCalendarMutationSlot(value, label) {
   if (!dateTime) {
     throw new OutlookServiceError(`${label} dateTime is required`, 400);
   }
-  const parsed = new Date(dateTime);
-  if (Number.isNaN(parsed.getTime())) {
+  const parsed = parseGraphDateTimeParts(dateTime);
+  if (!parsed) {
     throw new OutlookServiceError(`Invalid ${label} dateTime`, 400);
   }
+  const normalizedDateTime = `${parsed.date}T${String(parsed.hours).padStart(2, '0')}:${String(
+    parsed.minutes,
+  ).padStart(2, '0')}:${String(parsed.seconds).padStart(2, '0')}`;
+  const requestedTimeZone = String(value?.timeZone || 'UTC').trim() || 'UTC';
   return {
-    dateTime: parsed.toISOString(),
-    timeZone: String(value?.timeZone || 'UTC').trim() || 'UTC',
+    dateTime: normalizedDateTime,
+    timeZone: getGraphPreferredTimeZone(requestedTimeZone) || requestedTimeZone,
   };
 }
 
@@ -1292,7 +1304,29 @@ function buildCalendarEventPayload(options = {}, { allowBody = true } = {}) {
 
   const start = normalizeCalendarMutationSlot(options.start, 'Calendar start');
   const end = normalizeCalendarMutationSlot(options.end, 'Calendar end');
-  if (new Date(end.dateTime) <= new Date(start.dateTime)) {
+  const startParts = parseGraphDateTimeParts(start.dateTime);
+  const endParts = parseGraphDateTimeParts(end.dateTime);
+  const startComparable = startParts
+    ? Date.UTC(
+        startParts.year,
+        startParts.month - 1,
+        startParts.day,
+        startParts.hours,
+        startParts.minutes,
+        startParts.seconds,
+      )
+    : Number.NaN;
+  const endComparable = endParts
+    ? Date.UTC(
+        endParts.year,
+        endParts.month - 1,
+        endParts.day,
+        endParts.hours,
+        endParts.minutes,
+        endParts.seconds,
+      )
+    : Number.NaN;
+  if (Number.isNaN(startComparable) || Number.isNaN(endComparable) || endComparable <= startComparable) {
     throw new OutlookServiceError('Calendar end time must be after start time', 400);
   }
 
@@ -1377,6 +1411,15 @@ function getIanaTimeZone(timeZone) {
     return undefined;
   }
   return WINDOWS_TO_IANA_TIME_ZONE[normalized] || normalized;
+}
+
+function getGraphPreferredTimeZone(timeZone) {
+  const normalized = String(timeZone || '').trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  return IANA_TO_WINDOWS_TIME_ZONE[normalized] || normalized;
 }
 
 function parseGraphDateTimeParts(value) {
@@ -1716,15 +1759,20 @@ function formatDateTimeForDraft(value) {
   if (!value?.dateTime) {
     return '';
   }
-  const date = new Date(value.dateTime);
-  if (Number.isNaN(date.getTime())) {
+  const parts = parseGraphDateTimeParts(value.dateTime);
+  if (!parts) {
     return `${value.dateTime} ${value.timeZone || ''}`.trim();
   }
+
   return new Intl.DateTimeFormat('en-US', {
     dateStyle: 'medium',
     timeStyle: 'short',
-    timeZone: value.timeZone === 'UTC' ? 'UTC' : undefined,
-  }).format(date);
+    timeZone: 'UTC',
+  }).format(
+    new Date(
+      Date.UTC(parts.year, parts.month - 1, parts.day, parts.hours, parts.minutes, parts.seconds),
+    ),
+  );
 }
 
 function formatPlainTextAsHtmlParagraphs(value) {

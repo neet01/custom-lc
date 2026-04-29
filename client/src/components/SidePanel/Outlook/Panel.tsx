@@ -330,18 +330,19 @@ function formatMeetingDateTime(value?: { dateTime: string; timeZone?: string }) 
   if (!value?.dateTime) {
     return '';
   }
-  const date = new Date(value.dateTime);
-  if (Number.isNaN(date.getTime())) {
+  const parts = getCalendarDisplayParts(value, value.timeZone);
+  if (!parts) {
     return `${value.dateTime} ${value.timeZone || ''}`.trim();
   }
+
   return new Intl.DateTimeFormat(undefined, {
     weekday: 'short',
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-    timeZone: value.timeZone === 'UTC' ? 'UTC' : undefined,
-  }).format(date);
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(parts.year, parts.month - 1, parts.day, parts.hours, parts.minutes, parts.seconds)));
 }
 
 function EmptyState({ title, description }: { title: string; description: string }) {
@@ -535,6 +536,10 @@ function toDateInputValue(date: Date) {
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
   const day = `${date.getDate()}`.padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function toDateInputValueFromParts(parts: { year: number; month: number; day: number }) {
+  return `${parts.year}`.padStart(4, '0') + `-${`${parts.month}`.padStart(2, '0')}-${`${parts.day}`.padStart(2, '0')}`;
 }
 
 function fromDateInputValue(value?: string) {
@@ -912,19 +917,22 @@ function getCurrentTimeOffset(date: Date, timeZone?: string) {
   return ((minutes - gridStartMinutes) / 60) * CALENDAR_HOUR_SLOT_HEIGHT;
 }
 
-function toLocalInputParts(value?: { dateTime?: string }) {
-  const parsed = value?.dateTime ? new Date(value.dateTime) : null;
-  if (!parsed || Number.isNaN(parsed.getTime())) {
+function toCalendarInputParts(
+  value?: { dateTime?: string; timeZone?: string },
+  preferredTimeZone?: string,
+) {
+  const parts = getCalendarDisplayParts(value, preferredTimeZone);
+  if (!parts) {
     return {
       date: toDateInputValue(new Date()),
       time: '09:00',
     };
   }
 
-  const hours = `${parsed.getHours()}`.padStart(2, '0');
-  const minutes = `${parsed.getMinutes()}`.padStart(2, '0');
+  const hours = `${parts.hours}`.padStart(2, '0');
+  const minutes = `${parts.minutes}`.padStart(2, '0');
   return {
-    date: toDateInputValue(parsed),
+    date: toDateInputValueFromParts(parts),
     time: `${hours}:${minutes}`,
   };
 }
@@ -943,9 +951,12 @@ function serializeCalendarAttendees(event?: OutlookCalendarEvent) {
     .join(', ');
 }
 
-function buildCalendarFormState(event?: OutlookCalendarEvent): CalendarEventFormState {
-  const start = toLocalInputParts(event?.start);
-  const end = toLocalInputParts(event?.end);
+function buildCalendarFormState(
+  event?: OutlookCalendarEvent,
+  preferredTimeZone?: string,
+): CalendarEventFormState {
+  const start = toCalendarInputParts(event?.start, preferredTimeZone);
+  const end = toCalendarInputParts(event?.end, preferredTimeZone);
   return {
     subject: event?.subject || '',
     location: event?.location || '',
@@ -981,16 +992,18 @@ function parseCalendarAttendeesInput(value: string) {
 }
 
 function toCalendarDateTime(date: string, time: string) {
-  const safeDate = String(date || '').trim();
-  const safeTime = String(time || '').trim() || '09:00';
-  return new Date(`${safeDate}T${safeTime}:00`);
+  return {
+    dateTime: `${String(date || '').trim()}T${(String(time || '').trim() || '09:00')}:00`,
+  };
 }
 
 function buildCalendarMutationPayload(
   form: CalendarEventFormState,
+  preferredTimeZone?: string,
 ): OutlookCalendarEventMutationRequest {
   const start = toCalendarDateTime(form.startDate, form.startTime);
   const end = toCalendarDateTime(form.endDate, form.endTime);
+  const timeZone = preferredTimeZone || 'UTC';
 
   return {
     subject: form.subject.trim(),
@@ -999,12 +1012,12 @@ function buildCalendarMutationPayload(
     body: form.body.trim(),
     isOnlineMeeting: form.isOnlineMeeting,
     start: {
-      dateTime: start.toISOString(),
-      timeZone: 'UTC',
+      dateTime: start.dateTime,
+      timeZone,
     },
     end: {
-      dateTime: end.toISOString(),
-      timeZone: 'UTC',
+      dateTime: end.dateTime,
+      timeZone,
     },
   };
 }
@@ -2622,8 +2635,8 @@ export default function OutlookPanel() {
   const beginCalendarCreate = useCallback(() => {
     setCalendarMutationError('');
     setCalendarEditorMode('create');
-    setCalendarForm(buildCalendarFormState());
-  }, []);
+    setCalendarForm(buildCalendarFormState(undefined, calendarTimeZone));
+  }, [calendarTimeZone]);
 
   const beginCalendarEdit = useCallback(() => {
     if (!selectedCalendarEvent) {
@@ -2631,21 +2644,41 @@ export default function OutlookPanel() {
     }
     setCalendarMutationError('');
     setCalendarEditorMode('edit');
-    setCalendarForm(buildCalendarFormState(selectedCalendarEvent));
-  }, [selectedCalendarEvent]);
+    setCalendarForm(buildCalendarFormState(selectedCalendarEvent, calendarTimeZone));
+  }, [calendarTimeZone, selectedCalendarEvent]);
 
   const cancelCalendarEdit = useCallback(() => {
     setCalendarMutationError('');
     setCalendarEditorMode(null);
-    setCalendarForm(buildCalendarFormState(selectedCalendarEvent));
-  }, [selectedCalendarEvent]);
+    setCalendarForm(buildCalendarFormState(selectedCalendarEvent, calendarTimeZone));
+  }, [calendarTimeZone, selectedCalendarEvent]);
 
   const handleSubmitCalendarEvent = async () => {
     try {
       setCalendarMutationError('');
-      const payload = buildCalendarMutationPayload(calendarForm);
-      const startTime = new Date(payload.start.dateTime).getTime();
-      const endTime = new Date(payload.end.dateTime).getTime();
+      const payload = buildCalendarMutationPayload(calendarForm, calendarTimeZone);
+      const startParts = parseCalendarDateTimeParts(payload.start.dateTime);
+      const endParts = parseCalendarDateTimeParts(payload.end.dateTime);
+      const startTime = startParts
+        ? Date.UTC(
+            startParts.year,
+            startParts.month - 1,
+            startParts.day,
+            startParts.hours,
+            startParts.minutes,
+            startParts.seconds,
+          )
+        : Number.NaN;
+      const endTime = endParts
+        ? Date.UTC(
+            endParts.year,
+            endParts.month - 1,
+            endParts.day,
+            endParts.hours,
+            endParts.minutes,
+            endParts.seconds,
+          )
+        : Number.NaN;
       if (!payload.subject.trim()) {
         setCalendarMutationError('Subject is required.');
         return;
@@ -2660,7 +2693,7 @@ export default function OutlookPanel() {
         await refetchCalendar();
         setSelectedCalendarEventId(result.event.id);
         setCalendarEditorMode(null);
-        setCalendarForm(buildCalendarFormState(result.event));
+        setCalendarForm(buildCalendarFormState(result.event, calendarTimeZone));
         markActionSuccess('calendarSave');
         showToast({ message: 'Calendar event created.', severity: 'success' });
         return;
@@ -2674,7 +2707,7 @@ export default function OutlookPanel() {
         await refetchCalendar();
         setSelectedCalendarEventId(result.event.id);
         setCalendarEditorMode(null);
-        setCalendarForm(buildCalendarFormState(result.event));
+        setCalendarForm(buildCalendarFormState(result.event, calendarTimeZone));
         markActionSuccess('calendarSave');
         showToast({ message: 'Calendar event updated.', severity: 'success' });
       }

@@ -79,6 +79,7 @@ const spreadsheetTransformJsonSchema = {
               'add_column',
               'add_row',
               'update_cells',
+              'add_totals_row',
               'sort_rows',
               'reorder_rows',
               'merge_sheets',
@@ -143,6 +144,11 @@ const spreadsheetTransformJsonSchema = {
             description:
               'For add_row: object mapping column headers to scalar values for the new row.',
           },
+          inheritFormulas: {
+            type: 'boolean',
+            description:
+              'For add_row: when true, blank columns inherit translated formulas from the template row above. Defaults to true.',
+          },
           rowNumber: {
             type: 'integer',
             minimum: 1,
@@ -165,11 +171,15 @@ const spreadsheetTransformJsonSchema = {
                 columnName: { type: 'string' },
                 direction: { type: 'string', enum: ['asc', 'desc'] },
                 numeric: { type: 'boolean' },
+                function: {
+                  type: 'string',
+                  enum: ['sum', 'average', 'min', 'max', 'count', 'counta'],
+                },
               },
               required: ['columnName'],
             },
             description:
-              'For sort_rows: multi-column sort specification in priority order.',
+              'For sort_rows: multi-column sort specification in priority order. For add_totals_row: columns to aggregate, optionally with a function.',
           },
           direction: {
             type: 'string',
@@ -181,6 +191,16 @@ const spreadsheetTransformJsonSchema = {
             type: 'boolean',
             description:
               'For sort_rows: force numeric comparison for the target sort column.',
+          },
+          labelColumn: {
+            type: 'string',
+            description:
+              'For add_totals_row: the column header that should receive the totals label. Defaults to the first header column.',
+          },
+          label: {
+            type: 'string',
+            description:
+              'For add_totals_row: label to write into the totals row, such as "Total", "Average", or "Runway Summary".',
           },
           orderedRowNumbers: {
             type: 'array',
@@ -241,7 +261,7 @@ const spreadsheetTransformJsonSchema = {
         required: ['type'],
       },
       description:
-        'Advanced transformation operations to add columns or rows, update cells, calculate values, reorder rows, sort rows, merge sheets, or split a sheet into multiple sheets.',
+        'Advanced transformation operations to add columns or rows, update cells, calculate values, add totals rows, reorder rows, sort rows, merge sheets, or split a sheet into multiple sheets.',
     },
   },
   required: ['action'],

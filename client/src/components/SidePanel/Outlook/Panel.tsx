@@ -565,6 +565,14 @@ function formatCalendarHeaderDate(date: Date, view: CalendarViewMode) {
   }).format(date);
 }
 
+function getBrowserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseCalendarDateTimeParts(value?: string) {
   const match = String(value || '').match(
     /^(\d{4})-(\d{2})-(\d{2})T(\d{1,2}):(\d{2})(?::(\d{2}))?/,
@@ -620,6 +628,59 @@ function getDateTimePartsInTimeZone(date: Date, timeZone?: string) {
   }
 }
 
+function getUtcInstantForCalendarParts(
+  parts: ReturnType<typeof parseCalendarDateTimeParts>,
+  timeZone?: string,
+) {
+  if (!parts) {
+    return null;
+  }
+
+  const resolvedTimeZone = timeZone || getBrowserTimeZone();
+  if (!resolvedTimeZone) {
+    return new Date(
+      Date.UTC(parts.year, parts.month - 1, parts.day, parts.hours, parts.minutes, parts.seconds),
+    );
+  }
+
+  let guess = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day, parts.hours, parts.minutes, parts.seconds),
+  );
+
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    const observed = getDateTimePartsInTimeZone(guess, resolvedTimeZone);
+    if (!observed) {
+      break;
+    }
+
+    const desiredUtcMinutes =
+      Date.UTC(parts.year, parts.month - 1, parts.day, parts.hours, parts.minutes, parts.seconds) /
+      60000;
+    const observedUtcMinutes =
+      Date.UTC(
+        observed.year,
+        observed.month - 1,
+        observed.day,
+        observed.hours,
+        observed.minutes,
+        observed.seconds,
+      ) / 60000;
+
+    const deltaMinutes = desiredUtcMinutes - observedUtcMinutes;
+    if (deltaMinutes === 0) {
+      return guess;
+    }
+
+    guess = new Date(guess.getTime() + deltaMinutes * 60 * 1000);
+  }
+
+  return guess;
+}
+
+function getResolvedCalendarTimeZone(preferredTimeZone?: string) {
+  return preferredTimeZone || getBrowserTimeZone();
+}
+
 function getCalendarDisplayParts(
   value?: { dateTime?: string; timeZone?: string },
   preferredTimeZone?: string,
@@ -629,27 +690,26 @@ function getCalendarDisplayParts(
     return null;
   }
 
+  const resolvedPreferredTimeZone = getResolvedCalendarTimeZone(preferredTimeZone);
   const sourceTimeZone = String(value?.timeZone || '').trim();
-  if (
-    sourceTimeZone &&
-    preferredTimeZone &&
-    sourceTimeZone === 'UTC' &&
-    preferredTimeZone !== sourceTimeZone
-  ) {
-    const utcInstant = new Date(
-      Date.UTC(
-        rawParts.year,
-        rawParts.month - 1,
-        rawParts.day,
-        rawParts.hours,
-        rawParts.minutes,
-        rawParts.seconds,
-      ),
-    );
-    const convertedParts = getDateTimePartsInTimeZone(utcInstant, preferredTimeZone);
-    if (convertedParts) {
-      return convertedParts;
-    }
+  const resolvedSourceTimeZone = sourceTimeZone || resolvedPreferredTimeZone;
+
+  if (!resolvedPreferredTimeZone || !resolvedSourceTimeZone) {
+    return rawParts;
+  }
+
+  if (resolvedPreferredTimeZone === resolvedSourceTimeZone) {
+    return rawParts;
+  }
+
+  const utcInstant = getUtcInstantForCalendarParts(rawParts, resolvedSourceTimeZone);
+  if (!utcInstant) {
+    return rawParts;
+  }
+
+  const convertedParts = getDateTimePartsInTimeZone(utcInstant, resolvedPreferredTimeZone);
+  if (convertedParts) {
+    return convertedParts;
   }
 
   return rawParts;
@@ -699,7 +759,9 @@ function buildCalendarBuckets(
   const start = new Date(calendarData.startDateTime);
   const bucketCount = view === 'week' ? 7 : 1;
   const eventMap = new Map<string, OutlookCalendarEvent[]>();
-  const calendarTimeZone = calendarData.timeZone || calendarData.workingHours?.timeZone;
+  const calendarTimeZone = getResolvedCalendarTimeZone(
+    calendarData.timeZone || calendarData.workingHours?.timeZone,
+  );
 
   for (const event of calendarData.events ?? []) {
     const eventStart = getCalendarDisplayParts(event.start, calendarTimeZone);
@@ -712,7 +774,8 @@ function buildCalendarBuckets(
 
   return Array.from({ length: bucketCount }).map((_, index) => {
     const date = addDays(start, index);
-    const key = toDateInputValue(date);
+    const bucketDateParts = getDateTimePartsInTimeZone(date, calendarTimeZone);
+    const key = bucketDateParts ? toDateInputValueFromParts(bucketDateParts) : toDateInputValue(date);
     const events = [...(eventMap.get(key) ?? [])].sort((a, b) => {
       const first = getCalendarDisplayParts(a.start, calendarTimeZone);
       const second = getCalendarDisplayParts(b.start, calendarTimeZone);
@@ -724,7 +787,14 @@ function buildCalendarBuckets(
     return {
       key,
       date,
-      label: formatCalendarHeaderDate(date, view),
+      label: calendarTimeZone
+        ? new Intl.DateTimeFormat(undefined, {
+            weekday: view === 'week' ? 'short' : 'long',
+            month: 'short',
+            day: 'numeric',
+            timeZone: calendarTimeZone,
+          }).format(date)
+        : formatCalendarHeaderDate(date, view),
       events,
     };
   });
@@ -887,6 +957,7 @@ function getCalendarEventLayouts(events: OutlookCalendarEvent[], preferredTimeZo
 
 function getCurrentTimeOffset(date: Date, timeZone?: string) {
   const now = new Date();
+  const resolvedTimeZone = getResolvedCalendarTimeZone(timeZone);
   const currentParts = getDateTimePartsInTimeZone(now, timeZone);
   if (!currentParts) {
     if (!isSameLocalDay(date, now)) {
@@ -903,7 +974,9 @@ function getCurrentTimeOffset(date: Date, timeZone?: string) {
     return ((minutes - gridStartMinutes) / 60) * CALENDAR_HOUR_SLOT_HEIGHT;
   }
 
-  if (toDateInputValue(date) !== currentParts.date) {
+  const dateKey =
+    getDateTimePartsInTimeZone(date, resolvedTimeZone)?.date || toDateInputValue(date);
+  if (dateKey !== currentParts.date) {
     return null;
   }
 
@@ -1003,7 +1076,7 @@ function buildCalendarMutationPayload(
 ): OutlookCalendarEventMutationRequest {
   const start = toCalendarDateTime(form.startDate, form.startTime);
   const end = toCalendarDateTime(form.endDate, form.endTime);
-  const timeZone = preferredTimeZone || 'UTC';
+  const timeZone = getResolvedCalendarTimeZone(preferredTimeZone) || 'UTC';
 
   return {
     subject: form.subject.trim(),
@@ -1059,7 +1132,9 @@ function CalendarWorkspace({
 }) {
   const hourLabels = useMemo(() => getHourLabels(), []);
   const gridHeight = useMemo(() => getCalendarGridHeight(), []);
-  const calendarTimeZone = calendarData?.timeZone || calendarData?.workingHours?.timeZone;
+  const calendarTimeZone = getResolvedCalendarTimeZone(
+    calendarData?.timeZone || calendarData?.workingHours?.timeZone,
+  );
   const buckets = useMemo(
     () => buildCalendarBuckets(calendarData, viewMode),
     [calendarData, viewMode],
@@ -2116,7 +2191,9 @@ export default function OutlookPanel() {
     visibleConversationIds.length > 0 &&
     visibleConversationIds.every((messageId) => selectedDeleteIdSet.has(messageId));
   const inboxViewLabel = inboxView.charAt(0).toUpperCase() + inboxView.slice(1);
-  const calendarTimeZone = calendarData?.timeZone || calendarData?.workingHours?.timeZone;
+  const calendarTimeZone = getResolvedCalendarTimeZone(
+    calendarData?.timeZone || calendarData?.workingHours?.timeZone,
+  );
   const analysis = selectedId ? analysisByMessage[selectedId] : null;
   const draftResult = selectedId ? draftResultByMessage[selectedId] : null;
   const meetingSlots = selectedId ? meetingSlotsByMessage[selectedId] : null;

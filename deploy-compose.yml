@@ -11,6 +11,7 @@ services:
     depends_on:
       - mongodb
       - rag_api
+      - spreadsheet_worker
     restart: always
     extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -30,6 +31,14 @@ services:
       - ./images:/app/client/public/images
       - ./uploads:/app/uploads
       - ./logs:/app/api/logs
+  spreadsheet_worker:
+    build:
+      context: .
+      dockerfile: services/spreadsheet-worker/Dockerfile
+    container_name: LibreChat-Spreadsheet-Worker
+    restart: always
+    environment:
+      - PYTHONUNBUFFERED=1
 
   client:
     image: nginx:1.27.0-alpine

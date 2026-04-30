@@ -14,6 +14,14 @@ const {
   inspectSpreadsheetBuffer,
   transformSpreadsheetBuffer,
 } = require('~/server/services/Files/Spreadsheets/transform');
+const {
+  SpreadsheetWorkerError,
+  SpreadsheetWorkerUnavailableError,
+  inspectSpreadsheetWithWorker,
+  shouldFallbackToJs,
+  shouldUseSpreadsheetWorker,
+  transformSpreadsheetWithWorker,
+} = require('~/server/services/Files/Spreadsheets/workerClient');
 
 async function streamToBuffer(stream) {
   const chunks = [];
@@ -138,6 +146,24 @@ async function inspectSpreadsheetFile({
   maxPreviewRows,
 }) {
   const sourceBuffer = await getSpreadsheetFileBuffer(req, res, sourceFile);
+  if (shouldUseSpreadsheetWorker(sourceFile.filename)) {
+    try {
+      return await inspectSpreadsheetWithWorker({
+        buffer: sourceBuffer,
+        sourceFilename: sourceFile.filename,
+        maxPreviewRows,
+      });
+    } catch (error) {
+      const canFallback =
+        shouldFallbackToJs() &&
+        (error instanceof SpreadsheetWorkerUnavailableError ||
+          error instanceof SpreadsheetWorkerError);
+      if (!canFallback) {
+        throw error;
+      }
+    }
+  }
+
   return inspectSpreadsheetBuffer({
     buffer: sourceBuffer,
     sourceFilename: sourceFile.filename,
@@ -160,17 +186,46 @@ async function transformSpreadsheetFile({
   messageId,
 }) {
   const sourceBuffer = await getSpreadsheetFileBuffer(req, res, sourceFile);
-  const generated = await transformSpreadsheetBuffer({
-    buffer: sourceBuffer,
-    sourceFilename: sourceFile.filename,
-    removeColumns,
-    keepColumns,
-    redactColumns,
-    redactionText,
-    sheetNames,
-    outputFormat,
-    operations,
-  });
+  let generated;
+
+  if (shouldUseSpreadsheetWorker(sourceFile.filename)) {
+    try {
+      generated = await transformSpreadsheetWithWorker({
+        buffer: sourceBuffer,
+        sourceFilename: sourceFile.filename,
+        removeColumns,
+        keepColumns,
+        redactColumns,
+        redactionText,
+        sheetNames,
+        outputFormat,
+        operations,
+      });
+    } catch (error) {
+      const canFallback =
+        shouldFallbackToJs() &&
+        (error instanceof SpreadsheetWorkerUnavailableError ||
+          error.code === 'UNSUPPORTED_OPERATION' ||
+          (error instanceof SpreadsheetWorkerError && error.status >= 500));
+      if (!canFallback) {
+        throw error;
+      }
+    }
+  }
+
+  if (!generated) {
+    generated = await transformSpreadsheetBuffer({
+      buffer: sourceBuffer,
+      sourceFilename: sourceFile.filename,
+      removeColumns,
+      keepColumns,
+      redactColumns,
+      redactionText,
+      sheetNames,
+      outputFormat,
+      operations,
+    });
+  }
 
   const file = await saveGeneratedSpreadsheet({
     req,

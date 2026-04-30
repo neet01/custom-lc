@@ -937,4 +937,94 @@ describe('ToolService - Action Capability Gating', () => {
       expect(callsByName.get(rawNameB).requestBuilder.path).toBe('/items');
     });
   });
+
+  describe('generated file artifacts', () => {
+    it('normalizes content/artifact tuple output and attaches generated files', async () => {
+      mockLoadToolsUtil.mockResolvedValue({
+        loadedTools: [
+          {
+            name: 'spreadsheet_transform',
+            _call: jest.fn().mockResolvedValue([
+              'Created "forecast.xlsx" from "source.xlsx".',
+              {
+                files: [
+                  {
+                    file_id: 'file_xlsx_1',
+                    filename: 'forecast.xlsx',
+                    filepath: '/api/files/file_xlsx_1',
+                    source: 'local',
+                    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                  },
+                ],
+              },
+            ]),
+          },
+        ],
+      });
+
+      const client = {
+        req: {
+          user: { id: 'user_123' },
+          body: {
+            assistant_id: 'assistant_files',
+            model: 'gpt-4o-mini',
+            endpoint: 'openAI',
+            conversationId: 'convo_1',
+          },
+          config: {},
+        },
+        res: {},
+        apiKey: 'sk-test',
+        mappedOrder: new Map([['call_file', 0]]),
+        seenToolCalls: new Map(),
+        addContentData: jest.fn(),
+        addAttachmentData: jest.fn(),
+        responseMessage: {
+          messageId: 'msg_assistant_1',
+          conversationId: 'convo_1',
+        },
+      };
+
+      const result = await processRequiredActions(client, [
+        {
+          tool: 'spreadsheet_transform',
+          toolInput: { action: 'transform', file_id: 'file_source_1' },
+          toolCallId: 'call_file',
+          thread_id: 'thread_1',
+          run_id: 'run_1',
+        },
+      ]);
+
+      expect(result.tool_outputs).toEqual([
+        {
+          tool_call_id: 'call_file',
+          output: 'Created "forecast.xlsx" from "source.xlsx".',
+        },
+      ]);
+
+      expect(client.addAttachmentData).toHaveBeenCalledWith(
+        expect.objectContaining({
+          file_id: 'file_xlsx_1',
+          filename: 'forecast.xlsx',
+          toolCallId: 'call_file',
+          messageId: 'msg_assistant_1',
+          conversationId: 'convo_1',
+        }),
+      );
+
+      expect(client.addContentData).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'tool_call',
+          index: 0,
+          tool_call: expect.objectContaining({
+            id: 'call_file',
+            function: expect.objectContaining({
+              name: 'spreadsheet_transform',
+              output: 'Created "forecast.xlsx" from "source.xlsx".',
+            }),
+          }),
+        }),
+      );
+    });
+  });
 });

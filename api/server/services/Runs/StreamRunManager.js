@@ -131,6 +131,24 @@ class StreamRunManager {
     sendEvent(this.res, contentData);
   }
 
+  addAttachmentData(attachment) {
+    if (!attachment) {
+      return;
+    }
+
+    const existingAttachments = this.finalMessage.attachments ?? [];
+    const alreadyPresent = existingAttachments.some(
+      (current) =>
+        current.file_id === attachment.file_id && current.toolCallId === attachment.toolCallId,
+    );
+
+    if (alreadyPresent) {
+      return;
+    }
+
+    this.finalMessage.attachments = [...existingAttachments, attachment];
+  }
+
   /* <------------------ Misc. Helpers ------------------> */
   /** Returns the latest intermediate text
    * @returns {string}

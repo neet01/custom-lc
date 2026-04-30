@@ -225,12 +225,14 @@ Fix:
 
 ### Spreadsheet worker
 
+- Default assistant spreadsheet/Word tool outputs now normalize LangChain `content_and_artifact` tuples correctly in `ToolService`, and generated `.xlsx` / `.docx` files are attached to the final assistant message so they render as downloadable files even when the Python worker path is not used.
+- Spreadsheet processing is now intended to be Python-primary for supported spreadsheet files instead of silently splitting semantics between JS and Python:
+  - worker support now covers `.xlsx`, `.xlsm`, and `.csv`
+  - worker-side operations now include `add_column`, `add_row`, `update_cells`, `sort_rows`, `add_totals_row`, `reorder_rows`, `merge_sheets`, and `split_sheet`
+  - JS fallback is now opt-in via `SPREADSHEET_WORKER_FALLBACK_TO_JS=true` instead of the default behavior
 - Validate the Python worker end-to-end in a running Compose deployment.
 - Decide whether `.xlsm` should remain JS-only or get a separate macro-preserving path later.
 - Expand worker operations beyond the first set if finance workflows require:
-  - sorting
-  - row reordering
-  - cross-sheet merge/split
   - richer formula/table semantics
 - Add workbook diff / audit detail if users need more explicit change logs.
 

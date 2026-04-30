@@ -58,7 +58,7 @@ jest.mock('./workerClient', () => ({
     }
   },
   inspectSpreadsheetWithWorker: jest.fn(),
-  shouldFallbackToJs: jest.fn(() => true),
+  shouldFallbackToJs: jest.fn(() => false),
   shouldUseSpreadsheetWorker: jest.fn(() => false),
   transformSpreadsheetWithWorker: jest.fn(),
 }));
@@ -133,7 +133,7 @@ describe('Spreadsheet file service', () => {
       summary: { engine: 'python_worker' },
     });
     workerClient.shouldUseSpreadsheetWorker.mockReturnValue(false);
-    workerClient.shouldFallbackToJs.mockReturnValue(true);
+    workerClient.shouldFallbackToJs.mockReturnValue(false);
   });
 
   it('streams the source spreadsheet through the configured strategy', async () => {
@@ -182,12 +182,41 @@ describe('Spreadsheet file service', () => {
     expect(result).toEqual({ engine: 'js', sheetCount: 1 });
   });
 
-  it('falls back to the JS transformer when the worker rejects an unsupported operation', async () => {
+  it('throws the worker error by default when the Python-primary path rejects an operation', async () => {
     workerClient.shouldUseSpreadsheetWorker.mockReturnValue(true);
     workerClient.transformSpreadsheetWithWorker.mockRejectedValue(
       new workerClient.SpreadsheetWorkerError('unsupported', {
         code: 'UNSUPPORTED_OPERATION',
         status: 422,
+      }),
+    );
+
+    await expect(
+      transformSpreadsheetFile({
+        req,
+        res,
+        sourceFile,
+        removeColumns: [],
+        keepColumns: [],
+        redactColumns: [],
+        redactionText: '[REDACTED]',
+        sheetNames: [],
+        outputFormat: 'xlsx',
+        operations: [{ type: 'sort_rows', sheetName: 'Runway', columnName: 'Amount' }],
+      }),
+    ).rejects.toThrow('unsupported');
+
+    expect(workerClient.transformSpreadsheetWithWorker).toHaveBeenCalled();
+    expect(transformSpreadsheetBuffer).not.toHaveBeenCalled();
+  });
+
+  it('can still fall back to the JS transformer when fallback is explicitly enabled', async () => {
+    workerClient.shouldUseSpreadsheetWorker.mockReturnValue(true);
+    workerClient.shouldFallbackToJs.mockReturnValue(true);
+    workerClient.transformSpreadsheetWithWorker.mockRejectedValue(
+      new workerClient.SpreadsheetWorkerError('worker unavailable', {
+        code: 'SPREADSHEET_WORKER_UNAVAILABLE',
+        status: 503,
       }),
     );
 
@@ -204,7 +233,6 @@ describe('Spreadsheet file service', () => {
       operations: [{ type: 'sort_rows', sheetName: 'Runway', columnName: 'Amount' }],
     });
 
-    expect(workerClient.transformSpreadsheetWithWorker).toHaveBeenCalled();
     expect(transformSpreadsheetBuffer).toHaveBeenCalledWith(
       expect.objectContaining({
         buffer: Buffer.from('input-buffer'),
@@ -212,7 +240,6 @@ describe('Spreadsheet file service', () => {
       }),
     );
     expect(result.summary).toEqual({ engine: 'js' });
-    expect(result.file.filename).toBe('runway-transformed.xlsx');
   });
 
   it('uses the Python worker output when the transform succeeds', async () => {

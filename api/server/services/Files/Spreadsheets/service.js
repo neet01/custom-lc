@@ -16,7 +16,6 @@ const {
 } = require('~/server/services/Files/Spreadsheets/transform');
 const {
   SpreadsheetWorkerError,
-  SpreadsheetWorkerUnavailableError,
   inspectSpreadsheetWithWorker,
   shouldFallbackToJs,
   shouldUseSpreadsheetWorker,
@@ -154,10 +153,7 @@ async function inspectSpreadsheetFile({
         maxPreviewRows,
       });
     } catch (error) {
-      const canFallback =
-        shouldFallbackToJs() &&
-        (error instanceof SpreadsheetWorkerUnavailableError ||
-          error instanceof SpreadsheetWorkerError);
+      const canFallback = shouldFallbackToJs() && error instanceof SpreadsheetWorkerError;
       if (!canFallback) {
         throw error;
       }
@@ -202,11 +198,7 @@ async function transformSpreadsheetFile({
         operations,
       });
     } catch (error) {
-      const canFallback =
-        shouldFallbackToJs() &&
-        (error instanceof SpreadsheetWorkerUnavailableError ||
-          error.code === 'UNSUPPORTED_OPERATION' ||
-          (error instanceof SpreadsheetWorkerError && error.status >= 500));
+      const canFallback = shouldFallbackToJs() && error instanceof SpreadsheetWorkerError;
       if (!canFallback) {
         throw error;
       }

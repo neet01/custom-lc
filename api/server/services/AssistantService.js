@@ -68,6 +68,24 @@ async function createOnTextProgress({
     logger.debug('Content data:', contentData);
     sendEvent(openai.res, contentData);
   };
+
+  openai.addAttachmentData = (attachment) => {
+    if (!attachment) {
+      return;
+    }
+
+    const existingAttachments = openai.responseMessage.attachments ?? [];
+    const alreadyPresent = existingAttachments.some(
+      (current) =>
+        current.file_id === attachment.file_id && current.toolCallId === attachment.toolCallId,
+    );
+
+    if (alreadyPresent) {
+      return;
+    }
+
+    openai.responseMessage.attachments = [...existingAttachments, attachment];
+  };
 }
 
 /**

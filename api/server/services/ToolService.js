@@ -79,6 +79,54 @@ const { getLogStores } = require('~/cache');
 
 const domainSeparatorRegex = new RegExp(actionDomainSeparator, 'g');
 
+function normalizeToolOutput(output) {
+  if (Array.isArray(output)) {
+    const [content, artifact] = output;
+    let normalizedOutput = content;
+
+    if (typeof normalizedOutput !== 'string') {
+      try {
+        normalizedOutput = JSON.stringify(normalizedOutput);
+      } catch (_error) {
+        normalizedOutput = String(normalizedOutput ?? '');
+      }
+    }
+
+    return {
+      output: normalizedOutput,
+      artifact: artifact && typeof artifact === 'object' ? artifact : undefined,
+    };
+  }
+
+  if (
+    output &&
+    typeof output === 'object' &&
+    ('artifact' in output || 'content' in output || 'text' in output)
+  ) {
+    const artifact = output.artifact && typeof output.artifact === 'object' ? output.artifact : undefined;
+    const content = output.content ?? output.text ?? output.output;
+
+    return {
+      output: typeof content === 'string' ? content : JSON.stringify(content ?? ''),
+      artifact,
+    };
+  }
+
+  return {
+    output,
+    artifact: undefined,
+  };
+}
+
+function createGeneratedFileAttachment({ file, toolCallId, messageId, conversationId }) {
+  return {
+    ...file,
+    messageId,
+    toolCallId,
+    conversationId,
+  };
+}
+
 /**
  * Collapse every `actionDomainSeparator` sequence in the encoded-domain
  * suffix of a fully-qualified action tool name to an underscore. Agents
@@ -327,14 +375,15 @@ async function processRequiredActions(client, requiredActions) {
     let tool = ToolMap[currentAction.tool] ?? ActionToolMap[currentAction.tool];
 
     const handleToolOutput = async (output) => {
-      requiredActions[i].output = output;
+      const { output: normalizedOutput, artifact } = normalizeToolOutput(output);
+      requiredActions[i].output = normalizedOutput;
 
       /** @type {FunctionToolCall & PartMetadata} */
       const toolCall = {
         function: {
           name: currentAction.tool,
           arguments: JSON.stringify(currentAction.toolInput),
-          output,
+          output: normalizedOutput,
         },
         id: currentAction.toolCallId,
         type: 'function',
@@ -381,6 +430,28 @@ async function processRequiredActions(client, requiredActions) {
         };
       }
 
+      if (artifact?.files?.length && typeof client.addAttachmentData === 'function') {
+        const assistantMessage =
+          client.finalMessage ?? client.responseMessage ?? client.finalMessage?.responseMessage;
+        const messageId = assistantMessage?.messageId;
+        const conversationId = assistantMessage?.conversationId ?? client.req.body.conversationId;
+
+        for (const file of artifact.files) {
+          if (!file?.file_id) {
+            continue;
+          }
+
+          client.addAttachmentData(
+            createGeneratedFileAttachment({
+              file,
+              toolCallId: currentAction.toolCallId,
+              messageId,
+              conversationId,
+            }),
+          );
+        }
+      }
+
       client.seenToolCalls && client.seenToolCalls.set(toolCall.id, toolCall);
       client.addContentData({
         [ContentTypes.TOOL_CALL]: toolCall,
@@ -392,7 +463,7 @@ async function processRequiredActions(client, requiredActions) {
 
       return {
         tool_call_id: currentAction.toolCallId,
-        output,
+        output: normalizedOutput,
       };
     };
 

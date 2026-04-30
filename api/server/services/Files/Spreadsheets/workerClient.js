@@ -3,7 +3,7 @@ const { isEnabled } = require('@librechat/api');
 
 const DEFAULT_WORKER_URL = 'http://spreadsheet_worker:8081';
 const DEFAULT_TIMEOUT_MS = 120000;
-const PYTHON_WORKER_EXTENSIONS = new Set(['.xlsx']);
+const PYTHON_WORKER_EXTENSIONS = new Set(['.xlsx', '.xlsm', '.csv']);
 
 class SpreadsheetWorkerError extends Error {
   constructor(message, options = {}) {
@@ -35,7 +35,7 @@ function isSpreadsheetWorkerEnabled() {
 
 function shouldFallbackToJs() {
   const value = process.env.SPREADSHEET_WORKER_FALLBACK_TO_JS;
-  return value == null ? true : isEnabled(value);
+  return value == null ? false : isEnabled(value);
 }
 
 function getSpreadsheetWorkerUrl() {

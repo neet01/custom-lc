@@ -12,15 +12,25 @@ from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException
+from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import Cell
 from openpyxl.formula.translate import Translator
-from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
+from openpyxl.utils.cell import range_boundaries
 from pydantic import BaseModel, Field
 
 
 SUPPORTED_OUTPUT_FORMATS = {"xlsx", "csv"}
-SUPPORTED_OPERATION_TYPES = {"add_column", "add_row", "update_cells", "sort_rows", "add_totals_row"}
+SUPPORTED_OPERATION_TYPES = {
+    "add_column",
+    "add_row",
+    "update_cells",
+    "sort_rows",
+    "add_totals_row",
+    "reorder_rows",
+    "merge_sheets",
+    "split_sheet",
+}
 DEFAULT_REDACTION_TEXT = "[REDACTED]"
 HEADER_PROBE_ROWS = 10
 AGGREGATION_FUNCTIONS = {"sum", "average", "min", "max", "count", "counta"}
@@ -300,7 +310,7 @@ def column_letter(column_index: int) -> str:
 
 
 def inspect_workbook(buffer: bytes, source_filename: str, max_preview_rows: int):
-    workbook = load_workbook(io.BytesIO(buffer), data_only=False, keep_vba=True)
+    workbook = load_input_workbook(buffer, source_filename)
     if not workbook.sheetnames:
         raise ValueError("Spreadsheet does not contain any sheets")
 
@@ -383,6 +393,24 @@ def normalize_operations(operations: List[Dict[str, Any]]) -> List[Dict[str, Any
         if next_operation["type"]:
             normalized.append(next_operation)
     return normalized
+
+
+def load_input_workbook(buffer: bytes, source_filename: str):
+    extension = source_filename.lower().rsplit(".", 1)[-1] if "." in source_filename else ""
+    if extension == "csv":
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = sanitize_sheet_name(
+            re.sub(r"\.[^.]+$", "", source_filename or "Sheet1"),
+            "Sheet1",
+        )
+        text_stream = io.StringIO(buffer.decode("utf-8-sig"))
+        reader = csv.reader(text_stream)
+        for row in reader:
+            worksheet.append(row)
+        return workbook
+
+    return load_workbook(io.BytesIO(buffer), data_only=False, keep_vba=True)
 
 
 def get_header_map(headers: List[str]) -> Dict[str, int]:
@@ -502,6 +530,103 @@ def copy_snapshot_to_cell(snapshot: Dict[str, Any], target_cell: Cell, translate
 
     target_cell._hyperlink = copy(snapshot["hyperlink"]) if snapshot.get("hyperlink") else None
     target_cell.comment = copy(snapshot["comment"]) if snapshot.get("comment") else None
+
+
+def sanitize_sheet_name(value: Any, fallback: str = "Sheet") -> str:
+    normalized = re.sub(r'[\\/?*\[\]:]', " ", str(value or "")).strip() or fallback
+    return normalized[:31]
+
+
+def ensure_unique_sheet_name(existing_sheet_names: List[str], desired_name: str) -> str:
+    used_names = set(existing_sheet_names)
+    if desired_name not in used_names:
+        return desired_name
+
+    suffix = 2
+    while suffix < 1000:
+        candidate = sanitize_sheet_name(f"{desired_name[:27]} {suffix}", desired_name)
+        if candidate not in used_names:
+            return candidate
+        suffix += 1
+
+    raise ValueError(f'Could not generate a unique sheet name from "{desired_name}"')
+
+
+def copy_sheet_properties(source_worksheet, target_worksheet):
+    target_worksheet.sheet_format = copy(source_worksheet.sheet_format)
+    target_worksheet.sheet_properties = copy(source_worksheet.sheet_properties)
+    target_worksheet.page_margins = copy(source_worksheet.page_margins)
+    target_worksheet.page_setup = copy(source_worksheet.page_setup)
+    target_worksheet.print_options = copy(source_worksheet.print_options)
+    target_worksheet.sheet_view = copy(source_worksheet.sheet_view)
+    target_worksheet.freeze_panes = source_worksheet.freeze_panes
+
+    for column_key, column_dimension in source_worksheet.column_dimensions.items():
+        target_dimension = target_worksheet.column_dimensions[column_key]
+        for attribute in ("width", "hidden", "bestFit", "outlineLevel", "collapsed", "style", "min", "max"):
+            value = getattr(column_dimension, attribute, None)
+            if value is not None:
+                setattr(target_dimension, attribute, value)
+
+
+def copy_row_dimension(source_worksheet, source_row_index: int, target_worksheet, target_row_index: int):
+    source_dimension = source_worksheet.row_dimensions[source_row_index]
+    target_dimension = target_worksheet.row_dimensions[target_row_index]
+    for attribute in ("height", "hidden", "outlineLevel", "collapsed", "style", "ht", "customFormat", "customHeight"):
+        value = getattr(source_dimension, attribute, None)
+        if value is not None:
+            setattr(target_dimension, attribute, value)
+
+
+def clear_worksheet(worksheet):
+    if worksheet.max_row:
+        worksheet.delete_rows(1, worksheet.max_row)
+    if worksheet.max_column:
+        worksheet.delete_cols(1, worksheet.max_column)
+    worksheet.freeze_panes = None
+    worksheet.auto_filter.ref = None
+    worksheet.merged_cells.ranges = set()
+
+
+def build_autofilter_ref(column_count: int, row_count: int) -> Optional[str]:
+    if column_count <= 0 or row_count <= 1:
+        return None
+    return f"A1:{column_letter(column_count)}{row_count}"
+
+
+def copy_selected_rows_to_sheet(
+    source_worksheet,
+    target_worksheet,
+    source_row_indexes: List[int],
+    translate_formula_data_rows: Optional[set[int]] = None,
+):
+    row_mapping: Dict[int, int] = {}
+    for target_row_index, source_row_index in enumerate(source_row_indexes, start=1):
+        row_mapping[source_row_index] = target_row_index
+        copy_row_dimension(source_worksheet, source_row_index, target_worksheet, target_row_index)
+        for column_index in range(1, source_worksheet.max_column + 1):
+            snapshot = snapshot_cell(source_worksheet.cell(row=source_row_index, column=column_index))
+            copy_snapshot_to_cell(
+                snapshot,
+                target_worksheet.cell(row=target_row_index, column=column_index),
+                translate_formula=(
+                    translate_formula_data_rows is not None and source_row_index in translate_formula_data_rows
+                ),
+            )
+
+    for merged_range in source_worksheet.merged_cells.ranges:
+        min_col, min_row, max_col, max_row = range_boundaries(str(merged_range))
+        selected_rows = set(range(min_row, max_row + 1))
+        if not selected_rows.issubset(row_mapping.keys()):
+            continue
+        target_worksheet.merge_cells(
+            start_row=row_mapping[min_row],
+            start_column=min_col,
+            end_row=row_mapping[max_row],
+            end_column=max_col,
+        )
+
+    return row_mapping
 
 
 def delete_columns_by_index(worksheet, column_indexes: List[int]):
@@ -1028,6 +1153,60 @@ def apply_sort_rows(worksheet, operation: Dict[str, Any]):
             copy_snapshot_to_cell(source_cell, target_cell, translate_formula=True)
 
 
+def apply_reorder_rows(worksheet, operation: Dict[str, Any]):
+    ordered_row_numbers = operation.get("orderedRowNumbers")
+    if not isinstance(ordered_row_numbers, list) or len(ordered_row_numbers) == 0:
+        raise ValueError("reorder_rows operations require orderedRowNumbers")
+
+    requested_indexes: List[int] = []
+    seen_indexes = set()
+    for value in ordered_row_numbers:
+        if isinstance(value, bool):
+            continue
+        numeric_value = int(value) if isinstance(value, int) or (isinstance(value, float) and value.is_integer()) else None
+        if numeric_value is None or numeric_value < 1 or numeric_value in seen_indexes:
+            continue
+        seen_indexes.add(numeric_value)
+        requested_indexes.append(numeric_value)
+
+    if len(requested_indexes) == 0:
+        raise ValueError("reorder_rows orderedRowNumbers must contain positive integers")
+
+    header_row_index = detect_header_row_index(worksheet)
+    data_row_indexes = list(range(header_row_index + 1, worksheet.max_row + 1))
+    row_snapshots = []
+    for row_index in data_row_indexes:
+        row_snapshots.append(
+            {
+                "rowIndex": row_index,
+                "cells": [
+                    snapshot_cell(worksheet.cell(row=row_index, column=column_index))
+                    for column_index in range(1, worksheet.max_column + 1)
+                ],
+            }
+        )
+
+    for row_number in requested_indexes:
+        if row_number > len(row_snapshots):
+            raise ValueError(f'Row number {row_number} is out of range for sheet "{worksheet.title}"')
+
+    requested_zero_indexes = [row_number - 1 for row_number in requested_indexes]
+    reordered_snapshots = [row_snapshots[index] for index in requested_zero_indexes]
+
+    if operation.get("appendRemaining", True) is not False:
+        requested_set = set(requested_zero_indexes)
+        reordered_snapshots.extend(
+            snapshot
+            for data_row_index, snapshot in enumerate(row_snapshots)
+            if data_row_index not in requested_set
+        )
+
+    for destination_row_index, snapshot in zip(data_row_indexes, reordered_snapshots):
+        for column_index, source_cell in enumerate(snapshot["cells"], start=1):
+            target_cell = worksheet.cell(row=destination_row_index, column=column_index)
+            copy_snapshot_to_cell(source_cell, target_cell, translate_formula=True)
+
+
 def build_aggregation_formula(function_name: str, column_letter_value: str, start_row: int, end_row: int) -> str:
     if function_name == "sum":
         return f"=SUM({column_letter_value}{start_row}:{column_letter_value}{end_row})"
@@ -1133,6 +1312,204 @@ def apply_add_totals_row(worksheet, operation: Dict[str, Any]):
         )
 
 
+def build_merge_headers(source_worksheets: List[Any], include_source_sheet_column: bool) -> List[str]:
+    merged_headers: List[str] = []
+    seen_headers = set()
+
+    if include_source_sheet_column:
+        merged_headers.append("Source Sheet")
+        seen_headers.add(normalize_column_name("Source Sheet"))
+
+    for worksheet in source_worksheets:
+        header_row_index = detect_header_row_index(worksheet)
+        headers = get_headers(worksheet, header_row_index)
+        for header in headers:
+            normalized = normalize_column_name(header)
+            if not header or normalized in seen_headers:
+                continue
+            seen_headers.add(normalized)
+            merged_headers.append(header)
+
+    return merged_headers
+
+
+def select_output_merge_sheet(workbook, source_sheet_names: List[str], desired_name: str):
+    if desired_name in workbook.sheetnames:
+        if desired_name not in source_sheet_names:
+            raise ValueError(f'merge_sheets output sheet "{desired_name}" already exists')
+        return workbook[desired_name], desired_name
+
+    output_sheet_name = ensure_unique_sheet_name(list(workbook.sheetnames), desired_name)
+    return workbook.create_sheet(title=output_sheet_name), output_sheet_name
+
+
+def apply_merge_sheets(workbook, operation: Dict[str, Any]):
+    source_sheet_names = normalize_string_list(operation.get("sourceSheets", []))
+    if len(source_sheet_names) < 2:
+        raise ValueError("merge_sheets operations require at least two sourceSheets")
+
+    source_worksheets = []
+    for sheet_name in source_sheet_names:
+        if sheet_name not in workbook.sheetnames:
+            raise ValueError(f'merge_sheets could not find source sheet "{sheet_name}"')
+        source_worksheets.append(workbook[sheet_name])
+
+    desired_name = sanitize_sheet_name(
+        operation.get("outputSheetName") or f"{source_sheet_names[0]} Merged",
+        "Merged Sheet",
+    )
+    output_worksheet, output_sheet_name = select_output_merge_sheet(
+        workbook,
+        source_sheet_names,
+        desired_name,
+    )
+
+    include_source_sheet_column = operation.get("includeSourceSheetColumn", True) is not False
+    merged_headers = build_merge_headers(source_worksheets, include_source_sheet_column)
+    if not merged_headers:
+        raise ValueError("merge_sheets could not determine any headers to merge")
+
+    clear_worksheet(output_worksheet)
+    copy_sheet_properties(source_worksheets[0], output_worksheet)
+
+    header_templates: Dict[str, Dict[str, Any]] = {}
+    for worksheet in source_worksheets:
+        header_row_index = detect_header_row_index(worksheet)
+        headers = get_headers(worksheet, header_row_index)
+        for column_index, header in enumerate(headers, start=1):
+            normalized = normalize_column_name(header)
+            if header and normalized not in header_templates:
+                header_templates[normalized] = snapshot_cell(
+                    worksheet.cell(row=header_row_index, column=column_index)
+                )
+
+    if include_source_sheet_column and source_worksheets:
+        first_header_row_index = detect_header_row_index(source_worksheets[0])
+        header_templates[normalize_column_name("Source Sheet")] = snapshot_cell(
+            source_worksheets[0].cell(row=first_header_row_index, column=1)
+        )
+
+    for column_index, header in enumerate(merged_headers, start=1):
+        snapshot = header_templates.get(normalize_column_name(header))
+        target_cell = output_worksheet.cell(row=1, column=column_index)
+        if snapshot:
+            copy_snapshot_to_cell(snapshot, target_cell, translate_formula=False)
+        target_cell.value = header
+
+    output_row_index = 2
+    for worksheet in source_worksheets:
+        header_row_index = detect_header_row_index(worksheet)
+        headers = get_headers(worksheet, header_row_index)
+        header_map = get_header_map(headers)
+        for source_row_index in range(header_row_index + 1, worksheet.max_row + 1):
+            row_has_content = False
+            for source_column_index in range(1, worksheet.max_column + 1):
+                if normalize_scalar(worksheet.cell(row=source_row_index, column=source_column_index).value) != "":
+                    row_has_content = True
+                    break
+            if not row_has_content:
+                continue
+
+            copy_row_dimension(worksheet, source_row_index, output_worksheet, output_row_index)
+            for output_column_index, header in enumerate(merged_headers, start=1):
+                target_cell = output_worksheet.cell(row=output_row_index, column=output_column_index)
+                if include_source_sheet_column and header == "Source Sheet":
+                    template_snapshot = header_templates.get(normalize_column_name("Source Sheet"))
+                    if template_snapshot:
+                        copy_snapshot_to_cell(template_snapshot, target_cell, translate_formula=False)
+                    target_cell.value = worksheet.title
+                    continue
+
+                source_column_index = header_map.get(normalize_column_name(header))
+                if source_column_index is None:
+                    target_cell.value = ""
+                    continue
+
+                snapshot = snapshot_cell(worksheet.cell(row=source_row_index, column=source_column_index))
+                copy_snapshot_to_cell(snapshot, target_cell, translate_formula=False)
+            output_row_index += 1
+
+    auto_filter_ref = build_autofilter_ref(len(merged_headers), output_row_index - 1)
+    if auto_filter_ref:
+        output_worksheet.auto_filter.ref = auto_filter_ref
+
+    if operation.get("preserveSourceSheets", True) is False:
+        for source_sheet_name in source_sheet_names:
+            if source_sheet_name == output_sheet_name:
+                continue
+            workbook.remove(workbook[source_sheet_name])
+
+    return {
+        "type": "merge_sheets",
+        "sourceSheets": source_sheet_names,
+        "outputSheetName": output_sheet_name,
+    }
+
+
+def build_split_sheet_name(source_sheet: str, output_prefix: Any, group_value: str) -> str:
+    safe_group_name = sanitize_sheet_name(group_value or "Blank", "Blank")
+    prefix = normalize_scalar(output_prefix) or f"{source_sheet} -"
+    return sanitize_sheet_name(f"{prefix} {safe_group_name}", f"{source_sheet} Split")
+
+
+def apply_split_sheet(workbook, operation: Dict[str, Any]):
+    source_sheet_name = normalize_scalar(operation.get("sourceSheetName") or operation.get("sheetName"))
+    if not source_sheet_name:
+        raise ValueError("split_sheet operations require sourceSheetName")
+    if source_sheet_name not in workbook.sheetnames:
+        raise ValueError(f'split_sheet could not find source sheet "{source_sheet_name}"')
+
+    by_column = normalize_scalar(operation.get("byColumn"))
+    if not by_column:
+        raise ValueError("split_sheet operations require byColumn")
+
+    source_worksheet = workbook[source_sheet_name]
+    header_row_index = detect_header_row_index(source_worksheet)
+    headers = get_headers(source_worksheet, header_row_index)
+    header_map = get_header_map(headers)
+    split_column_index = header_map.get(normalize_column_name(by_column))
+    if split_column_index is None:
+        raise ValueError(f'Could not find split column "{by_column}"')
+
+    grouped_row_indexes: Dict[str, List[int]] = {}
+    for row_index in range(header_row_index + 1, source_worksheet.max_row + 1):
+        group_value = normalize_scalar(source_worksheet.cell(row=row_index, column=split_column_index).value) or "Blank"
+        grouped_row_indexes.setdefault(group_value, []).append(row_index)
+
+    created_sheets = []
+    for group_value, data_row_indexes in grouped_row_indexes.items():
+        desired_name = build_split_sheet_name(
+            source_sheet=source_sheet_name,
+            output_prefix=operation.get("outputSheetPrefix"),
+            group_value=group_value,
+        )
+        output_sheet_name = ensure_unique_sheet_name(list(workbook.sheetnames), desired_name)
+        split_worksheet = workbook.create_sheet(title=output_sheet_name)
+        copy_sheet_properties(source_worksheet, split_worksheet)
+        prefix_and_header_rows = list(range(1, header_row_index + 1))
+        source_row_indexes = prefix_and_header_rows + data_row_indexes
+        copy_selected_rows_to_sheet(
+            source_worksheet,
+            split_worksheet,
+            source_row_indexes,
+            translate_formula_data_rows=set(data_row_indexes),
+        )
+        auto_filter_ref = build_autofilter_ref(len(headers), len(source_row_indexes))
+        if auto_filter_ref:
+            split_worksheet.auto_filter.ref = auto_filter_ref
+        created_sheets.append(output_sheet_name)
+
+    if operation.get("preserveSourceSheet", True) is False:
+        workbook.remove(source_worksheet)
+
+    return {
+        "type": "split_sheet",
+        "sourceSheetName": source_sheet_name,
+        "byColumn": by_column,
+        "createdSheets": created_sheets,
+    }
+
+
 def apply_operations(workbook, target_sheet_names: List[str], operations: List[Dict[str, Any]]):
     summaries = []
     for operation in operations:
@@ -1141,6 +1518,14 @@ def apply_operations(workbook, target_sheet_names: List[str], operations: List[D
             raise UnsupportedOperationError(
                 f'Python spreadsheet worker does not support operation "{operation_type}" yet'
             )
+
+        if operation_type == "merge_sheets":
+            summaries.append(apply_merge_sheets(workbook, operation))
+            continue
+
+        if operation_type == "split_sheet":
+            summaries.append(apply_split_sheet(workbook, operation))
+            continue
 
         explicit_sheet = normalize_scalar(operation.get("sheetName"))
         target_names = [explicit_sheet] if explicit_sheet else target_sheet_names
@@ -1161,6 +1546,8 @@ def apply_operations(workbook, target_sheet_names: List[str], operations: List[D
                 apply_sort_rows(worksheet, operation)
             elif operation_type == "add_totals_row":
                 apply_add_totals_row(worksheet, operation)
+            elif operation_type == "reorder_rows":
+                apply_reorder_rows(worksheet, operation)
 
             summaries.append({"type": operation_type, "sheetName": sheet_name})
 
@@ -1223,7 +1610,7 @@ def build_final_sheet_summaries(workbook):
 
 def transform_workbook(payload: WorkerRequest):
     source_bytes = decode_workbook_buffer(payload)
-    workbook = load_workbook(io.BytesIO(source_bytes), data_only=False, keep_vba=True)
+    workbook = load_input_workbook(source_bytes, payload.sourceFilename)
     if not workbook.sheetnames:
         raise ValueError("Spreadsheet does not contain any sheets")
 

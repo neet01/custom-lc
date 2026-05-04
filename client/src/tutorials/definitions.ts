@@ -126,7 +126,7 @@ export function buildTutorialDefinitions(
           title: 'Choose an email thread',
           description:
             'Start by selecting the email or thread you want to inspect. The right-hand viewer and the AI assistant operate on the current selection.',
-          target: 'outlook-message-list',
+          target: 'outlook-example-thread',
           placement: 'right',
           beforeEnter: () => {
             context.openPanel('outlook');

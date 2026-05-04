@@ -22,6 +22,7 @@ import { cn } from '~/utils';
 
 type RectLike = { top: number; left: number; width: number; height: number };
 type StepPlacement = TutorialStep['placement'];
+type HighlightCleanup = () => void;
 
 interface TutorialContextValue {
   tutorials: TutorialDefinition[];
@@ -60,6 +61,45 @@ function findTargetElement(target: string | undefined): HTMLElement | null {
   }
 
   return document.querySelector<HTMLElement>(`[data-tour="${target}"]`);
+}
+
+function applyTargetHighlight(element: HTMLElement): HighlightCleanup {
+  const style = element.style;
+  const computedStyle = window.getComputedStyle(element);
+  const previous = {
+    position: style.position,
+    zIndex: style.zIndex,
+    outline: style.outline,
+    outlineOffset: style.outlineOffset,
+    boxShadow: style.boxShadow,
+    transition: style.transition,
+    scrollMargin: style.scrollMargin,
+  };
+
+  if (computedStyle.position === 'static') {
+    style.position = 'relative';
+  }
+  style.zIndex = '141';
+  style.outline = '3px solid rgba(245, 208, 0, 0.88)';
+  style.outlineOffset = '4px';
+  style.boxShadow = '0 0 24px rgba(245, 208, 0, 0.22)';
+  style.transition = [style.transition, 'outline-color 160ms ease, box-shadow 160ms ease']
+    .filter(Boolean)
+    .join(', ');
+  style.scrollMargin = '120px';
+
+  element.setAttribute('data-tutorial-active', 'true');
+
+  return () => {
+    style.position = previous.position;
+    style.zIndex = previous.zIndex;
+    style.outline = previous.outline;
+    style.outlineOffset = previous.outlineOffset;
+    style.boxShadow = previous.boxShadow;
+    style.transition = previous.transition;
+    style.scrollMargin = previous.scrollMargin;
+    element.removeAttribute('data-tutorial-active');
+  };
 }
 
 function getCardPosition(rect: RectLike | null, placement: StepPlacement = 'auto') {
@@ -143,6 +183,7 @@ export function TutorialProvider({ children }: { children: ReactNode }) {
   const [stepIndex, setStepIndex] = useState(0);
   const [targetRect, setTargetRect] = useState<RectLike | null>(null);
   const activeStepCleanupRef = useRef<number | null>(null);
+  const targetHighlightCleanupRef = useRef<HighlightCleanup | null>(null);
 
   const tutorialContext = useMemo(
     () => ({
@@ -168,6 +209,8 @@ export function TutorialProvider({ children }: { children: ReactNode }) {
   const activeStep = activeTutorial?.steps[stepIndex] ?? null;
 
   const closeTutorial = useCallback(() => {
+    targetHighlightCleanupRef.current?.();
+    targetHighlightCleanupRef.current = null;
     setActiveTutorialId(null);
     setStepIndex(0);
     setTargetRect(null);
@@ -202,6 +245,8 @@ export function TutorialProvider({ children }: { children: ReactNode }) {
     }
 
     activeStep.beforeEnter?.(tutorialContext);
+    targetHighlightCleanupRef.current?.();
+    targetHighlightCleanupRef.current = null;
 
     if (!activeStep.target) {
       setTargetRect(null);
@@ -218,6 +263,7 @@ export function TutorialProvider({ children }: { children: ReactNode }) {
 
       const element = findTargetElement(activeStep.target);
       if (element) {
+        targetHighlightCleanupRef.current = applyTargetHighlight(element);
         element.scrollIntoView({
           behavior: 'smooth',
           block: 'center',
@@ -254,11 +300,13 @@ export function TutorialProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
-      setTargetRect(null);
       if (activeStepCleanupRef.current != null) {
         window.clearTimeout(activeStepCleanupRef.current);
         activeStepCleanupRef.current = null;
       }
+      targetHighlightCleanupRef.current?.();
+      targetHighlightCleanupRef.current = null;
+      setTargetRect(null);
       cleanupListeners?.();
     };
   }, [activeStep, tutorialContext]);
@@ -289,55 +337,10 @@ export function TutorialProvider({ children }: { children: ReactNode }) {
       {children}
       {activeTutorial && activeStep ? (
         <div className="pointer-events-auto fixed inset-0 z-[140]">
-          {targetRect ? (
-            <>
-              <div
-                className="pointer-events-none absolute bg-[rgba(6,9,16,0.64)]"
-                style={{ top: 0, left: 0, right: 0, height: `${targetRect.top}px` }}
-              />
-              <div
-                className="pointer-events-none absolute bg-[rgba(6,9,16,0.64)]"
-                style={{
-                  top: `${targetRect.top}px`,
-                  left: 0,
-                  width: `${targetRect.left}px`,
-                  height: `${targetRect.height}px`,
-                }}
-              />
-              <div
-                className="pointer-events-none absolute bg-[rgba(6,9,16,0.64)]"
-                style={{
-                  top: `${targetRect.top}px`,
-                  left: `${targetRect.left + targetRect.width}px`,
-                  right: 0,
-                  height: `${targetRect.height}px`,
-                }}
-              />
-              <div
-                className="pointer-events-none absolute bg-[rgba(6,9,16,0.64)]"
-                style={{
-                  top: `${targetRect.top + targetRect.height}px`,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                }}
-              />
-              <div
-                className="pointer-events-none absolute rounded-2xl border-2 border-[#f5d000]/85 shadow-[0_0_0_1px_rgba(255,224,92,0.45),0_0_26px_rgba(245,208,0,0.18)]"
-                style={{
-                  top: `${targetRect.top}px`,
-                  left: `${targetRect.left}px`,
-                  width: `${targetRect.width}px`,
-                  height: `${targetRect.height}px`,
-                }}
-              />
-            </>
-          ) : (
-            <div className="pointer-events-none absolute inset-0 bg-black/60" />
-          )}
+          <div className="pointer-events-none absolute inset-0 bg-black/60" />
           <div
             className={cn(
-              'absolute rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-2xl',
+              'absolute z-[142] rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-2xl',
             )}
             style={{
               top: `${cardPosition.top}px`,

@@ -2346,6 +2346,10 @@ export default function OutlookPanel() {
   useEffect(() => {
     const handleTutorialOpenAssistant = () => {
       setAssistantPanelScrolled(false);
+      setAssistantPanelSize({
+        width: ASSISTANT_PANEL_DEFAULT_WIDTH,
+        height: Math.min(520, window.innerHeight - 140),
+      });
       setAssistantPanelOpen(true);
     };
 
@@ -3125,6 +3129,7 @@ export default function OutlookPanel() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
                 key={conversation.id}
+                data-tour={conversation === visibleConversations[0] ? 'outlook-example-thread' : undefined}
                 className={cn(
                   'flex items-start gap-2 border-b border-border-light px-2 transition-colors duration-150',
                   densityMode === 'compact' ? 'py-1.5' : 'py-2',

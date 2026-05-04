@@ -29,14 +29,15 @@ export function buildTutorialDefinitions(
   return {
     'chat-agents': {
       id: 'chat-agents',
-      title: 'Chat, Jira, and Confluence',
-      description: 'Use the main chat surface with enterprise agents such as Jira and Confluence.',
+      title: 'MCP, Jira, Confluence, and chat',
+      description:
+        'Connect MCP-backed enterprise tools first, then use the main chat surface with Jira and Confluence agents.',
       steps: [
         {
           id: 'chat-intro',
-          title: 'Main chat workflow',
+          title: 'Enterprise tools first',
           description:
-            'This tutorial covers the default chat interface, how to switch into enterprise agents like Jira or Confluence, and how to submit requests cleanly.',
+            'Before using Jira or Confluence through Cortex, users need to open the MCP Servers panel and confirm the relevant connection is configured there.',
           placement: 'center',
           beforeEnter: () => {
             context.openPanel('conversations');
@@ -44,10 +45,45 @@ export function buildTutorialDefinitions(
           },
         },
         {
+          id: 'mcp-sidebar',
+          title: 'Open MCP Servers',
+          description:
+            'This sidebar entry opens the MCP Servers panel. Use it first when a Jira or Confluence integration needs to be connected or reconfigured.',
+          target: 'sidebar-mcp-builder',
+          placement: 'right',
+          beforeEnter: () => {
+            context.expandSidebar();
+          },
+        },
+        {
+          id: 'mcp-panel',
+          title: 'Connect Jira and Confluence here',
+          description:
+            'This panel is the setup surface for MCP-backed tools. If Jira or Confluence is not already connected, configure it here before returning to chat.',
+          target: 'mcp-builder-panel',
+          placement: 'right',
+          beforeEnter: () => {
+            context.expandSidebar();
+            context.openPanel('mcp-builder');
+          },
+        },
+        {
+          id: 'mcp-add-server',
+          title: 'Add or edit a server',
+          description:
+            'Use this control to add a new MCP server entry. Existing Jira or Confluence server cards in this panel can also be reviewed and updated from here.',
+          target: 'mcp-builder-add-server',
+          placement: 'bottom',
+          beforeEnter: () => {
+            context.expandSidebar();
+            context.openPanel('mcp-builder');
+          },
+        },
+        {
           id: 'chat-model-selector',
           title: 'Model and agent selector',
           description:
-            'Use this selector to choose the active model or agent. If Jira and Confluence are provisioned as agents in this environment, select them here before asking work-specific questions.',
+            'After the MCP connection is in place, return to the main chat surface and use this selector to choose the active Jira or Confluence agent.',
           target: 'chat-model-selector',
           placement: 'bottom',
           beforeEnter: () => {

@@ -36,7 +36,7 @@ export default function MCPBuilderPanel() {
   }, [availableMCPServers, searchQuery]);
 
   return (
-    <div className="flex h-auto w-full flex-col px-3 pb-3">
+    <div className="flex h-auto w-full flex-col px-3 pb-3" data-tour="mcp-builder-panel">
       <div role="region" aria-label={localize('com_ui_mcp_servers')} className="space-y-2">
         {/* Toolbar: Search + Add Button */}
         <div className="flex items-center gap-2">
@@ -62,6 +62,7 @@ export default function MCPBuilderPanel() {
                       ref={addButtonRef}
                       variant="outline"
                       size="icon"
+                      data-tour="mcp-builder-add-server"
                       className="size-9 shrink-0 bg-transparent"
                       onClick={() => setShowDialog(true)}
                       aria-label={localize('com_ui_add_mcp')}

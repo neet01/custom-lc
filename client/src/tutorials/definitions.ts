@@ -1,4 +1,4 @@
-export type TutorialId = 'cortex-overview' | 'outlook-workspace' | 'admin-reporting';
+export type TutorialId = 'chat-agents' | 'outlook-analysis';
 
 export interface TutorialDefinitionContext {
   openPanel: (panelId: string) => void;
@@ -12,6 +12,7 @@ export interface TutorialStep {
   title: string;
   description: string;
   target?: string;
+  placement?: 'auto' | 'left' | 'right' | 'top' | 'bottom' | 'center';
   beforeEnter?: (context: TutorialDefinitionContext) => void;
 }
 
@@ -26,53 +27,76 @@ export function buildTutorialDefinitions(
   context: TutorialDefinitionContext,
 ): Record<TutorialId, TutorialDefinition> {
   return {
-    'cortex-overview': {
-      id: 'cortex-overview',
-      title: 'Cortex overview',
-      description: 'A short walkthrough of the main workspace entry points in Cortex.',
+    'chat-agents': {
+      id: 'chat-agents',
+      title: 'Chat, Jira, and Confluence',
+      description: 'Use the main chat surface with enterprise agents such as Jira and Confluence.',
       steps: [
         {
-          id: 'overview-intro',
-          title: 'Cortex tutorials',
+          id: 'chat-intro',
+          title: 'Main chat workflow',
           description:
-            'This walkthrough highlights the main workspace surfaces. Use Settings > Account > Start tutorial any time to reopen it.',
-        },
-        {
-          id: 'overview-outlook',
-          title: 'Outlook workspace',
-          description:
-            'Open Outlook from the sidebar to work with email, scheduling, and calendar actions in one place.',
-          target: 'sidebar-outlook',
+            'This tutorial covers the default chat interface, how to switch into enterprise agents like Jira or Confluence, and how to submit requests cleanly.',
+          placement: 'center',
           beforeEnter: () => {
-            context.expandSidebar();
+            context.openPanel('conversations');
+            context.collapseSidebar();
           },
         },
         {
-          id: 'overview-admin',
-          title: 'Admin reporting',
+          id: 'chat-model-selector',
+          title: 'Model and agent selector',
           description:
-            'Admin reporting surfaces token usage, request history, user balances, Outlook audit events, and issue reporting.',
-          target: 'sidebar-admin-reporting',
+            'Use this selector to choose the active model or agent. If Jira and Confluence are provisioned as agents in this environment, select them here before asking work-specific questions.',
+          target: 'chat-model-selector',
+          placement: 'bottom',
           beforeEnter: () => {
-            context.expandSidebar();
+            context.openPanel('conversations');
+            context.collapseSidebar();
           },
         },
         {
-          id: 'overview-account',
-          title: 'Account menu',
+          id: 'chat-composer',
+          title: 'Chat composer',
           description:
-            'Your account menu gives access to settings, balances, file management, and this tutorial launcher.',
-          target: 'sidebar-account',
+            'This is the main composer shell. After you choose Jira or Confluence, type the request here and keep the task scoped to the agent you selected.',
+          target: 'chat-composer',
+          placement: 'top',
           beforeEnter: () => {
-            context.expandSidebar();
+            context.openPanel('conversations');
+            context.collapseSidebar();
+          },
+        },
+        {
+          id: 'chat-text-input',
+          title: 'Request entry',
+          description:
+            'Enter the task in plain language. For example: summarize the latest Jira blockers, or search Confluence for deployment runbooks.',
+          target: 'chat-text-input',
+          placement: 'top',
+          beforeEnter: () => {
+            context.openPanel('conversations');
+            context.collapseSidebar();
+          },
+        },
+        {
+          id: 'chat-send',
+          title: 'Submit the request',
+          description:
+            'When the prompt is ready, submit it here. The current agent or model selection controls how Cortex routes and answers the request.',
+          target: 'chat-send-button',
+          placement: 'left',
+          beforeEnter: () => {
+            context.openPanel('conversations');
+            context.collapseSidebar();
           },
         },
       ],
     },
-    'outlook-workspace': {
-      id: 'outlook-workspace',
-      title: 'Outlook workspace',
-      description: 'Walk through the inbox-focused Outlook workspace and its AI actions.',
+    'outlook-analysis': {
+      id: 'outlook-analysis',
+      title: 'Outlook and email analysis',
+      description: 'Work through the Outlook inbox flow, including AI analysis and reply actions.',
       steps: [
         {
           id: 'outlook-open',
@@ -80,37 +104,18 @@ export function buildTutorialDefinitions(
           description:
             'The Outlook workspace lives behind this sidebar entry. It replaces the normal chat surface while it is active.',
           target: 'sidebar-outlook',
+          placement: 'right',
           beforeEnter: () => {
             context.expandSidebar();
           },
         },
         {
-          id: 'outlook-root',
-          title: 'Workspace shell',
-          description:
-            'This is the Outlook workspace container. It keeps inbox and calendar workflows under a single application surface.',
-          target: 'outlook-workspace',
-          beforeEnter: () => {
-            context.openPanel('outlook');
-            context.dispatch('cortex:tutorial-open-outlook-inbox');
-          },
-        },
-        {
           id: 'outlook-tabs',
-          title: 'Workspace tabs',
+          title: 'Outlook workspace tabs',
           description:
-            'Switch between Inbox and Calendar here. The current implementation is inbox-first, with calendar mutations already available.',
+            'Use these tabs to move between Inbox and Calendar. The analysis flow starts from Inbox after selecting an email thread.',
           target: 'outlook-workspace-tabs',
-          beforeEnter: () => {
-            context.openPanel('outlook');
-          },
-        },
-        {
-          id: 'outlook-toolbar',
-          title: 'Inbox controls',
-          description:
-            'This row contains search, mailbox controls, bulk actions, and brief/summarization entry points.',
-          target: 'outlook-inbox-toolbar',
+          placement: 'bottom',
           beforeEnter: () => {
             context.openPanel('outlook');
             context.dispatch('cortex:tutorial-open-outlook-inbox');
@@ -118,10 +123,11 @@ export function buildTutorialDefinitions(
         },
         {
           id: 'outlook-list',
-          title: 'Message list',
+          title: 'Choose an email thread',
           description:
-            'The left column is the working inbox list. It supports focused/other/all views, compact density, and bulk selection.',
+            'Start by selecting the email or thread you want to inspect. The right-hand viewer and the AI assistant operate on the current selection.',
           target: 'outlook-message-list',
+          placement: 'right',
           beforeEnter: () => {
             context.openPanel('outlook');
             context.dispatch('cortex:tutorial-open-outlook-inbox');
@@ -129,50 +135,66 @@ export function buildTutorialDefinitions(
         },
         {
           id: 'outlook-viewer',
-          title: 'Email viewer',
+          title: 'Review the selected thread',
           description:
-            'The right column is the message and thread viewer. This is where the selected email thread, draft visibility, and delete actions live.',
+            'The message viewer shows the selected thread, any already-saved drafts for that conversation, and the raw context the AI actions will reference.',
           target: 'outlook-email-viewer',
+          placement: 'left',
           beforeEnter: () => {
             context.openPanel('outlook');
             context.dispatch('cortex:tutorial-open-outlook-inbox');
           },
         },
-      ],
-    },
-    'admin-reporting': {
-      id: 'admin-reporting',
-      title: 'Admin reporting',
-      description: 'Review the full-page admin analytics workspace.',
-      steps: [
         {
-          id: 'admin-open',
-          title: 'Open admin reporting',
+          id: 'outlook-ai-toggle',
+          title: 'Open the AI assistant',
           description:
-            'Admins can use this workspace to review token consumption, user activity, balances, audit trails, and reported issues.',
-          target: 'sidebar-admin-reporting',
+            'Use this button to open the floating AI assistant panel for the selected email thread.',
+          target: 'outlook-ai-toggle',
+          placement: 'left',
           beforeEnter: () => {
-            context.expandSidebar();
+            context.openPanel('outlook');
+            context.dispatch('cortex:tutorial-open-outlook-inbox');
+            context.dispatch('cortex:tutorial-open-outlook-assistant');
           },
         },
         {
-          id: 'admin-root',
-          title: 'Reporting workspace',
+          id: 'outlook-ai-actions',
+          title: 'Analysis and reply actions',
           description:
-            'The page header and summary cards show the current reporting window, top-level token usage, and request volume.',
-          target: 'admin-reporting-root',
+            'This panel is where users analyze the selected email, generate a reply draft, or find meeting times. Start with Analyze email when the user needs a structured readout before responding.',
+          target: 'outlook-ai-actions',
+          placement: 'left',
           beforeEnter: () => {
-            context.openPanel('admin-reporting');
+            context.openPanel('outlook');
+            context.dispatch('cortex:tutorial-open-outlook-inbox');
+            context.dispatch('cortex:tutorial-open-outlook-assistant');
           },
         },
         {
-          id: 'admin-tabs',
-          title: 'Reporting tabs',
+          id: 'outlook-analyze-button',
+          title: 'Run email analysis',
           description:
-            'Use the tabs to move between usage-by-user, recent requests, directory management, Outlook audit history, and reported issues.',
-          target: 'admin-reporting-tabs',
+            'This is the entry point for the analysis flow. It produces the AI summary and action framing for the selected thread, without requiring the user to write a prompt manually.',
+          target: 'outlook-ai-analyze',
+          placement: 'left',
           beforeEnter: () => {
-            context.openPanel('admin-reporting');
+            context.openPanel('outlook');
+            context.dispatch('cortex:tutorial-open-outlook-inbox');
+            context.dispatch('cortex:tutorial-open-outlook-assistant');
+          },
+        },
+        {
+          id: 'outlook-ai-results',
+          title: 'Review results in-panel',
+          description:
+            'After analysis runs, the result stays in this scrollable assistant panel so users can review it, draft a response, or continue with scheduling actions against the same thread.',
+          target: 'outlook-ai-panel',
+          placement: 'left',
+          beforeEnter: () => {
+            context.openPanel('outlook');
+            context.dispatch('cortex:tutorial-open-outlook-inbox');
+            context.dispatch('cortex:tutorial-open-outlook-assistant');
           },
         },
       ],

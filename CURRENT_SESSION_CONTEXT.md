@@ -77,22 +77,22 @@ Implemented:
 - native tutorial overlay system in the client
 - manual tutorial launcher in `Settings -> Account`
 - no auto-start behavior for new users
-- tutorial coverage for:
-  - Cortex overview
-  - Outlook workspace
-  - admin reporting
+- tutorial coverage now narrowed to:
+  - chat interface + enterprise agents
+  - Outlook email analysis flow
 - stable `data-tour` anchors on:
   - sidebar navigation
+  - chat model selector / composer / send flow
+  - Outlook workspace sections and AI assistant actions
   - account menu button
-  - Outlook workspace sections
-  - admin reporting sections
 
 Current behavior:
 
 - users open Settings, go to Account, and click `Start tutorial`
 - selecting a tutorial closes settings and launches the guided overlay
-- the tutorial can open the Outlook or admin workspace as needed
-- the Outlook tutorial can force the Inbox tab before highlighting inbox-only controls
+- the tutorial can switch between the main chat surface and the Outlook workspace as needed
+- the Outlook tutorial can force the Inbox tab and open the floating AI assistant before highlighting the analysis controls
+- the overlay/highlight system was refactored away from the large box-shadow spotlight to a four-panel cutout overlay for cleaner formatting
 
 ### File workflows
 

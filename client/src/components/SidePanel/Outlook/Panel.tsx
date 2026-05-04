@@ -191,6 +191,7 @@ function ActionButton({
   disabled,
   className,
   icon: Icon,
+  dataTour,
 }: {
   label: string;
   loadingLabel: string;
@@ -201,10 +202,12 @@ function ActionButton({
   disabled?: boolean;
   className?: string;
   icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+  dataTour?: string;
 }) {
   return (
     <button
       type="button"
+      data-tour={dataTour}
       className={cn(
         'inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-all duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60',
         className,
@@ -2341,6 +2344,21 @@ export default function OutlookPanel() {
   }, []);
 
   useEffect(() => {
+    const handleTutorialOpenAssistant = () => {
+      setAssistantPanelScrolled(false);
+      setAssistantPanelOpen(true);
+    };
+
+    window.addEventListener('cortex:tutorial-open-outlook-assistant', handleTutorialOpenAssistant);
+    return () => {
+      window.removeEventListener(
+        'cortex:tutorial-open-outlook-assistant',
+        handleTutorialOpenAssistant,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
     const visibleIds = new Set(visibleConversationIds);
     setSelectedDeleteIds((current) => current.filter((messageId) => visibleIds.has(messageId)));
   }, [visibleConversationIds]);
@@ -3361,6 +3379,7 @@ export default function OutlookPanel() {
                   {!assistantPanelOpen && (
                     <button
                       type="button"
+                      data-tour="outlook-ai-toggle"
                       className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-[#f5d000]/70 bg-[#f5d000] px-4 py-2 text-xs font-semibold text-black shadow-lg shadow-[#f5d000]/20 transition-colors hover:bg-[#ffe05c]"
                       onClick={() => {
                         setAssistantPanelScrolled(false);
@@ -3374,6 +3393,7 @@ export default function OutlookPanel() {
 
                   {assistantPanelOpen && (
                     <div
+                      data-tour="outlook-ai-panel"
                       className={cn(
                         'pointer-events-auto relative w-full overflow-hidden rounded-2xl border border-border-light bg-surface-primary shadow-2xl',
                         assistantPanelResizing && 'select-none',
@@ -3414,8 +3434,9 @@ export default function OutlookPanel() {
                             </button>
                           </div>
 
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <div className="mt-3 flex flex-wrap items-center gap-2" data-tour="outlook-ai-actions">
                             <ActionButton
+                              dataTour="outlook-ai-analyze"
                               label={analysis ? 'Refresh analysis' : 'Analyze email'}
                               loadingLabel="Analyzing..."
                               successLabel="Done"

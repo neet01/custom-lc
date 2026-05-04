@@ -262,6 +262,7 @@ const ChatForm = memo(function ChatForm({
           <PromptsCommand index={index} textAreaRef={textAreaRef} submitPrompt={submitPrompt} />
           <div
             onClick={handleContainerClick}
+            data-tour="chat-composer"
             className={cn(
               'relative flex w-full flex-grow flex-col overflow-hidden rounded-t-3xl border pb-4 text-text-primary transition-all duration-200 sm:rounded-3xl sm:pb-0',
               isTextAreaFocused ? 'shadow-lg' : 'shadow-md',
@@ -313,6 +314,7 @@ const ChatForm = memo(function ChatForm({
                     id={mainTextareaId}
                     tabIndex={0}
                     data-testid="text-input"
+                    data-tour="chat-text-input"
                     rows={1}
                     onFocus={handleTextareaFocus}
                     onBlur={handleTextareaBlur}

@@ -26,6 +26,7 @@ function AccountSettings({ collapsed = false }: { collapsed?: boolean }) {
         ref={accountSettingsButtonRef}
         aria-label={localize('com_nav_account_settings')}
         data-testid="nav-user"
+        data-tour="sidebar-account"
         className={
           collapsed
             ? 'flex h-9 w-9 items-center justify-center rounded-lg transition-colors hover:bg-surface-active-alt aria-[expanded=true]:bg-surface-active-alt'

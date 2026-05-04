@@ -321,6 +321,7 @@ if (cluster.isMaster) {
     app.use('/api/files', await routes.files.initialize());
     app.use('/api/issues', routes.issues);
     app.use('/api/outlook', routes.outlook);
+    app.use('/api/teams-archive', routes.teamsArchive);
     app.use('/images/', createValidateImageRequest(appConfig.secureImageLinks), routes.staticRoute);
     app.use('/api/share', routes.share);
     app.use('/api/roles', routes.roles);

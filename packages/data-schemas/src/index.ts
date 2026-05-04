@@ -8,6 +8,9 @@ export { createModels } from './models';
 export type { IUsage } from './schema/usage';
 export type { IIssueReport } from './schema/issueReport';
 export type { IOutlookAudit } from './schema/outlookAudit';
+export type { ITeamsArchiveConversation } from './schema/teamsArchiveConversation';
+export type { ITeamsArchiveMessage } from './schema/teamsArchiveMessage';
+export type { ITeamsArchiveSyncJob } from './schema/teamsArchiveSyncJob';
 export {
   createMethods,
   RoleConflictError,

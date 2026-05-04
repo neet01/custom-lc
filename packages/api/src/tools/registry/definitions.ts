@@ -217,6 +217,51 @@ export const openWeatherSchema: ExtendedJsonSchema = {
   required: ['action'],
 };
 
+export const teamsArchiveSchema: ExtendedJsonSchema = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['status', 'sync_archive', 'search_messages', 'list_conversations', 'get_messages'],
+      description:
+        'Teams archive action. Use sync_archive sparingly to ingest historical chats, search_messages to query the archive, list_conversations to inspect archived chats, get_messages to read one archived chat, or status to check readiness.',
+    },
+    query: {
+      type: 'string',
+      description: 'For search_messages: natural-language or keyword query for archived Teams chats.',
+    },
+    chatId: {
+      type: 'string',
+      description: 'For get_messages or search_messages: archived Teams chat id to target.',
+    },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: 'Optional result limit for search and list operations.',
+    },
+    offset: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 100000,
+      description: 'Optional pagination offset for search and list operations.',
+    },
+    chatLimit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 250,
+      description: 'For sync_archive: maximum number of chats to ingest in this run.',
+    },
+    messagesPerChat: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 1000,
+      description: 'For sync_archive: maximum messages to ingest per chat in this run.',
+    },
+  },
+  required: ['action'],
+};
+
 /** Wolfram Alpha tool JSON schema */
 export const wolframSchema: ExtendedJsonSchema = {
   type: 'object',
@@ -771,6 +816,13 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
     schema: wordDocumentTransformSchema,
     toolType: 'builtin',
     responseFormat: 'content_and_artifact',
+  },
+  teams_archive_search: {
+    name: 'teams_archive_search',
+    description:
+      'Search and retrieve archived Microsoft Teams chats that were previously ingested into Cortex. Useful for querying historical Teams conversations after Teams becomes read-only.',
+    schema: teamsArchiveSchema,
+    toolType: 'builtin',
   },
   image_gen_oai: {
     name: oaiToolkit.image_gen_oai.name,

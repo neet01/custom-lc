@@ -2330,6 +2330,17 @@ export default function OutlookPanel() {
   }, [assistantPanelSize]);
 
   useEffect(() => {
+    const handleTutorialOpenInbox = () => {
+      setWorkspaceTab('inbox');
+    };
+
+    window.addEventListener('cortex:tutorial-open-outlook-inbox', handleTutorialOpenInbox);
+    return () => {
+      window.removeEventListener('cortex:tutorial-open-outlook-inbox', handleTutorialOpenInbox);
+    };
+  }, []);
+
+  useEffect(() => {
     const visibleIds = new Set(visibleConversationIds);
     setSelectedDeleteIds((current) => current.filter((messageId) => visibleIds.has(messageId)));
   }, [visibleConversationIds]);
@@ -2864,7 +2875,10 @@ export default function OutlookPanel() {
   }
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-surface-primary text-text-primary">
+    <div
+      className="relative flex h-full min-h-0 flex-col bg-surface-primary text-text-primary"
+      data-tour="outlook-workspace"
+    >
       <div className="border-b border-border-light px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -2886,7 +2900,7 @@ export default function OutlookPanel() {
             isSuccess={actionSuccess.refresh}
           />
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
+        <div className="mt-3 flex flex-wrap items-center gap-3" data-tour="outlook-workspace-tabs">
           <WorkspaceTabs active={workspaceTab} onChange={setWorkspaceTab} />
           {workspaceTab === 'calendar' && (
             <div className="flex flex-wrap items-center gap-2">
@@ -2911,7 +2925,7 @@ export default function OutlookPanel() {
 
         {workspaceTab === 'inbox' ? (
           <>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2" data-tour="outlook-inbox-toolbar">
               <div className="relative min-w-[220px] flex-1 sm:max-w-[320px]">
                 <Search
                   className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary"
@@ -3068,7 +3082,10 @@ export default function OutlookPanel() {
         />
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(240px,34%)_minmax(0,1fr)]">
-        <div className="min-h-0 overflow-y-auto border-b border-border-light md:border-b-0 md:border-r">
+        <div
+          className="min-h-0 overflow-y-auto border-b border-border-light md:border-b-0 md:border-r"
+          data-tour="outlook-message-list"
+        >
           {messagesLoading && <MessageListSkeleton density={densityMode} />}
           {!messagesLoading && visibleConversations.length === 0 && (
             <EmptyState
@@ -3175,7 +3192,7 @@ export default function OutlookPanel() {
           })}
         </div>
 
-        <div className="flex min-h-0 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-col overflow-hidden" data-tour="outlook-email-viewer">
           {!selectedId && (
             <EmptyState
               title="Select an email"

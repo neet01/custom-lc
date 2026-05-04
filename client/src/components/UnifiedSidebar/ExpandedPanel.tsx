@@ -49,6 +49,7 @@ const NewChatButton = memo(function NewChatButton({
         <a
           href="/c/new"
           data-testid="new-chat-button"
+          data-tour="sidebar-new-chat"
           aria-label={localize('com_ui_new_chat')}
           className="flex h-9 w-9 items-center justify-center rounded-lg text-text-primary transition-colors hover:bg-surface-hover"
           onClick={handleClick}
@@ -110,6 +111,7 @@ const NavIconButton = memo(function NavIconButton({
         <Button
           size="icon"
           variant="ghost"
+          data-tour={`sidebar-${link.id}`}
           aria-label={localize(link.title)}
           aria-pressed={isActive}
           className={cn(
@@ -145,7 +147,9 @@ function ExpandedPanel({
 
   return (
     <div className="flex h-full flex-shrink-0 flex-col gap-2 border-r border-border-light bg-surface-primary-alt px-2 py-2">
-      <HermeusBrand compact className="h-9 w-9 justify-center" markClassName="h-9 w-9" />
+      <div data-tour="sidebar-brand">
+        <HermeusBrand compact className="h-9 w-9 justify-center" markClassName="h-9 w-9" />
+      </div>
       <div className="mx-2 border-b border-border-light" />
       <TooltipAnchor
         side="right"

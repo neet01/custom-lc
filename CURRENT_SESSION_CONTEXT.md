@@ -1,6 +1,6 @@
 # Current Session Context
 
-Last updated: 2026-04-29
+Last updated: 2026-05-04
 
 This file is the current working handoff for the LibreChat customization effort. Use this as the primary reference for future turns instead of relying on prior chat history.
 
@@ -13,6 +13,7 @@ This LibreChat fork is being turned into an internal enterprise AI platform for 
 - enterprise usage tracking and admin reporting
 - document and spreadsheet transformation workflows
 - future MCP/Jira/Confluence/AWS Bedrock integration
+- future Teams archive ingestion and retrieval
 
 ## Current Product State
 
@@ -69,6 +70,30 @@ Implemented or discussed previously in this repo:
 - admin reporting UI
 - issue reporting / user feedback flow
 
+### Guided tutorials
+
+Implemented:
+
+- native tutorial overlay system in the client
+- manual tutorial launcher in `Settings -> Account`
+- no auto-start behavior for new users
+- tutorial coverage for:
+  - Cortex overview
+  - Outlook workspace
+  - admin reporting
+- stable `data-tour` anchors on:
+  - sidebar navigation
+  - account menu button
+  - Outlook workspace sections
+  - admin reporting sections
+
+Current behavior:
+
+- users open Settings, go to Account, and click `Start tutorial`
+- selecting a tutorial closes settings and launches the guided overlay
+- the tutorial can open the Outlook or admin workspace as needed
+- the Outlook tutorial can force the Inbox tab before highlighting inbox-only controls
+
 ### File workflows
 
 Implemented or discussed previously:
@@ -85,6 +110,37 @@ Current spreadsheet architecture direction:
 - route both tool-driven and direct file spreadsheet transforms through the shared spreadsheet service
 - use environment gating so the Python worker can be enabled gradually
 - keep the LLM in a planning role; do not allow arbitrary Python generation/execution
+
+### Teams archive
+
+New backend foundation implemented for Teams archive ingestion and search:
+
+- persistence schemas for:
+  - `TeamsArchiveConversation`
+  - `TeamsArchiveMessage`
+  - `TeamsArchiveSyncJob`
+- backend service:
+  - [api/server/services/TeamsArchiveService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/TeamsArchiveService.js)
+- API routes:
+  - `GET /api/teams-archive/status`
+  - `POST /api/teams-archive/sync`
+  - `GET /api/teams-archive/conversations`
+  - `GET /api/teams-archive/conversations/:chatId/messages`
+  - `GET /api/teams-archive/search?q=...`
+- built-in Cortex tool:
+  - `teams_archive_search`
+  - actions: `status`, `sync_archive`, `search_messages`, `list_conversations`, `get_messages`
+- startup config now exposes `teamsArchiveEnabled`
+- `.env.example` now includes `TEAMS_ARCHIVE_*` variables
+
+Current v1 scope:
+
+- user-scoped Teams chat archive sync using delegated Graph access
+- stored message body HTML + cleaned text for search
+- chat conversation listing and search over archived messages
+- no Slack/Teams bot integration
+- no channel export support yet
+- no UI yet beyond API/config exposure
 
 ## Most Recent Session Changes
 

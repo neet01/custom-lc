@@ -50,6 +50,7 @@ const {
   createWordDocumentTool,
   primeFiles: primeWordDocumentFiles,
 } = require('./wordDocument');
+const { TEAMS_ARCHIVE_TOOL_NAME, createTeamsArchiveTool } = require('./teamsArchive');
 const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
 const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
@@ -364,6 +365,12 @@ const loadTools = async ({
           files,
         });
       };
+      continue;
+    } else if (tool === TEAMS_ARCHIVE_TOOL_NAME) {
+      requestedTools[tool] = async () =>
+        createTeamsArchiveTool({
+          req: options.req,
+        });
       continue;
     } else if (tool === Tools.web_search) {
       const result = await loadWebSearchAuth({

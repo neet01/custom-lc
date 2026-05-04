@@ -105,6 +105,13 @@
     "authConfig": []
   },
   {
+    "name": "Teams Archive Search",
+    "pluginKey": "teams_archive_search",
+    "description": "Search and retrieve archived Microsoft Teams chats that were ingested into Cortex.",
+    "icon": "assets/calculator.svg",
+    "authConfig": []
+  },
+  {
     "name": "Stable Diffusion",
     "pluginKey": "stable-diffusion",
     "description": "Generate photo-realistic images given any text input.",

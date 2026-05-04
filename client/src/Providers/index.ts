@@ -25,4 +25,5 @@ export * from './DragDropContext';
 export * from './ArtifactsContext';
 export * from './PromptGroupsContext';
 export * from './MessagesViewContext';
+export * from './TutorialContext';
 export { default as BadgeRowProvider } from './BadgeRowContext';

@@ -21,6 +21,7 @@ const actions = require('./actions');
 const apiKeys = require('./apiKeys');
 const banner = require('./banner');
 const search = require('./search');
+const teamsArchive = require('./teamsArchive');
 const models = require('./models');
 const convos = require('./convos');
 const config = require('./config');
@@ -58,6 +59,7 @@ module.exports = {
   files,
   issues,
   outlook,
+  teamsArchive,
   share,
   banner,
   agents,

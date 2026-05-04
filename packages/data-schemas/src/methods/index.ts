@@ -32,6 +32,7 @@ import { createPresetMethods, type PresetMethods } from './preset';
 import { createConversationTagMethods, type ConversationTagMethods } from './conversationTag';
 import { createMessageMethods, type MessageMethods } from './message';
 import { createConversationMethods, type ConversationMethods } from './conversation';
+import { createTeamsArchiveMethods, type TeamsArchiveMethods } from './teamsArchive';
 /* Tier 3 — Complex (heavier injection) */
 import {
   createTxMethods,
@@ -90,6 +91,7 @@ export type AllMethods = UserMethods &
   TxMethods &
   TransactionMethods &
   SpendTokensMethods &
+  TeamsArchiveMethods &
   IssueReportMethods &
   OutlookAuditMethods &
   UsageMethods &
@@ -141,6 +143,7 @@ export function createMethods(
   });
 
   const issueReportMethods = createIssueReportMethods(mongoose);
+  const teamsArchiveMethods = createTeamsArchiveMethods(mongoose);
   const outlookAuditMethods = createOutlookAuditMethods(mongoose);
   const usageMethods = createUsageMethods(mongoose);
 
@@ -217,6 +220,7 @@ export function createMethods(
     ...txMethods,
     ...transactionMethods,
     ...spendTokensMethods,
+    ...teamsArchiveMethods,
     ...issueReportMethods,
     ...outlookAuditMethods,
     ...usageMethods,
@@ -257,6 +261,7 @@ export type {
   TxMethods,
   TransactionMethods,
   SpendTokensMethods,
+  TeamsArchiveMethods,
   OutlookAuditMethods,
   UsageMethods,
   UsageSummaryQueryOptions,

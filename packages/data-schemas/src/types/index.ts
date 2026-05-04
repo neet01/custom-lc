@@ -10,6 +10,7 @@ export * from './balance';
 export * from './banner';
 export * from './issueReport';
 export * from './outlookAudit';
+export * from './teamsArchive';
 export * from './transaction';
 export * from './usage';
 export * from './message';

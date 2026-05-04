@@ -24,6 +24,9 @@ import { createPromptModel } from './prompt';
 import { createPromptGroupModel } from './promptGroup';
 import { createConversationTagModel } from './conversationTag';
 import { createSharedLinkModel } from './sharedLink';
+import { createTeamsArchiveConversationModel } from './teamsArchiveConversation';
+import { createTeamsArchiveMessageModel } from './teamsArchiveMessage';
+import { createTeamsArchiveSyncJobModel } from './teamsArchiveSyncJob';
 import { createToolCallModel } from './toolCall';
 import { createMemoryModel } from './memory';
 import { createAccessRoleModel } from './accessRole';
@@ -63,6 +66,9 @@ export function createModels(mongoose: typeof import('mongoose')) {
     PromptGroup: createPromptGroupModel(mongoose),
     ConversationTag: createConversationTagModel(mongoose),
     SharedLink: createSharedLinkModel(mongoose),
+    TeamsArchiveConversation: createTeamsArchiveConversationModel(mongoose),
+    TeamsArchiveMessage: createTeamsArchiveMessageModel(mongoose),
+    TeamsArchiveSyncJob: createTeamsArchiveSyncJobModel(mongoose),
     ToolCall: createToolCallModel(mongoose),
     MemoryEntry: createMemoryModel(mongoose),
     AccessRole: createAccessRoleModel(mongoose),

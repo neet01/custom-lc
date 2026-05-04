@@ -249,7 +249,7 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
                       </Tabs.Content>
                     )}
                     <Tabs.Content value={SettingsTabValues.ACCOUNT} tabIndex={-1}>
-                      <Account />
+                      <Account onRequestClose={() => onOpenChange(false)} />
                     </Tabs.Content>
                   </div>
                 </Tabs.Root>

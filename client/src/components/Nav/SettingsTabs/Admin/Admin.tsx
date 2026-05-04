@@ -339,6 +339,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
 
   return (
     <div
+      data-tour="admin-reporting-root"
       className={cn(
         'flex min-h-0 flex-col gap-4 text-sm text-text-primary',
         workspaceMode ? 'h-full overflow-y-auto p-6' : 'p-1',
@@ -412,7 +413,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             />
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2" data-tour="admin-reporting-tabs">
             <TabButton
               active={activeTab === 'usage-users'}
               icon={BarChart3}

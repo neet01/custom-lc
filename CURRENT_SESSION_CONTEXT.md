@@ -336,6 +336,8 @@ Observed behavior during testing:
 
 For timezone-related Outlook changes, both the API and client need redeploying.
 
+For the new Outlook attachment work, both the API and client also need redeploying. The selected email/thread view now expects enriched attachment metadata from the backend and uses a same-origin download route for file retrieval.
+
 Recommended validation after deploy:
 
 1. Open Outlook workspace.
@@ -353,9 +355,26 @@ From repo root:
 ```bash
 npm run build:client
 node --check api/server/services/OutlookService.js
+node --check api/server/routes/outlook.js
+```
+
+Additional passing validation:
+
+```bash
+cd api && npx jest --config jest.config.js server/services/OutlookService.spec.js --runInBand
 ```
 
 These passed after the latest changes. The existing build warnings about large chunks and PWA glob patterns remain, but no new build errors were introduced.
+
+## Latest Outlook Attachment Update
+
+- Outlook inbox list now shows a paperclip indicator for messages with attachments.
+- Selected messages and thread messages now render non-inline attachments as downloadable cards in the Cortex UI.
+- Backend now fetches attachment metadata for the selected thread only, keeping the mailbox list lightweight.
+- New route added:
+  - `GET /api/outlook/messages/:messageId/attachments/:attachmentId/download`
+- Outlook audit logging now includes:
+  - `attachment_downloaded`
 
 ## Working Rule For Future Turns
 

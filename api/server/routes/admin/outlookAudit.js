@@ -17,6 +17,7 @@ const ACTIONS = new Set([
   'calendar_event_updated',
   'calendar_event_deleted',
   'message_viewed',
+  'attachment_downloaded',
   'message_deleted',
   'message_analyzed',
   'draft_created',

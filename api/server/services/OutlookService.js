@@ -205,11 +205,59 @@ async function graphRequest(user, pathname, options = {}) {
   return response.json();
 }
 
+async function graphBinaryRequest(user, pathname, options = {}) {
+  const token = await getDelegatedGraphToken(user, options.scopes);
+  const url = buildGraphUrl(pathname, options.query);
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: options.accept || '*/*',
+    ...options.headers,
+  };
+
+  const response = await fetch(url, {
+    method: options.method || 'GET',
+    headers,
+  });
+
+  if (!response.ok) {
+    const graphMessage = await parseGraphError(response);
+    if (!options.suppressErrorLog) {
+      logger.warn('[OutlookService] Microsoft Graph binary request failed', {
+        status: response.status,
+        path: pathname,
+        graphMessage,
+      });
+    }
+    throw new OutlookServiceError('Microsoft Graph request failed', response.status, graphMessage);
+  }
+
+  return {
+    body: Buffer.from(await response.arrayBuffer()),
+    contentType: response.headers.get('content-type') || 'application/octet-stream',
+    contentLength: response.headers.get('content-length'),
+  };
+}
+
 function normalizeEmailAddress(recipient) {
   const address = recipient?.emailAddress;
   return {
     name: address?.name || '',
     address: address?.address || '',
+  };
+}
+
+function normalizeAttachment(attachment) {
+  return {
+    id: attachment?.id,
+    name: attachment?.name || 'Attachment',
+    contentType: attachment?.contentType || undefined,
+    size: Number.isFinite(Number(attachment?.size)) ? Number(attachment.size) : undefined,
+    isInline: Boolean(attachment?.isInline),
+    lastModifiedDateTime: attachment?.lastModifiedDateTime,
+    contentId: attachment?.contentId || undefined,
+    type: attachment?.['@odata.type']
+      ? String(attachment['@odata.type']).replace('#microsoft.graph.', '')
+      : undefined,
   };
 }
 
@@ -259,6 +307,9 @@ function normalizeMessage(message, includeBody = false) {
     isRead: Boolean(message.isRead),
     isDraft: Boolean(message.isDraft),
     hasAttachments: Boolean(message.hasAttachments),
+    attachments: Array.isArray(message.attachments)
+      ? message.attachments.map(normalizeAttachment)
+      : undefined,
     webLink: message.webLink,
     bodyContentType,
     bodyHtml: includeBody && isHtmlBody ? bodyContent : undefined,
@@ -461,6 +512,69 @@ function buildMessageListQuery({ top, searchTerm }) {
     query.$orderby = 'receivedDateTime desc';
   }
   return query;
+}
+
+async function getMessageAttachments(user, messageId) {
+  if (!messageId) {
+    return [];
+  }
+
+  const payload = await graphRequest(
+    user,
+    `/me/messages/${encodeURIComponent(messageId)}/attachments`,
+    {
+      query: {
+        $top: 50,
+        $select: 'id,name,contentType,size,isInline,lastModifiedDateTime,contentId',
+      },
+    },
+  );
+
+  return Array.isArray(payload?.value) ? payload.value.map(normalizeAttachment) : [];
+}
+
+async function attachMessageAttachments(user, messages = []) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return messages;
+  }
+
+  const uniqueMessageIds = [
+    ...new Set(
+      messages
+        .filter((message) => message?.hasAttachments && message?.id)
+        .map((message) => String(message.id)),
+    ),
+  ];
+
+  if (uniqueMessageIds.length === 0) {
+    return messages;
+  }
+
+  const attachmentEntries = await Promise.all(
+    uniqueMessageIds.map(async (messageId) => {
+      try {
+        const attachments = await getMessageAttachments(user, messageId);
+        return [messageId, attachments];
+      } catch (error) {
+        logger.warn('[OutlookService] Failed to load Outlook message attachments', {
+          status: error?.status,
+          messageId,
+          error: error?.message,
+        });
+        return [messageId, []];
+      }
+    }),
+  );
+
+  const attachmentMap = new Map(attachmentEntries);
+  return messages.map((message) =>
+    message?.hasAttachments
+      ? {
+          ...message,
+          attachments: attachmentMap.get(String(message.id)) || [],
+        }
+      : message,
+  );
 }
 
 async function listMessages(
@@ -695,7 +809,8 @@ async function getMessage(user, messageId, { includeThread = true } = {}) {
   const message = normalizeMessage(payload, true);
 
   if (!includeThread || !message.conversationId) {
-    return message;
+    const [enrichedMessage] = await attachMessageAttachments(user, [message]);
+    return enrichedMessage;
   }
 
   try {
@@ -703,12 +818,18 @@ async function getMessage(user, messageId, { includeThread = true } = {}) {
       getConversationMessages(user, message.conversationId),
       getConversationDraftReplies(user, message.conversationId),
     ]);
+    const [enrichedThread, enrichedDraftReplies] = await Promise.all([
+      attachMessageAttachments(user, thread),
+      attachMessageAttachments(user, draftReplies),
+    ]);
+    const selectedFromThread =
+      enrichedThread.find((threadMessage) => threadMessage.id === message.id) || message;
     return {
-      ...message,
-      thread,
-      threadMessageCount: thread.length,
-      draftReplies,
-      draftReplyCount: draftReplies.length,
+      ...selectedFromThread,
+      thread: enrichedThread,
+      threadMessageCount: enrichedThread.length,
+      draftReplies: enrichedDraftReplies,
+      draftReplyCount: enrichedDraftReplies.length,
     };
   } catch (error) {
     logger.warn('[OutlookService] Conversation thread unavailable for selected message', {
@@ -716,14 +837,47 @@ async function getMessage(user, messageId, { includeThread = true } = {}) {
       message: error?.message,
       conversationId: message.conversationId,
     });
+    const [enrichedMessage] = await attachMessageAttachments(user, [message]);
     return {
-      ...message,
-      thread: [message],
+      ...enrichedMessage,
+      thread: [enrichedMessage],
       threadMessageCount: 1,
       draftReplies: [],
       draftReplyCount: 0,
     };
   }
+}
+
+async function downloadMessageAttachment(user, messageId, attachmentId) {
+  if (!messageId) {
+    throw new OutlookServiceError('Message id is required', 400);
+  }
+  if (!attachmentId) {
+    throw new OutlookServiceError('Attachment id is required', 400);
+  }
+
+  const [metadata, payload] = await Promise.all([
+    graphRequest(
+      user,
+      `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      {
+        query: {
+          $select: 'id,name,contentType,size,isInline,lastModifiedDateTime,contentId',
+        },
+      },
+    ),
+    graphBinaryRequest(
+      user,
+      `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/$value`,
+    ),
+  ]);
+
+  return {
+    attachment: normalizeAttachment(metadata),
+    contentType: metadata?.contentType || payload.contentType || 'application/octet-stream',
+    contentLength: payload.contentLength,
+    body: payload.body,
+  };
 }
 
 async function updateMessageReadState(user, messageId, isRead) {
@@ -2751,6 +2905,7 @@ module.exports = {
   deleteCalendarEvent,
   getConversationMessages,
   getMessage,
+  downloadMessageAttachment,
   updateMessageReadState,
   deleteMessage,
   analyzeMessage,

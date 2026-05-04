@@ -284,7 +284,7 @@ describe('OutlookService', () => {
       { name: 'Finance', address: 'finance@example.mil' },
     ]);
     expect(result.body).toBe('Latest thread note.');
-    expect(result.bodyHtml).toContain('vendor.test/logo.png');
+    expect(result.bodyHtml).toContain('<strong>Latest</strong> thread note.');
     expect(result.thread[0].body).toBe('Original thread note.');
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
@@ -319,6 +319,157 @@ describe('OutlookService', () => {
 
     const requestedUrl = global.fetch.mock.calls[0][0];
     expect(requestedUrl.searchParams.get('$top')).toBe('100');
+  });
+
+  it('loads non-inline attachment metadata for selected thread messages', async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'latest-message',
+          conversationId: 'thread-1',
+          subject: 'Budget follow-up',
+          from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+          receivedDateTime: '2026-04-21T13:00:00Z',
+          hasAttachments: true,
+          body: {
+            contentType: 'html',
+            content: '<div>See attached.</div>',
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'latest-message',
+              conversationId: 'thread-1',
+              subject: 'Budget follow-up',
+              from: { emailAddress: { name: 'Finance', address: 'finance@example.mil' } },
+              receivedDateTime: '2026-04-21T13:00:00Z',
+              hasAttachments: true,
+              body: {
+                contentType: 'html',
+                content: '<div>See attached.</div>',
+              },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ value: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              id: 'attachment-1',
+              name: 'Budget.xlsx',
+              contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              size: 20480,
+              isInline: false,
+              '@odata.type': '#microsoft.graph.fileAttachment',
+            },
+            {
+              id: 'attachment-2',
+              name: 'logo.png',
+              contentType: 'image/png',
+              size: 1024,
+              isInline: true,
+              '@odata.type': '#microsoft.graph.fileAttachment',
+            },
+          ],
+        }),
+      });
+
+    const result = await OutlookService.getMessage(user, 'latest-message');
+
+    expect(result.attachments).toEqual([
+      expect.objectContaining({
+        id: 'attachment-1',
+        name: 'Budget.xlsx',
+        isInline: false,
+        type: 'fileAttachment',
+      }),
+      expect.objectContaining({
+        id: 'attachment-2',
+        name: 'logo.png',
+        isInline: true,
+        type: 'fileAttachment',
+      }),
+    ]);
+    expect(result.thread[0].attachments).toHaveLength(2);
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        pathname: '/v1.0/me/messages/latest-message/attachments',
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('downloads attachment content from Microsoft Graph', async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'attachment-1',
+          name: 'Budget.xlsx',
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          size: 4096,
+          isInline: false,
+          '@odata.type': '#microsoft.graph.fileAttachment',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer,
+        headers: {
+          get: (key) =>
+            key === 'content-type'
+              ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+              : key === 'content-length'
+                ? '4'
+                : null,
+        },
+      });
+
+    const result = await OutlookService.downloadMessageAttachment(
+      user,
+      'latest-message',
+      'attachment-1',
+    );
+
+    expect(result.attachment).toMatchObject({
+      id: 'attachment-1',
+      name: 'Budget.xlsx',
+      type: 'fileAttachment',
+    });
+    expect(result.contentType).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    expect(Buffer.isBuffer(result.body)).toBe(true);
+    expect([...result.body]).toEqual([1, 2, 3, 4]);
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        pathname: '/v1.0/me/messages/latest-message/attachments/attachment-1/$value',
+      }),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer graph-token',
+        }),
+      }),
+    );
   });
 
   it('deletes a message through Microsoft Graph', async () => {
@@ -446,18 +597,18 @@ describe('OutlookService', () => {
         method: 'POST',
         body: expect.stringContaining('finance@example.mil'),
         headers: expect.objectContaining({
-          Prefer: 'outlook.timezone="Pacific Standard Time"',
+          Prefer: 'outlook.timezone="America/Los_Angeles"',
         }),
       }),
     );
     const requestBody = JSON.parse(global.fetch.mock.calls[5][1].body);
     expect(requestBody.timeConstraint.timeslots[0].start).toMatchObject({
       dateTime: expect.stringContaining('T08:30:00'),
-      timeZone: 'Pacific Standard Time',
+      timeZone: 'America/Los_Angeles',
     });
     expect(requestBody.timeConstraint.timeslots[0].end).toMatchObject({
       dateTime: expect.stringContaining('T16:30:00'),
-      timeZone: 'Pacific Standard Time',
+      timeZone: 'America/Los_Angeles',
     });
   });
 
@@ -1239,7 +1390,7 @@ describe('OutlookService', () => {
       jobTitle: 'Program Manager',
     });
     expect(context.manager).toMatchObject({ displayName: 'Director One' });
-    expect(context.mailboxSettings).toMatchObject({ timeZone: 'Pacific Standard Time' });
+    expect(context.mailboxSettings).toMatchObject({ timeZone: 'America/Los_Angeles' });
     expect(context.participants).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

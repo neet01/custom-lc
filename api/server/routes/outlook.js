@@ -300,6 +300,51 @@ router.get('/messages/:messageId', async (req, res) => {
   }
 });
 
+router.get('/messages/:messageId/attachments/:attachmentId/download', async (req, res) => {
+  try {
+    const result = await OutlookService.downloadMessageAttachment(
+      req.user,
+      req.params.messageId,
+      req.params.attachmentId,
+    );
+    const filename = String(result.attachment?.name || 'attachment')
+      .replace(/[\r\n"]/g, ' ')
+      .trim();
+
+    await recordAudit(req, {
+      action: 'attachment_downloaded',
+      status: 'success',
+      graphMessageId: req.params.messageId,
+      metadata: {
+        attachmentId: req.params.attachmentId,
+        attachmentName: result.attachment?.name,
+        attachmentType: result.attachment?.type,
+        contentType: result.contentType,
+        size: result.attachment?.size,
+      },
+    });
+
+    res.setHeader('Content-Type', result.contentType || 'application/octet-stream');
+    if (result.contentLength) {
+      res.setHeader('Content-Length', String(result.contentLength));
+    } else if (result.body) {
+      res.setHeader('Content-Length', String(result.body.length));
+    }
+    res.setHeader('Content-Disposition', `attachment; filename="${filename || 'attachment'}"`);
+    res.send(result.body);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'attachment_downloaded',
+      graphMessageId: req.params.messageId,
+      ...getErrorAudit(error),
+      metadata: {
+        attachmentId: req.params.attachmentId,
+      },
+    });
+    handleOutlookError(res, error);
+  }
+});
+
 router.patch('/messages/:messageId/read', async (req, res) => {
   if (typeof req.body?.isRead !== 'boolean') {
     return res.status(400).json({ message: 'isRead must be a boolean' });

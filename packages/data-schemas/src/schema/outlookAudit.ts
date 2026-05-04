@@ -7,6 +7,7 @@ export type OutlookAuditAction =
   | 'calendar_event_updated'
   | 'calendar_event_deleted'
   | 'message_viewed'
+  | 'attachment_downloaded'
   | 'message_deleted'
   | 'message_analyzed'
   | 'draft_created'
@@ -47,6 +48,7 @@ const outlookAuditSchema = new Schema<IOutlookAudit>(
         'calendar_event_updated',
         'calendar_event_deleted',
         'message_viewed',
+        'attachment_downloaded',
         'message_deleted',
         'message_analyzed',
         'draft_created',

@@ -17,10 +17,12 @@ import {
   CalendarPlus,
   CheckCircle2,
   ChevronDown,
+  Download,
   Loader2,
   Mail,
   MessageSquareText,
   Minimize2,
+  Paperclip,
   RefreshCw,
   Search,
   Sparkles,
@@ -30,6 +32,7 @@ import {
 import type {
   OutlookAnalyzeResponse,
   OutlookAnalyzeSelectionResponse,
+  OutlookAttachment,
   OutlookBrief,
   OutlookCalendarEvent,
   OutlookCalendarEventMutationRequest,
@@ -41,6 +44,7 @@ import type {
   OutlookMeetingSlot,
   OutlookMessage,
   OutlookMessagesResponse,
+  apiBaseUrl,
 } from 'librechat-data-provider';
 import { QueryKeys } from 'librechat-data-provider';
 import {
@@ -414,6 +418,86 @@ function formatRecipients(recipients?: OutlookMessage['toRecipients']) {
     .map((recipient) => recipient?.name || recipient?.address)
     .filter(Boolean)
     .join(', ');
+}
+
+function formatAttachmentSize(size?: number) {
+  if (!Number.isFinite(size) || !size || size <= 0) {
+    return '';
+  }
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  }
+  if (size >= 1024) {
+    return `${Math.max(1, Math.round(size / 1024))} KB`;
+  }
+  return `${size} B`;
+}
+
+function getVisibleAttachments(message?: OutlookMessage): OutlookAttachment[] {
+  if (!Array.isArray(message?.attachments) || message.attachments.length === 0) {
+    return [];
+  }
+  return message.attachments.filter((attachment) => !attachment?.isInline);
+}
+
+function getOutlookAttachmentDownloadUrl(messageId: string, attachmentId: string) {
+  return `${apiBaseUrl()}/api/outlook/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/download`;
+}
+
+function AttachmentList({
+  messageId,
+  attachments,
+  compact = false,
+}: {
+  messageId: string;
+  attachments: OutlookAttachment[];
+  compact?: boolean;
+}) {
+  if (!attachments.length) {
+    return null;
+  }
+
+  return (
+    <section className={cn('space-y-2', compact ? 'mt-2' : 'mt-3')}>
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+        <Paperclip className="h-3.5 w-3.5" aria-hidden="true" />
+        Attachments
+      </div>
+      <div className="grid gap-2">
+        {attachments.map((attachment) => {
+          const contentLabel =
+            attachment.contentType || attachment.type || attachment.name.split('.').pop() || 'file';
+          const sizeLabel = formatAttachmentSize(attachment.size);
+          return (
+            <div
+              key={attachment.id}
+              className={cn(
+                'flex items-center justify-between gap-3 rounded-xl border border-border-light bg-surface-primary px-3 py-2',
+                compact && 'px-2.5 py-2',
+              )}
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-text-primary">
+                  {attachment.name || 'Attachment'}
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-text-secondary">
+                  <span className="truncate">{contentLabel}</span>
+                  {sizeLabel ? <span>{sizeLabel}</span> : null}
+                </div>
+              </div>
+              <a
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold transition-colors hover:bg-surface-hover"
+                href={getOutlookAttachmentDownloadUrl(messageId, attachment.id)}
+              >
+                <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                Download
+              </a>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 function ViewTabs({
@@ -3174,6 +3258,15 @@ export default function OutlookPanel() {
                         >
                           {message.subject}
                         </div>
+                        {message.hasAttachments && (
+                          <span
+                            className="inline-flex shrink-0 items-center text-text-secondary"
+                            title="Has attachments"
+                            aria-label="Has attachments"
+                          >
+                            <Paperclip className="h-3.5 w-3.5" aria-hidden="true" />
+                          </span>
+                        )}
                         {threadCount > 1 && (
                           <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
                             <Mail className="h-3 w-3" aria-hidden="true" />
@@ -3271,6 +3364,10 @@ export default function OutlookPanel() {
                       isSuccess={actionSuccess.delete}
                     />
                   </div>
+                  <AttachmentList
+                    messageId={selectedMessage.id}
+                    attachments={getVisibleAttachments(selectedMessage)}
+                  />
                   {statusMessage && (
                     <div className="mt-3 rounded-xl border border-green-500/20 bg-green-500/5 px-3 py-2 text-xs text-green-700 dark:text-green-300">
                       {statusMessage}
@@ -3310,6 +3407,11 @@ export default function OutlookPanel() {
                             </span>
                           )}
                         </div>
+                        <AttachmentList
+                          messageId={threadMessage.id}
+                          attachments={getVisibleAttachments(threadMessage)}
+                          compact
+                        />
                         <EmailBody message={threadMessage} />
                       </motion.article>
                     ))}

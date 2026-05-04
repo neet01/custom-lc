@@ -3,6 +3,17 @@ export type OutlookEmailAddress = {
   address: string;
 };
 
+export type OutlookAttachment = {
+  id: string;
+  name: string;
+  contentType?: string;
+  size?: number;
+  isInline?: boolean;
+  lastModifiedDateTime?: string;
+  contentId?: string;
+  type?: string;
+};
+
 export type OutlookMessage = {
   id: string;
   conversationId?: string;
@@ -23,6 +34,7 @@ export type OutlookMessage = {
   isRead: boolean;
   isDraft?: boolean;
   hasAttachments: boolean;
+  attachments?: OutlookAttachment[];
   webLink?: string;
   thread?: OutlookMessage[];
   threadMessageCount?: number;

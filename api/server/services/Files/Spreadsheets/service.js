@@ -1,5 +1,6 @@
 const { Readable } = require('stream');
 const { v4: uuidv4 } = require('uuid');
+const { logger } = require('@librechat/data-schemas');
 const {
   EModelEndpoint,
   FileSources,
@@ -16,9 +17,11 @@ const {
 } = require('~/server/services/Files/Spreadsheets/transform');
 const {
   SpreadsheetWorkerError,
+  isSpreadsheetWorkerEnabled,
   inspectSpreadsheetWithWorker,
   shouldFallbackToJs,
   shouldUseSpreadsheetWorker,
+  supportsPythonSpreadsheetWorker,
   transformSpreadsheetWithWorker,
 } = require('~/server/services/Files/Spreadsheets/workerClient');
 
@@ -145,8 +148,22 @@ async function inspectSpreadsheetFile({
   maxPreviewRows,
 }) {
   const sourceBuffer = await getSpreadsheetFileBuffer(req, res, sourceFile);
-  if (shouldUseSpreadsheetWorker(sourceFile.filename)) {
+  const workerSelected = shouldUseSpreadsheetWorker(sourceFile.filename);
+  logger.info('[SpreadsheetService] Inspect routing decision', {
+    fileId: sourceFile?.file_id,
+    filename: sourceFile?.filename,
+    workerEnabled: isSpreadsheetWorkerEnabled(),
+    fileSupportedByWorker: supportsPythonSpreadsheetWorker(sourceFile?.filename),
+    workerSelected,
+    maxPreviewRows,
+  });
+
+  if (workerSelected) {
     try {
+      logger.info('[SpreadsheetService] Dispatching spreadsheet inspection to Python worker', {
+        fileId: sourceFile?.file_id,
+        filename: sourceFile?.filename,
+      });
       return await inspectSpreadsheetWithWorker({
         buffer: sourceBuffer,
         sourceFilename: sourceFile.filename,
@@ -154,11 +171,24 @@ async function inspectSpreadsheetFile({
       });
     } catch (error) {
       const canFallback = shouldFallbackToJs() && error instanceof SpreadsheetWorkerError;
+      logger.warn('[SpreadsheetService] Python worker inspection failed', {
+        fileId: sourceFile?.file_id,
+        filename: sourceFile?.filename,
+        canFallback,
+        code: error?.code,
+        status: error?.status,
+        error: error?.message,
+      });
       if (!canFallback) {
         throw error;
       }
     }
   }
+
+  logger.info('[SpreadsheetService] Using JavaScript inspection path', {
+    fileId: sourceFile?.file_id,
+    filename: sourceFile?.filename,
+  });
 
   return inspectSpreadsheetBuffer({
     buffer: sourceBuffer,
@@ -183,9 +213,27 @@ async function transformSpreadsheetFile({
 }) {
   const sourceBuffer = await getSpreadsheetFileBuffer(req, res, sourceFile);
   let generated;
+  const workerSelected = shouldUseSpreadsheetWorker(sourceFile.filename);
 
-  if (shouldUseSpreadsheetWorker(sourceFile.filename)) {
+  logger.info('[SpreadsheetService] Transform routing decision', {
+    fileId: sourceFile?.file_id,
+    filename: sourceFile?.filename,
+    workerEnabled: isSpreadsheetWorkerEnabled(),
+    fileSupportedByWorker: supportsPythonSpreadsheetWorker(sourceFile?.filename),
+    workerSelected,
+    outputFormat,
+    operationCount: Array.isArray(operations) ? operations.length : 0,
+    operationTypes: Array.isArray(operations)
+      ? operations.map((operation) => operation?.type).filter(Boolean)
+      : [],
+  });
+
+  if (workerSelected) {
     try {
+      logger.info('[SpreadsheetService] Dispatching spreadsheet transform to Python worker', {
+        fileId: sourceFile?.file_id,
+        filename: sourceFile?.filename,
+      });
       generated = await transformSpreadsheetWithWorker({
         buffer: sourceBuffer,
         sourceFilename: sourceFile.filename,
@@ -199,6 +247,14 @@ async function transformSpreadsheetFile({
       });
     } catch (error) {
       const canFallback = shouldFallbackToJs() && error instanceof SpreadsheetWorkerError;
+      logger.warn('[SpreadsheetService] Python worker transform failed', {
+        fileId: sourceFile?.file_id,
+        filename: sourceFile?.filename,
+        canFallback,
+        code: error?.code,
+        status: error?.status,
+        error: error?.message,
+      });
       if (!canFallback) {
         throw error;
       }
@@ -206,6 +262,11 @@ async function transformSpreadsheetFile({
   }
 
   if (!generated) {
+    logger.info('[SpreadsheetService] Using JavaScript transform path', {
+      fileId: sourceFile?.file_id,
+      filename: sourceFile?.filename,
+      outputFormat,
+    });
     generated = await transformSpreadsheetBuffer({
       buffer: sourceBuffer,
       sourceFilename: sourceFile.filename,

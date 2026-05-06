@@ -197,6 +197,23 @@ Current scope:
   - `merge_sheets`
   - `split_sheet`
 
+Latest observability update:
+
+- Added API-side spreadsheet routing logs in:
+  - [api/server/services/Files/Spreadsheets/service.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Files/Spreadsheets/service.js)
+- Added Python worker request/success/failure logs in:
+  - [services/spreadsheet-worker/app.py](/Users/praneetkotah/Desktop/Development/LibreChat/services/spreadsheet-worker/app.py)
+- Enabled explicit Uvicorn access logs in:
+  - [services/spreadsheet-worker/Dockerfile](/Users/praneetkotah/Desktop/Development/LibreChat/services/spreadsheet-worker/Dockerfile)
+
+Purpose:
+
+- Make it obvious whether a spreadsheet job was:
+  - selected for Python worker routing
+  - sent to the worker successfully
+  - failed and fell back to JS
+  - never selected because env or file extension gating prevented it
+
 ### Outlook calendar timezone work
 
 There was a timezone bug where events were rendering in the wrong timezone.
@@ -356,6 +373,8 @@ From repo root:
 npm run build:client
 node --check api/server/services/OutlookService.js
 node --check api/server/routes/outlook.js
+node --check api/server/services/Files/Spreadsheets/service.js
+python3 -m py_compile services/spreadsheet-worker/app.py
 ```
 
 Additional passing validation:
@@ -365,6 +384,11 @@ cd api && npx jest --config jest.config.js server/services/OutlookService.spec.j
 ```
 
 These passed after the latest changes. The existing build warnings about large chunks and PWA glob patterns remain, but no new build errors were introduced.
+
+Note:
+
+- `cd api && npx jest --config jest.config.js server/services/Files/Spreadsheets/service.spec.js --runInBand`
+  is currently blocked by an unrelated repo test bootstrap issue involving `packages/data-schemas` capability exports, not by the spreadsheet routing changes themselves.
 
 ## Latest Outlook Attachment Update
 

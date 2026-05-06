@@ -4,8 +4,10 @@ import ast
 import base64
 import csv
 import io
+import logging
 import math
 import re
+import time
 from copy import copy
 from datetime import datetime
 from statistics import median
@@ -34,6 +36,9 @@ SUPPORTED_OPERATION_TYPES = {
 DEFAULT_REDACTION_TEXT = "[REDACTED]"
 HEADER_PROBE_ROWS = 10
 AGGREGATION_FUNCTIONS = {"sum", "average", "min", "max", "count", "counta"}
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logger = logging.getLogger("spreadsheet-worker")
 
 
 class UnsupportedOperationError(Exception):
@@ -1683,12 +1688,28 @@ def health():
 
 @app.post("/inspect-workbook")
 def inspect_workbook_endpoint(payload: WorkerRequest):
+    started = time.perf_counter()
+    logger.info(
+        "inspect request source=%s maxPreviewRows=%s sheetNames=%s",
+        payload.sourceFilename,
+        payload.maxPreviewRows,
+        len(payload.sheetNames or []),
+    )
     try:
         workbook_bytes = decode_workbook_buffer(payload)
-        return inspect_workbook(workbook_bytes, payload.sourceFilename, payload.maxPreviewRows)
+        result = inspect_workbook(workbook_bytes, payload.sourceFilename, payload.maxPreviewRows)
+        logger.info(
+            "inspect success source=%s bytes=%s durationMs=%s",
+            payload.sourceFilename,
+            len(workbook_bytes),
+            round((time.perf_counter() - started) * 1000, 1),
+        )
+        return result
     except HTTPException:
+        logger.exception("inspect http-error source=%s", payload.sourceFilename)
         raise
     except Exception as exc:
+        logger.exception("inspect failure source=%s", payload.sourceFilename)
         raise HTTPException(
             status_code=400,
             detail={
@@ -1700,9 +1721,30 @@ def inspect_workbook_endpoint(payload: WorkerRequest):
 
 @app.post("/apply-plan")
 def apply_plan_endpoint(payload: WorkerRequest):
+    started = time.perf_counter()
+    operation_types = [operation.get("type") for operation in payload.operations if isinstance(operation, dict)]
+    logger.info(
+        "transform request source=%s outputFormat=%s operations=%s",
+        payload.sourceFilename,
+        payload.outputFormat or "auto",
+        operation_types,
+    )
     try:
-        return transform_workbook(payload)
+        result = transform_workbook(payload)
+        logger.info(
+            "transform success source=%s output=%s durationMs=%s",
+            payload.sourceFilename,
+            result.get("filename"),
+            round((time.perf_counter() - started) * 1000, 1),
+        )
+        return result
     except UnsupportedOperationError as exc:
+        logger.warning(
+            "transform unsupported source=%s operations=%s error=%s",
+            payload.sourceFilename,
+            operation_types,
+            str(exc),
+        )
         raise HTTPException(
             status_code=422,
             detail={
@@ -1711,8 +1753,10 @@ def apply_plan_endpoint(payload: WorkerRequest):
             },
         ) from exc
     except HTTPException:
+        logger.exception("transform http-error source=%s", payload.sourceFilename)
         raise
     except Exception as exc:
+        logger.exception("transform failure source=%s", payload.sourceFilename)
         raise HTTPException(
             status_code=400,
             detail={

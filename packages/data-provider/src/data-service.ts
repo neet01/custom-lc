@@ -224,6 +224,17 @@ export function getAdminUsageSummary(
   return request.get(endpoints.adminUsageSummary(params));
 }
 
+export function getAdminUsageFinanceReport(
+  params: q.AdminUsageSummaryParams = {},
+): Promise<AxiosResponse> {
+  return request.getResponse(endpoints.adminUsageFinanceReport(params), {
+    responseType: 'blob',
+    headers: {
+      Accept: 'text/csv',
+    },
+  });
+}
+
 export function createIssueReport(
   payload: q.IssueReportCreateRequest,
 ): Promise<q.IssueReportCreateResponse> {

@@ -244,6 +244,9 @@ export const adminUsage = (params: q.AdminUsageListParams = {}) =>
 export const adminUsageSummary = (params: q.AdminUsageSummaryParams = {}) =>
   `${BASE_URL}/api/admin/usage/summary${buildQuery(params as Record<string, unknown>)}`;
 
+export const adminUsageFinanceReport = (params: q.AdminUsageSummaryParams = {}) =>
+  `${BASE_URL}/api/admin/usage/finance-report.csv${buildQuery(params as Record<string, unknown>)}`;
+
 export const issues = () => `${BASE_URL}/api/issues`;
 
 export const adminIssues = (params: q.AdminIssuesListParams = {}) =>

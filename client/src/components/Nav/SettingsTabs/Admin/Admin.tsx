@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Spinner, useToastContext } from '@librechat/client';
 import { BarChart3, Download, Mail, ShieldAlert, Users } from 'lucide-react';
-import { SystemRoles } from 'librechat-data-provider';
+import { dataService, SystemRoles } from 'librechat-data-provider';
 import type {
   AdminIssueReportItem,
   AdminOutlookAuditItem,
@@ -42,6 +42,23 @@ function formatAuditAction(action: string) {
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+function getDownloadFilename(
+  headerValue: string | undefined,
+  fallback: string,
+) {
+  if (!headerValue) {
+    return fallback;
+  }
+
+  const utf8Match = headerValue.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const plainMatch = headerValue.match(/filename\s*=\s*"?(?<filename>[^";]+)"?/i);
+  return plainMatch?.groups?.filename ?? fallback;
 }
 
 function MetricCard({ label, value, detail }: { label: string; value: string; detail?: string }) {
@@ -293,11 +310,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const openIssues = issuesQuery.data?.issues ?? [];
   const outlookAudits = outlookAuditQuery.data?.audits ?? [];
   const directoryUsers = usersQuery.data?.users ?? [];
-  const financeReportUrl = useMemo(() => {
-    const params = new URLSearchParams();
-    params.set('days', String(days));
-    return `/api/admin/usage/finance-report.csv?${params.toString()}`;
-  }, [days]);
+  const [isExportingFinanceReport, setIsExportingFinanceReport] = useState(false);
 
   const handleBalanceSave = async (row: AdminUserListItem) => {
     const rawValue = balanceDrafts[row.id] ?? String(row.tokenCredits ?? 0);
@@ -339,6 +352,35 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
         status: 'error',
         message,
       });
+    }
+  };
+
+  const handleFinanceExport = async () => {
+    setIsExportingFinanceReport(true);
+
+    try {
+      const response = await dataService.getAdminUsageFinanceReport({ days });
+      const blob = response.data;
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const fallbackName = `cortex-finance-usage-${days}d.csv`;
+      link.href = downloadUrl;
+      link.download = getDownloadFilename(response.headers['content-disposition'], fallbackName);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Failed to export finance report.';
+      showToast({
+        status: 'error',
+        message,
+      });
+    } finally {
+      setIsExportingFinanceReport(false);
     }
   };
 
@@ -462,13 +504,15 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                   CSV export is intended for finance review. Estimated cost is based on model pricing
                   in Cortex and should be reconciled to AWS billing for invoice truth.
                 </p>
-                <a
-                  href={financeReportUrl}
+                <button
+                  type="button"
+                  onClick={() => void handleFinanceExport()}
+                  disabled={isExportingFinanceReport}
                   className="inline-flex items-center gap-2 rounded-xl border border-border-medium bg-surface-secondary px-3 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-hover"
                 >
                   <Download className="h-4 w-4" />
-                  Export finance CSV
-                </a>
+                  {isExportingFinanceReport ? 'Exporting…' : 'Export finance CSV'}
+                </button>
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 <table className="min-w-full divide-y divide-border-medium text-left">

@@ -15,9 +15,11 @@ describe('createAdminUsageHandlers', () => {
   function createReqRes(query: Record<string, string> = {}) {
     const req = { query } as unknown as ServerRequest;
     const json = jest.fn();
-    const status = jest.fn().mockReturnValue({ json });
-    const res = { status, json } as unknown as Response;
-    return { req, res, status, json };
+    const send = jest.fn();
+    const setHeader = jest.fn();
+    const status = jest.fn().mockReturnValue({ json, send });
+    const res = { status, json, send, setHeader } as unknown as Response;
+    return { req, res, status, json, send, setHeader };
   }
 
   it('returns usage records when tracking is enabled', async () => {
@@ -39,6 +41,8 @@ describe('createAdminUsageHandlers', () => {
       summarizeUsageByUser: jest.fn(),
       summarizeUsageOverview: jest.fn(),
       findUsers: jest.fn(),
+      getMultiplier: jest.fn().mockReturnValue(1),
+      getCacheMultiplier: jest.fn().mockReturnValue(null),
     });
     const { req, res, status, json } = createReqRes({ user_id: '507f1f77bcf86cd799439011' });
 
@@ -69,6 +73,8 @@ describe('createAdminUsageHandlers', () => {
       summarizeUsageByUser: jest.fn(),
       summarizeUsageOverview: jest.fn(),
       findUsers: jest.fn(),
+      getMultiplier: jest.fn().mockReturnValue(1),
+      getCacheMultiplier: jest.fn().mockReturnValue(null),
     });
     const { req, res, status, json } = createReqRes();
 
@@ -86,6 +92,8 @@ describe('createAdminUsageHandlers', () => {
       summarizeUsageByUser: jest.fn(),
       summarizeUsageOverview: jest.fn(),
       findUsers: jest.fn(),
+      getMultiplier: jest.fn().mockReturnValue(1),
+      getCacheMultiplier: jest.fn().mockReturnValue(null),
     });
     const { req, res, status, json } = createReqRes({ user_id: 'bad-id' });
 
@@ -139,6 +147,8 @@ describe('createAdminUsageHandlers', () => {
           provider: 'local',
         },
       ]),
+      getMultiplier: jest.fn().mockReturnValue(1),
+      getCacheMultiplier: jest.fn().mockReturnValue(null),
     });
     const { req, res, status, json } = createReqRes({ days: '7' });
 
@@ -173,5 +183,88 @@ describe('createAdminUsageHandlers', () => {
       offset: 0,
       days: 7,
     });
+  });
+
+  it('exports a finance CSV with estimated cost columns', async () => {
+    process.env.USAGE_TRACKING_ENABLED = 'true';
+    const handlers = createAdminUsageHandlers({
+      findUsageRecords: jest.fn().mockResolvedValue([
+        {
+          _id: { toString: () => 'usage-1' },
+          user: { toString: () => '507f1f77bcf86cd799439011' },
+          conversationId: 'convo-123',
+          model: 'claude-sonnet-4-5',
+          endpoint: 'bedrock',
+          inputTokens: 1000,
+          outputTokens: 200,
+          totalTokens: 1200,
+          cacheCreationTokens: 100,
+          cacheReadTokens: 50,
+          createdAt: new Date('2026-04-13T12:00:00.000Z'),
+        },
+      ]),
+      countUsageRecords: jest.fn().mockResolvedValue(1),
+      summarizeUsageByUser: jest.fn().mockResolvedValue([
+        {
+          userId: '507f1f77bcf86cd799439011',
+          requestCount: 1,
+          inputTokens: 1000,
+          outputTokens: 200,
+          totalTokens: 1200,
+          cacheCreationTokens: 100,
+          cacheReadTokens: 50,
+          avgLatencyMs: 100,
+          firstSeenAt: new Date('2026-04-13T12:00:00.000Z'),
+          lastSeenAt: new Date('2026-04-13T12:00:00.000Z'),
+        },
+      ]),
+      summarizeUsageOverview: jest.fn().mockResolvedValue({
+        requestCount: 1,
+        inputTokens: 1000,
+        outputTokens: 200,
+        totalTokens: 1200,
+        cacheCreationTokens: 100,
+        cacheReadTokens: 50,
+        avgLatencyMs: 100,
+        activeUsers: 1,
+        firstSeenAt: new Date('2026-04-13T12:00:00.000Z'),
+        lastSeenAt: new Date('2026-04-13T12:00:00.000Z'),
+      }),
+      findUsers: jest.fn().mockResolvedValue([
+        {
+          _id: { toString: () => '507f1f77bcf86cd799439011' },
+          name: 'Finance User',
+          username: 'finance',
+          email: 'finance@example.com',
+          avatar: '',
+          role: 'USER',
+          provider: 'openid',
+        },
+      ]),
+      getValueKey: jest.fn().mockReturnValue('claude-sonnet-4-5'),
+      getMultiplier: jest
+        .fn()
+        .mockImplementation(({ tokenType }) => (tokenType === 'completion' ? 15 : 3)),
+      getCacheMultiplier: jest
+        .fn()
+        .mockImplementation(({ cacheType }) => (cacheType === 'write' ? 3.75 : 0.3)),
+    });
+    const { req, res, status, send, setHeader } = createReqRes({ days: '30' });
+
+    await handlers.exportFinanceReport(req, res);
+
+    expect(status).toHaveBeenCalledWith(200);
+    expect(setHeader).toHaveBeenCalledWith('Content-Type', 'text/csv; charset=utf-8');
+    expect(setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      expect.stringContaining('cortex-finance-usage-30d-'),
+    );
+
+    const csv = (send as jest.Mock).mock.calls[0][0] as string;
+    expect(csv).toContain('estimated_total_cost_usd');
+    expect(csv).toContain('finance@example.com');
+    expect(csv).toContain('claude-sonnet-4-5');
+    expect(csv).toContain('0.006390');
+    expect(csv).toContain('TOTAL');
   });
 });

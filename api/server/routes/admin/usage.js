@@ -16,10 +16,14 @@ const handlers = createAdminUsageHandlers({
   summarizeUsageByUser: db.summarizeUsageByUser,
   summarizeUsageOverview: db.summarizeUsageOverview,
   findUsers: db.findUsers,
+  getValueKey: db.getValueKey,
+  getMultiplier: db.getMultiplier,
+  getCacheMultiplier: db.getCacheMultiplier,
 });
 
 router.use(requireJwtAuth, requireAdminAccess);
 
+router.get('/finance-report.csv', requireReadUsage, handlers.exportFinanceReport);
 router.get('/summary', requireReadUsage, handlers.getUsageSummary);
 router.get('/', requireReadUsage, handlers.listUsage);
 

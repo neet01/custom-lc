@@ -400,6 +400,32 @@ Note:
 - Outlook audit logging now includes:
   - `attachment_downloaded`
 
+## Latest Admin Finance Export Update
+
+- Admin reporting now exposes a finance CSV export from the `Usage by user` tab.
+- New backend route:
+  - `GET /api/admin/usage/finance-report.csv?days=30`
+- Export contents:
+  - per-user request and token totals
+  - cache token totals
+  - estimated input / output / cache write / cache read cost in USD
+  - estimated total cost in USD
+  - priced vs unpriced request counts
+  - model list seen for each user
+  - final `TOTAL` row
+- Pricing basis:
+  - repo model pricing table (`getMultiplier` / `getCacheMultiplier`)
+  - intended as an estimate for finance review, not invoice truth
+- UI note now explicitly tells admins to reconcile exported estimates against AWS billing / CUR data.
+
+Validation added for this work:
+
+```bash
+cd LibreChat && npx jest --config packages/api/jest.config.mjs packages/api/src/admin/usage.spec.ts --runInBand
+cd LibreChat && npm run build:client
+node --check LibreChat/api/server/routes/admin/usage.js
+```
+
 ## Working Rule For Future Turns
 
 Use this document as the primary reference for current project state. Treat chat history as secondary. If new work changes the Outlook/calendar/admin behavior materially, update this file again before ending the session.

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Spinner, useToastContext } from '@librechat/client';
-import { BarChart3, Mail, ShieldAlert, Users } from 'lucide-react';
+import { BarChart3, Download, Mail, ShieldAlert, Users } from 'lucide-react';
 import { SystemRoles } from 'librechat-data-provider';
 import type {
   AdminIssueReportItem,
@@ -293,6 +293,11 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const openIssues = issuesQuery.data?.issues ?? [];
   const outlookAudits = outlookAuditQuery.data?.audits ?? [];
   const directoryUsers = usersQuery.data?.users ?? [];
+  const financeReportUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set('days', String(days));
+    return `/api/admin/usage/finance-report.csv?${params.toString()}`;
+  }, [days]);
 
   const handleBalanceSave = async (row: AdminUserListItem) => {
     const rawValue = balanceDrafts[row.id] ?? String(row.tokenCredits ?? 0);
@@ -449,9 +454,22 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
           {activeTab === 'usage-users' ? (
             <TableShell
               title="Usage by user"
-              description="Token and request totals for users active in the selected reporting window."
+              description="Token and request totals for users active in the selected reporting window. Export includes estimated cost columns derived from the repo pricing table."
               className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs text-text-secondary">
+                  CSV export is intended for finance review. Estimated cost is based on model pricing
+                  in Cortex and should be reconciled to AWS billing for invoice truth.
+                </p>
+                <a
+                  href={financeReportUrl}
+                  className="inline-flex items-center gap-2 rounded-xl border border-border-medium bg-surface-secondary px-3 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-hover"
+                >
+                  <Download className="h-4 w-4" />
+                  Export finance CSV
+                </a>
+              </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 <table className="min-w-full divide-y divide-border-medium text-left">
                   <thead>

@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export type OutlookAuditAction =
+  | 'mail_folders_listed'
   | 'mailbox_listed'
   | 'calendar_viewed'
   | 'calendar_event_created'
@@ -42,6 +43,7 @@ const outlookAuditSchema = new Schema<IOutlookAudit>(
     action: {
       type: String,
       enum: [
+        'mail_folders_listed',
         'mailbox_listed',
         'calendar_viewed',
         'calendar_event_created',

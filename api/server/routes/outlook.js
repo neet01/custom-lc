@@ -134,12 +134,34 @@ router.get('/status', (req, res) => {
   res.json(OutlookService.getStatus(req.user));
 });
 
+router.get('/folders', async (req, res) => {
+  try {
+    const result = await OutlookService.listMailFolders(req.user);
+    await recordAudit(req, {
+      action: 'mail_folders_listed',
+      status: 'success',
+      metadata: {
+        folderCount: result.folders.length,
+      },
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'mail_folders_listed',
+      ...getErrorAudit(error),
+    });
+    handleOutlookError(res, error);
+  }
+});
+
 router.get('/messages', async (req, res) => {
   try {
     const result = await OutlookService.listMessages(req.user, {
       folder: req.query.folder,
+      folderId: req.query.folderId,
       inboxView: req.query.inboxView,
       limit: req.query.limit,
+      page: req.query.page,
       search: req.query.search,
     });
     await recordAudit(req, {
@@ -147,9 +169,11 @@ router.get('/messages', async (req, res) => {
       status: 'success',
       metadata: {
         folder: typeof req.query.folder === 'string' ? req.query.folder : 'inbox',
+        folderId: typeof req.query.folderId === 'string' ? req.query.folderId : '',
         inboxView: typeof req.query.inboxView === 'string' ? req.query.inboxView : 'focused',
         searched: typeof req.query.search === 'string' && req.query.search.trim().length > 0,
         limit: result.messages.length,
+        page: result.page,
       },
     });
     res.json(result);
@@ -159,6 +183,7 @@ router.get('/messages', async (req, res) => {
       ...getErrorAudit(error),
       metadata: {
         folder: typeof req.query.folder === 'string' ? req.query.folder : 'inbox',
+        folderId: typeof req.query.folderId === 'string' ? req.query.folderId : '',
         inboxView: typeof req.query.inboxView === 'string' ? req.query.inboxView : 'focused',
         searched: typeof req.query.search === 'string' && req.query.search.trim().length > 0,
       },
@@ -492,7 +517,7 @@ router.post('/messages/:messageId/drafts', async (req, res) => {
 router.post('/daily-brief', async (req, res) => {
   const startedAt = Date.now();
   try {
-    const result = await OutlookService.generateDailyBrief(req.user, { hours: 24 });
+    const result = await OutlookService.generateDailyBrief(req.user);
     await recordOutlookUsage(req, result, {
       messageId: result.messageIds?.[0] || 'daily-brief',
       latencyMs: Date.now() - startedAt,

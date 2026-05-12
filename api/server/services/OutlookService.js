@@ -450,6 +450,37 @@ function getFolderPath(folder = 'inbox') {
   return folderMap[normalized] || folderMap.inbox;
 }
 
+function getMailFolderPath(folderId) {
+  const normalizedFolderId = String(folderId || '').trim();
+  if (!normalizedFolderId) {
+    return null;
+  }
+
+  return `/me/mailFolders/${encodeURIComponent(normalizedFolderId)}/messages`;
+}
+
+function normalizeMailFolder(folder, parentPath = '') {
+  const displayName = String(folder?.displayName || '').trim() || 'Untitled folder';
+  const normalizedPath = parentPath ? `${parentPath} / ${displayName}` : displayName;
+
+  return {
+    id: folder?.id,
+    displayName,
+    parentFolderId: folder?.parentFolderId || undefined,
+    childFolderCount: Number.isFinite(Number(folder?.childFolderCount))
+      ? Number(folder.childFolderCount)
+      : 0,
+    totalItemCount: Number.isFinite(Number(folder?.totalItemCount))
+      ? Number(folder.totalItemCount)
+      : 0,
+    unreadItemCount: Number.isFinite(Number(folder?.unreadItemCount))
+      ? Number(folder.unreadItemCount)
+      : 0,
+    wellKnownName: folder?.wellKnownName || undefined,
+    path: normalizedPath,
+  };
+}
+
 function getMessageSelect(includeBody = false, includeRecipients = includeBody) {
   const fields = [
     'id',
@@ -501,17 +532,61 @@ function normalizeMessageSearch(value) {
     .slice(0, 120);
 }
 
-function buildMessageListQuery({ top, searchTerm }) {
+function buildMessageListQuery({ top, skip, searchTerm, folder, inboxView }) {
   const query = {
     $top: top,
+    $skip: skip,
     $select: getMessageSelect(false),
   };
   if (searchTerm) {
     query.$search = `"${searchTerm}"`;
   } else {
     query.$orderby = 'receivedDateTime desc';
+    const normalizedFolder = String(folder || 'inbox').toLowerCase();
+    const normalizedView = normalizeInboxView(inboxView);
+    if (normalizedFolder === 'inbox' && normalizedView !== 'all') {
+      query.$filter = `inferenceClassification eq '${normalizedView}'`;
+    }
   }
   return query;
+}
+
+async function listMailFolders(user) {
+  const select =
+    'id,displayName,parentFolderId,childFolderCount,totalItemCount,unreadItemCount,wellKnownName';
+
+  const loadFolderLevel = async (pathname, parentPath = '') => {
+    const payload = await graphRequest(user, pathname, {
+      query: {
+        $top: 100,
+        $select: select,
+      },
+    });
+
+    const rawFolders = Array.isArray(payload?.value) ? payload.value : [];
+    const normalizedFolders = rawFolders.map((folder) => normalizeMailFolder(folder, parentPath));
+    const childLevels = await Promise.all(
+      normalizedFolders.map(async (folder) => {
+        if (!folder.id || !folder.childFolderCount) {
+          return [];
+        }
+
+        return loadFolderLevel(
+          `/me/mailFolders/${encodeURIComponent(folder.id)}/childFolders`,
+          folder.path,
+        );
+      }),
+    );
+
+    return normalizedFolders
+      .filter((folder) => folder.id)
+      .concat(childLevels.flat())
+      .sort((left, right) => String(left.path || left.displayName).localeCompare(String(right.path || right.displayName)));
+  };
+
+  return {
+    folders: await loadFolderLevel('/me/mailFolders'),
+  };
 }
 
 async function getMessageAttachments(user, messageId) {
@@ -579,22 +654,43 @@ async function attachMessageAttachments(user, messages = []) {
 
 async function listMessages(
   user,
-  { folder = 'inbox', inboxView = 'focused', limit = 25, search } = {},
+  { folder = 'inbox', folderId, inboxView = 'focused', limit = 25, page = 1, search } = {},
 ) {
   const top = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const normalizedPage = Math.max(Number(page) || 1, 1);
+  const skip = (normalizedPage - 1) * top;
   const searchTerm = normalizeMessageSearch(search);
-  const payload = await graphRequest(user, getFolderPath(folder), {
-    query: buildMessageListQuery({ top, searchTerm }),
+  const path = getMailFolderPath(folderId) || getFolderPath(folder);
+  const payload = await graphRequest(user, path, {
+    query: buildMessageListQuery({
+      top: top + 1,
+      skip,
+      searchTerm,
+      folder: folderId ? 'custom' : folder,
+      inboxView: searchTerm ? 'all' : inboxView,
+    }),
   });
   const messages = Array.isArray(payload?.value)
     ? payload.value.map((message) => normalizeMessage(message, false))
     : [];
+  const hasNextPage = messages.length > top;
+  const pagedMessages = hasNextPage ? messages.slice(0, top) : messages;
   const sortedMessages = searchTerm
-    ? [...messages].sort((a, b) => getMessageTimestamp(b) - getMessageTimestamp(a))
-    : messages;
+    ? [...pagedMessages].sort((a, b) => getMessageTimestamp(b) - getMessageTimestamp(a))
+    : pagedMessages;
 
   return {
-    messages: filterMessagesByInboxView(sortedMessages, folder, searchTerm ? 'all' : inboxView),
+    messages: filterMessagesByInboxView(
+      sortedMessages,
+      folderId ? 'custom' : folder,
+      searchTerm ? 'all' : inboxView,
+    ),
+    folder,
+    folderId: folderId || undefined,
+    page: normalizedPage,
+    limit: top,
+    hasNextPage,
+    hasPreviousPage: normalizedPage > 1,
     search: searchTerm || undefined,
   };
 }
@@ -1650,6 +1746,78 @@ function getDateTimePartsInTimeZone(date, timeZone) {
   }
 }
 
+function getUtcInstantForTimeZoneParts(parts, timeZone) {
+  if (!parts) {
+    return null;
+  }
+
+  const resolvedTimeZone = getIanaTimeZone(timeZone) || 'UTC';
+  let guess = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day, parts.hours, parts.minutes, parts.seconds),
+  );
+
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    const observed = getDateTimePartsInTimeZone(guess, resolvedTimeZone);
+    if (!observed) {
+      break;
+    }
+
+    const desiredUtcMinutes =
+      Date.UTC(parts.year, parts.month - 1, parts.day, parts.hours, parts.minutes, parts.seconds) /
+      60000;
+    const observedUtcMinutes =
+      Date.UTC(
+        observed.year,
+        observed.month - 1,
+        observed.day,
+        observed.hours,
+        observed.minutes,
+        observed.seconds,
+      ) / 60000;
+
+    const deltaMinutes = desiredUtcMinutes - observedUtcMinutes;
+    if (deltaMinutes === 0) {
+      return guess;
+    }
+
+    guess = new Date(guess.getTime() + deltaMinutes * 60 * 1000);
+  }
+
+  return guess;
+}
+
+function getCurrentDayWindow(timeZone) {
+  const resolvedTimeZone = getIanaTimeZone(timeZone) || 'UTC';
+  const now = new Date();
+  const currentParts = getDateTimePartsInTimeZone(now, resolvedTimeZone);
+
+  if (!currentParts) {
+    const fallbackStart = new Date(now);
+    fallbackStart.setHours(0, 0, 0, 0);
+    return {
+      windowStart: fallbackStart,
+      windowEnd: now,
+      timeZone: resolvedTimeZone,
+    };
+  }
+
+  const startOfDay = getUtcInstantForTimeZoneParts(
+    {
+      ...currentParts,
+      hours: 0,
+      minutes: 0,
+      seconds: 0,
+    },
+    resolvedTimeZone,
+  );
+
+  return {
+    windowStart: startOfDay || now,
+    windowEnd: now,
+    timeZone: resolvedTimeZone,
+  };
+}
+
 function getComparableDateTimeParts(value, targetTimeZone) {
   const sourceTimeZone = String(value?.timeZone || '').trim();
   if (!value?.dateTime) {
@@ -2252,7 +2420,7 @@ function buildLocalBrief({ messages = [], meetings = [], modeLabel = 'brief' } =
 
   const headline =
     modeLabel === 'daily'
-      ? `Daily brief: ${normalizedMessages.length} email(s) and ${meetings.length} meeting(s) in the past 24 hours.`
+      ? `Daily brief: ${normalizedMessages.length} email(s) and ${meetings.length} meeting(s) from today so far.`
       : `Selected email summary: ${normalizedMessages.length} email(s) reviewed.`;
 
   const priorities = [];
@@ -2343,22 +2511,22 @@ async function getMessagesByIds(user, messageIds, { includeThread = true, maxMes
     .filter(Boolean);
 }
 
-async function listRecentMessagesForBrief(user, { hours = 24, limit = 12 } = {}) {
-  const top = Math.min(Math.max(Number(limit) || 12, 1), 25);
-  const recentWindowMs = Math.max(Number(hours) || 24, 1) * 60 * 60 * 1000;
-  const sinceMs = Date.now() - recentWindowMs;
+async function listRecentMessagesForBrief(user, { windowStart, limit = 20 } = {}) {
+  const top = Math.min(Math.max(Number(limit) || 20, 1), 40);
+  const sinceIso = windowStart instanceof Date ? windowStart.toISOString() : new Date(0).toISOString();
 
   const payload = await graphRequest(user, '/me/messages', {
     query: {
-      $top: 100,
+      $top: Math.min(top * 4, 100),
       $select: getMessageSelect(false),
       $orderby: 'receivedDateTime desc',
+      $filter: `receivedDateTime ge ${sinceIso}`,
     },
   });
 
   const recentMessages = (Array.isArray(payload?.value) ? payload.value : [])
     .map((message) => normalizeMessage(message, false))
-    .filter((message) => getMessageTimestamp(message) >= sinceMs)
+    .filter((message) => getMessageTimestamp(message) >= windowStart.getTime())
     .slice(0, top);
 
   return getMessagesByIds(
@@ -2368,14 +2536,18 @@ async function listRecentMessagesForBrief(user, { hours = 24, limit = 12 } = {})
   );
 }
 
-async function listRecentMeetings(user, { hours = 24, limit = 12 } = {}) {
-  const end = new Date();
-  const start = new Date(end.getTime() - Math.max(Number(hours) || 24, 1) * 60 * 60 * 1000);
+async function listRecentMeetings(user, { windowStart, windowEnd, timeZone, limit = 12 } = {}) {
   try {
+    const graphPreferredTimeZone = getGraphPreferredTimeZone(timeZone);
     const payload = await graphRequest(user, '/me/calendarView', {
+      headers: graphPreferredTimeZone
+        ? {
+            Prefer: `outlook.timezone="${graphPreferredTimeZone}"`,
+          }
+        : undefined,
       query: {
-        startDateTime: start.toISOString(),
-        endDateTime: end.toISOString(),
+        startDateTime: windowStart.toISOString(),
+        endDateTime: windowEnd.toISOString(),
         $top: Math.min(Math.max(Number(limit) || 12, 1), 25),
         $orderby: 'start/dateTime desc',
         $select: 'id,subject,start,end,location,organizer,showAs,isOnlineMeeting,webLink',
@@ -2475,16 +2647,17 @@ async function analyzeSelectedMessages(user, messageIds = []) {
   };
 }
 
-async function generateDailyBrief(user, { hours = 24 } = {}) {
-  const [messages, meetings, outlookContext] = await Promise.all([
-    listRecentMessagesForBrief(user, { hours, limit: 12 }),
-    listRecentMeetings(user, { hours, limit: 12 }),
-    getSignedInOutlookContext(user),
+async function generateDailyBrief(user) {
+  const outlookContext = await getSignedInOutlookContext(user);
+  const timeZone =
+    outlookContext?.mailboxSettings?.timeZone ||
+    outlookContext?.mailboxSettings?.workingHours?.timeZone ||
+    DEFAULT_WORKING_TIME_ZONE;
+  const { windowStart, windowEnd, timeZone: resolvedTimeZone } = getCurrentDayWindow(timeZone);
+  const [messages, meetings] = await Promise.all([
+    listRecentMessagesForBrief(user, { windowStart, limit: 20 }),
+    listRecentMeetings(user, { windowStart, windowEnd, timeZone: resolvedTimeZone, limit: 12 }),
   ]);
-  const windowEnd = new Date().toISOString();
-  const windowStart = new Date(
-    Date.now() - Math.max(Number(hours) || 24, 1) * 60 * 60 * 1000,
-  ).toISOString();
 
   if (OutlookAIService.isModelBackedAIEnabled()) {
     try {
@@ -2492,7 +2665,8 @@ async function generateDailyBrief(user, { hours = 24 } = {}) {
         messages,
         meetings,
         outlookContext,
-        windowHours: hours,
+        timeZone: resolvedTimeZone,
+        windowLabel: 'today so far',
       });
       if (generated?.brief) {
         const usageEntry = buildOutlookUsageEntry({
@@ -2500,8 +2674,9 @@ async function generateDailyBrief(user, { hours = 24 } = {}) {
           usage: generated.usage,
         });
         return {
-          windowStart,
-          windowEnd,
+          windowStart: windowStart.toISOString(),
+          windowEnd: windowEnd.toISOString(),
+          timeZone: resolvedTimeZone,
           emailCount: messages.length,
           meetingCount: meetings.length,
           messageIds: messages.map((message) => message.id),
@@ -2515,8 +2690,9 @@ async function generateDailyBrief(user, { hours = 24 } = {}) {
   }
 
   return {
-    windowStart,
-    windowEnd,
+    windowStart: windowStart.toISOString(),
+    windowEnd: windowEnd.toISOString(),
+    timeZone: resolvedTimeZone,
     emailCount: messages.length,
     meetingCount: meetings.length,
     messageIds: messages.map((message) => message.id),
@@ -2898,6 +3074,7 @@ module.exports = {
   OutlookServiceError,
   getOutlookConfig,
   getStatus,
+  listMailFolders,
   listMessages,
   listCalendarEvents,
   createCalendarEvent,

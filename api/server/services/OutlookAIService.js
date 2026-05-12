@@ -435,7 +435,8 @@ async function generateDailyBrief({
   messages = [],
   meetings = [],
   outlookContext = {},
-  windowHours = 24,
+  windowLabel = 'today so far',
+  timeZone,
 }) {
   if (!isModelBackedAIEnabled()) {
     return null;
@@ -443,13 +444,13 @@ async function generateDailyBrief({
 
   const system = [
     'You are an executive daily-brief assistant embedded in LibreChat.',
-    'Summarize the last 24 hours of email and meeting activity into a compact, high-signal brief.',
+    'Summarize the current day of email and meeting activity into a compact, high-signal brief.',
     'Focus on priorities, follow-ups, decisions, and risks.',
     'Do not invent facts. Return only valid JSON matching the requested schema.',
   ].join(' ');
 
   const prompt = JSON.stringify({
-    task: 'Generate a daily brief from the last 24 hours of Outlook activity.',
+    task: `Generate a daily brief from Outlook activity for ${windowLabel}.`,
     schema: {
       headline: 'string, one sentence',
       summary: 'string, 3-6 sentences',
@@ -459,7 +460,8 @@ async function generateDailyBrief({
       notableEmails: ['2-6 notable emails with sender/topic emphasis'],
       risks: ['0-5 urgency, dependency, or compliance risks'],
     },
-    windowHours,
+    windowLabel,
+    timeZone,
     emailCount: messages.length,
     meetingCount: meetings.length,
     emails: compactMessagesForBrief(messages),

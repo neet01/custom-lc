@@ -430,6 +430,7 @@ export type AdminIssuesListResponse = {
 };
 
 export type OutlookAuditAction =
+  | 'mail_folders_listed'
   | 'mailbox_listed'
   | 'calendar_viewed'
   | 'calendar_event_created'

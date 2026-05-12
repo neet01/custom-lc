@@ -1,4 +1,5 @@
 import { TMessage } from 'librechat-data-provider';
+import { cn } from '~/utils';
 import Files from './Files';
 
 const Container = ({ children, message }: { children: React.ReactNode; message?: TMessage }) => (
@@ -7,7 +8,15 @@ const Container = ({ children, message }: { children: React.ReactNode; message?:
     dir="auto"
   >
     {message?.isCreatedByUser === true && <Files message={message} />}
-    {children}
+    <div
+      className={cn(
+        'w-full',
+        message?.isCreatedByUser === true &&
+          'rounded-2xl border border-[#f5d000]/30 bg-[#f5d000]/12 px-4 py-3 shadow-[0_8px_24px_rgba(245,208,0,0.08)]',
+      )}
+    >
+      {children}
+    </div>
   </div>
 );
 

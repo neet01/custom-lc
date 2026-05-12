@@ -64,6 +64,7 @@ export enum QueryKeys {
   adminIssues = 'adminIssues',
   adminOutlookAudit = 'adminOutlookAudit',
   outlookStatus = 'outlookStatus',
+  outlookFolders = 'outlookFolders',
   outlookMessages = 'outlookMessages',
   outlookCalendar = 'outlookCalendar',
   outlookMessage = 'outlookMessage',

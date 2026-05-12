@@ -56,6 +56,7 @@ import {
   useDeleteOutlookCalendarEventMutation,
   useDeleteOutlookMessageMutation,
   useOutlookCalendarQuery,
+  useOutlookFoldersQuery,
   useOutlookDailyBriefMutation,
   useOutlookMessageQuery,
   useOutlookMessagesQuery,
@@ -92,15 +93,18 @@ type OutlookConversation = {
 const OUTLOOK_ANALYSIS_CACHE_KEY = 'cortex.outlook.analysisByMessage';
 const OUTLOOK_DENSITY_KEY = 'cortex.outlook.listDensity';
 const OUTLOOK_ASSISTANT_PANEL_SIZE_KEY = 'cortex.outlook.assistantPanelSize';
+const OUTLOOK_ASSISTANT_PANEL_POSITION_KEY = 'cortex.outlook.assistantPanelPosition';
 const DELETE_UNDO_WINDOW_MS = 8000;
 const MAILBOX_REFRESH_INTERVAL_MS = 15000;
 const ASSISTANT_PANEL_DEFAULT_WIDTH = 420;
 const ASSISTANT_PANEL_DEFAULT_HEIGHT = 640;
 const ASSISTANT_PANEL_MIN_WIDTH = 360;
 const ASSISTANT_PANEL_MIN_HEIGHT = 420;
+const ASSISTANT_PANEL_MARGIN = 24;
 const CALENDAR_START_HOUR = 9;
 const CALENDAR_END_HOUR = 19;
 const CALENDAR_HOUR_SLOT_HEIGHT = 56;
+const MAILBOX_PAGE_SIZE = 50;
 
 type DensityMode = 'comfortable' | 'compact';
 
@@ -114,6 +118,17 @@ type PendingDeleteBatch = {
 type AssistantPanelSize = {
   width: number;
   height: number;
+};
+
+type AssistantPanelPosition = {
+  x: number;
+  y: number;
+};
+
+type FolderOption = {
+  id: string;
+  label: string;
+  source: 'builtIn' | 'mailFolder';
 };
 
 function loadDensityMode(): DensityMode {
@@ -153,6 +168,68 @@ function loadAssistantPanelSize(): AssistantPanelSize {
       width: ASSISTANT_PANEL_DEFAULT_WIDTH,
       height: ASSISTANT_PANEL_DEFAULT_HEIGHT,
     };
+  }
+}
+
+function getDefaultAssistantPanelPosition(
+  size: AssistantPanelSize = {
+    width: ASSISTANT_PANEL_DEFAULT_WIDTH,
+    height: ASSISTANT_PANEL_DEFAULT_HEIGHT,
+  },
+): AssistantPanelPosition {
+  if (typeof window === 'undefined') {
+    return { x: ASSISTANT_PANEL_MARGIN, y: ASSISTANT_PANEL_MARGIN };
+  }
+
+  return {
+    x: Math.max(ASSISTANT_PANEL_MARGIN, window.innerWidth - size.width - ASSISTANT_PANEL_MARGIN),
+    y: Math.max(88, window.innerHeight - size.height - ASSISTANT_PANEL_MARGIN),
+  };
+}
+
+function clampAssistantPanelPosition(
+  position: AssistantPanelPosition,
+  size: AssistantPanelSize,
+): AssistantPanelPosition {
+  if (typeof window === 'undefined') {
+    return position;
+  }
+
+  const maxX = Math.max(ASSISTANT_PANEL_MARGIN, window.innerWidth - size.width - ASSISTANT_PANEL_MARGIN);
+  const maxY = Math.max(72, window.innerHeight - size.height - ASSISTANT_PANEL_MARGIN);
+
+  return {
+    x: Math.min(Math.max(position.x, ASSISTANT_PANEL_MARGIN), maxX),
+    y: Math.min(Math.max(position.y, 72), maxY),
+  };
+}
+
+function loadAssistantPanelPosition(
+  size: AssistantPanelSize = {
+    width: ASSISTANT_PANEL_DEFAULT_WIDTH,
+    height: ASSISTANT_PANEL_DEFAULT_HEIGHT,
+  },
+): AssistantPanelPosition {
+  if (typeof window === 'undefined') {
+    return getDefaultAssistantPanelPosition(size);
+  }
+
+  try {
+    const raw = window.localStorage.getItem(OUTLOOK_ASSISTANT_PANEL_POSITION_KEY);
+    if (!raw) {
+      return getDefaultAssistantPanelPosition(size);
+    }
+
+    const parsed = JSON.parse(raw);
+    const x = Number(parsed?.x);
+    const y = Number(parsed?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return getDefaultAssistantPanelPosition(size);
+    }
+
+    return clampAssistantPanelPosition({ x, y }, size);
+  } catch {
+    return getDefaultAssistantPanelPosition(size);
   }
 }
 
@@ -437,11 +514,37 @@ function getVisibleAttachments(message?: OutlookMessage): OutlookAttachment[] {
   if (!Array.isArray(message?.attachments) || message.attachments.length === 0) {
     return [];
   }
-  return message.attachments.filter((attachment) => !attachment?.isInline);
+  return message.attachments;
 }
 
 function getOutlookAttachmentDownloadUrl(messageId: string, attachmentId: string) {
   return `${apiBaseUrl()}/api/outlook/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/download`;
+}
+
+function normalizeAttachmentContentId(value?: string) {
+  return String(value || '')
+    .trim()
+    .replace(/^cid:/i, '')
+    .replace(/[<>]/g, '')
+    .toLowerCase();
+}
+
+function getInlineAttachmentSources(message?: OutlookMessage) {
+  const sources = new Map<string, string>();
+  if (!message?.id || !Array.isArray(message.attachments)) {
+    return sources;
+  }
+
+  for (const attachment of message.attachments) {
+    const contentId = normalizeAttachmentContentId(attachment?.contentId);
+    if (!contentId) {
+      continue;
+    }
+
+    sources.set(contentId, getOutlookAttachmentDownloadUrl(message.id, attachment.id));
+  }
+
+  return sources;
 }
 
 function AttachmentList({
@@ -483,6 +586,11 @@ function AttachmentList({
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-text-secondary">
                   <span className="truncate">{contentLabel}</span>
                   {sizeLabel ? <span>{sizeLabel}</span> : null}
+                  {attachment.isInline ? (
+                    <span className="rounded-full bg-surface-secondary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+                      Inline
+                    </span>
+                  ) : null}
                 </div>
               </div>
               <a
@@ -1696,7 +1804,11 @@ function CalendarWorkspace({
   );
 }
 
-function sanitizeEmailHtml(html: string, loadRemoteImages: boolean) {
+function sanitizeEmailHtml(
+  html: string,
+  loadRemoteImages: boolean,
+  inlineAttachmentSources: Map<string, string> = new Map(),
+) {
   const sanitizer = DOMPurify();
   const sanitized = sanitizer.sanitize(html, {
     ADD_ATTR: ['target', 'rel', 'referrerpolicy', 'loading'],
@@ -1732,6 +1844,15 @@ function sanitizeEmailHtml(html: string, loadRemoteImages: boolean) {
     const src = image.getAttribute('src') || '';
     const isRemoteImage = /^https?:\/\//i.test(src);
     const isInlineImage = /^cid:/i.test(src);
+    const inlineImageSource = inlineAttachmentSources.get(normalizeAttachmentContentId(src));
+
+    if (isInlineImage && inlineImageSource) {
+      image.setAttribute('src', inlineImageSource);
+      image.setAttribute('loading', 'lazy');
+      image.removeAttribute('width');
+      image.removeAttribute('height');
+      return;
+    }
 
     if ((isRemoteImage && !loadRemoteImages) || isInlineImage) {
       blockedImageCount += 1;
@@ -1839,9 +1960,10 @@ function ReadableEmailBody({ text }: { text: string }) {
 function EmailBody({ message }: { message: OutlookMessage }) {
   const [loadRemoteImages, setLoadRemoteImages] = useState(false);
   const [showSimplified, setShowSimplified] = useState(false);
+  const inlineAttachmentSources = useMemo(() => getInlineAttachmentSources(message), [message]);
   const sanitized = useMemo(
-    () => sanitizeEmailHtml(message.bodyHtml || '', loadRemoteImages),
-    [message.bodyHtml, loadRemoteImages],
+    () => sanitizeEmailHtml(message.bodyHtml || '', loadRemoteImages, inlineAttachmentSources),
+    [inlineAttachmentSources, loadRemoteImages, message.bodyHtml],
   );
   const readable = useMemo(
     () => getReadableEmailBody(message),
@@ -2177,7 +2299,9 @@ export default function OutlookPanel() {
   const [calendarForm, setCalendarForm] = useState<CalendarEventFormState>(() =>
     buildCalendarFormState(),
   );
+  const [selectedFolderId, setSelectedFolderId] = useState('inbox');
   const [inboxView, setInboxView] = useState<InboxView>('focused');
+  const [messagePage, setMessagePage] = useState(1);
   const [calendarViewMode, setCalendarViewMode] = useState<CalendarViewMode>('week');
   const [calendarDate, setCalendarDate] = useState(() => toDateInputValue(new Date()));
   const [densityMode, setDensityMode] = useState<DensityMode>(loadDensityMode);
@@ -2201,11 +2325,15 @@ export default function OutlookPanel() {
   const [pendingDeleteBatches, setPendingDeleteBatches] = useState<PendingDeleteBatch[]>([]);
   const [optimisticallyHiddenIds, setOptimisticallyHiddenIds] = useState<string[]>([]);
   const [nowMs, setNowMs] = useState(Date.now());
-  const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
+  const [assistantPanelOpen, setAssistantPanelOpen] = useState(true);
   const [assistantPanelScrolled, setAssistantPanelScrolled] = useState(false);
   const [assistantPanelSize, setAssistantPanelSize] =
     useState<AssistantPanelSize>(loadAssistantPanelSize);
+  const [assistantPanelPosition, setAssistantPanelPosition] = useState<AssistantPanelPosition>(() =>
+    loadAssistantPanelPosition(loadAssistantPanelSize()),
+  );
   const [assistantPanelResizing, setAssistantPanelResizing] = useState(false);
+  const [assistantPanelDragging, setAssistantPanelDragging] = useState(false);
   const [draftInstructions, setDraftInstructions] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
@@ -2213,23 +2341,58 @@ export default function OutlookPanel() {
   const deleteTimerRef = useRef<Record<string, number>>({});
   const pendingDeleteRef = useRef<PendingDeleteBatch[]>([]);
   const assistantResizeCleanupRef = useRef<(() => void) | null>(null);
+  const assistantDragCleanupRef = useRef<(() => void) | null>(null);
 
   const { data: status, isLoading: statusLoading } = useOutlookStatusQuery();
   const mailboxEnabled = Boolean(status?.enabled && status?.connected);
+  const { data: folderData } = useOutlookFoldersQuery({
+    enabled: mailboxEnabled,
+  });
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const normalizedSearchTerm = deferredSearchTerm.trim();
+  const folderOptions = useMemo<FolderOption[]>(() => {
+    const options: FolderOption[] = [
+      { id: 'inbox', label: 'Inbox', source: 'builtIn' },
+      { id: 'all', label: 'All mail', source: 'builtIn' },
+    ];
+    const seen = new Set(options.map((option) => option.id));
+
+    for (const folder of folderData?.folders ?? []) {
+      const folderId = String(folder?.id || '').trim();
+      if (!folderId || seen.has(folderId)) {
+        continue;
+      }
+
+      options.push({
+        id: folderId,
+        label: folder.path || folder.displayName || 'Untitled folder',
+        source: 'mailFolder',
+      });
+      seen.add(folderId);
+    }
+
+    return options;
+  }, [folderData?.folders]);
+  const selectedFolderOption =
+    folderOptions.find((option) => option.id === selectedFolderId) || folderOptions[0];
   const calendarWindow = useMemo(
     () => buildCalendarWindow(calendarDate, calendarViewMode),
     [calendarDate, calendarViewMode],
   );
   const messageListParams = useMemo(
     () => ({
-      folder: 'inbox' as const,
+      folder:
+        selectedFolderOption?.source === 'builtIn'
+          ? (selectedFolderOption.id as 'inbox' | 'all')
+          : ('inbox' as const),
+      folderId:
+        selectedFolderOption?.source === 'mailFolder' ? selectedFolderOption.id : undefined,
       inboxView,
-      limit: 100,
+      limit: MAILBOX_PAGE_SIZE,
+      page: messagePage,
       search: normalizedSearchTerm || undefined,
     }),
-    [inboxView, normalizedSearchTerm],
+    [inboxView, messagePage, normalizedSearchTerm, selectedFolderOption],
   );
   const calendarQueryParams = useMemo(
     () => ({
@@ -2278,6 +2441,9 @@ export default function OutlookPanel() {
     visibleConversationIds.length > 0 &&
     visibleConversationIds.every((messageId) => selectedDeleteIdSet.has(messageId));
   const inboxViewLabel = inboxView.charAt(0).toUpperCase() + inboxView.slice(1);
+  const mailboxPage = messageList?.page ?? messagePage;
+  const hasNextMailboxPage = Boolean(messageList?.hasNextPage);
+  const hasPreviousMailboxPage = Boolean(messageList?.hasPreviousPage);
   const calendarTimeZone = getResolvedCalendarTimeZone(
     calendarData?.timeZone || calendarData?.workingHours?.timeZone,
   );
@@ -2377,9 +2543,12 @@ export default function OutlookPanel() {
   useEffect(() => {
     setStatusMessage('');
     setAssistantPanelScrolled(false);
-    setAssistantPanelOpen(false);
     setMailboxControlsOpen(false);
-  }, [workspaceTab, inboxView, selectedId]);
+  }, [workspaceTab, inboxView, selectedId, selectedFolderId, messagePage]);
+
+  useEffect(() => {
+    setMessagePage(1);
+  }, [inboxView, normalizedSearchTerm, selectedFolderId]);
 
   useEffect(() => {
     if (workspaceTab !== 'calendar') {
@@ -2417,6 +2586,33 @@ export default function OutlookPanel() {
   }, [assistantPanelSize]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        OUTLOOK_ASSISTANT_PANEL_POSITION_KEY,
+        JSON.stringify(assistantPanelPosition),
+      );
+    } catch {
+      // Best-effort persistence only.
+    }
+  }, [assistantPanelPosition]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleResize = () => {
+      setAssistantPanelPosition((current) =>
+        clampAssistantPanelPosition(current, assistantPanelSize),
+      );
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [assistantPanelSize]);
+
+  useEffect(() => {
     const handleTutorialOpenInbox = () => {
       setWorkspaceTab('inbox');
     };
@@ -2430,10 +2626,12 @@ export default function OutlookPanel() {
   useEffect(() => {
     const handleTutorialOpenAssistant = () => {
       setAssistantPanelScrolled(false);
-      setAssistantPanelSize({
+      const nextSize = {
         width: ASSISTANT_PANEL_DEFAULT_WIDTH,
         height: Math.min(520, window.innerHeight - 140),
-      });
+      };
+      setAssistantPanelSize(nextSize);
+      setAssistantPanelPosition(getDefaultAssistantPanelPosition(nextSize));
       setAssistantPanelOpen(true);
     };
 
@@ -2466,6 +2664,7 @@ export default function OutlookPanel() {
   useEffect(() => {
     return () => {
       assistantResizeCleanupRef.current?.();
+      assistantDragCleanupRef.current?.();
       Object.values(successTimerRef.current).forEach((timerId) => window.clearTimeout(timerId));
       Object.values(deleteTimerRef.current).forEach((timerId) => window.clearTimeout(timerId));
     };
@@ -2649,6 +2848,12 @@ export default function OutlookPanel() {
           width: nextWidth,
           height: nextHeight,
         });
+        setAssistantPanelPosition((current) =>
+          clampAssistantPanelPosition(current, {
+            width: nextWidth,
+            height: nextHeight,
+          }),
+        );
       };
 
       const cleanup = () => {
@@ -2671,6 +2876,52 @@ export default function OutlookPanel() {
       window.addEventListener('mouseup', handleUp);
     },
     [assistantPanelSize.height, assistantPanelSize.width],
+  );
+
+  const handleAssistantDragStart = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      assistantDragCleanupRef.current?.();
+      setAssistantPanelDragging(true);
+
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const startPosition = assistantPanelPosition;
+
+      const handleMove = (moveEvent: MouseEvent) => {
+        const nextPosition = clampAssistantPanelPosition(
+          {
+            x: startPosition.x + (moveEvent.clientX - startX),
+            y: startPosition.y + (moveEvent.clientY - startY),
+          },
+          assistantPanelSize,
+        );
+
+        setAssistantPanelPosition(nextPosition);
+      };
+
+      const cleanup = () => {
+        window.removeEventListener('mousemove', handleMove);
+        window.removeEventListener('mouseup', handleUp);
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+        assistantDragCleanupRef.current = null;
+        setAssistantPanelDragging(false);
+      };
+
+      const handleUp = () => {
+        cleanup();
+      };
+
+      assistantDragCleanupRef.current = cleanup;
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'move';
+      window.addEventListener('mousemove', handleMove);
+      window.addEventListener('mouseup', handleUp);
+    },
+    [assistantPanelPosition, assistantPanelSize],
   );
 
   const handleAnalyze = async () => {
@@ -3008,6 +3259,23 @@ export default function OutlookPanel() {
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-3" data-tour="outlook-workspace-tabs">
           <WorkspaceTabs active={workspaceTab} onChange={setWorkspaceTab} />
+          {workspaceTab === 'inbox' && (
+            <label className="inline-flex min-w-[220px] items-center gap-2 rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-xs text-text-secondary">
+              <span className="shrink-0 font-semibold uppercase tracking-wide">Folder</span>
+              <select
+                className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none"
+                value={selectedFolderId}
+                onChange={(event) => setSelectedFolderId(event.target.value)}
+                aria-label="Select Outlook mail folder"
+              >
+                {folderOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {workspaceTab === 'calendar' && (
             <div className="flex flex-wrap items-center gap-2">
               <input
@@ -3112,7 +3380,13 @@ export default function OutlookPanel() {
               )}
             >
               <div className="space-y-2 rounded-xl border border-border-light bg-surface-secondary p-2">
-                <ViewTabs active={inboxView} onChange={setInboxView} />
+                {selectedFolderOption?.id === 'inbox' ? (
+                  <ViewTabs active={inboxView} onChange={setInboxView} />
+                ) : (
+                  <div className="rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-[11px] text-text-secondary">
+                    Focused/Other filtering applies only to the primary Inbox.
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="inline-flex rounded-lg border border-border-light bg-surface-primary p-0.5">
                     <button
@@ -3154,6 +3428,13 @@ export default function OutlookPanel() {
                   {status.calendarContextEnabled
                     ? 'Calendar context is enabled for scheduling analysis.'
                     : 'Calendar context is disabled.'}
+                </div>
+                <div className="text-[11px] text-text-secondary">
+                  Viewing{' '}
+                  <span className="font-semibold text-text-primary">
+                    {selectedFolderOption?.label || 'Inbox'}
+                  </span>{' '}
+                  • Page {mailboxPage}
                 </div>
               </div>
             </div>
@@ -3199,7 +3480,7 @@ export default function OutlookPanel() {
               description={
                 normalizedSearchTerm
                   ? 'Try a different sender, subject, or phrase.'
-                  : `Your ${inboxView === 'all' ? 'inbox' : inboxView} query returned no mail.`
+                  : `${selectedFolderOption?.label || 'This folder'} returned no mail for the ${inboxView === 'all' ? 'current' : inboxView} view.`
               }
             />
           )}
@@ -3306,6 +3587,30 @@ export default function OutlookPanel() {
               </motion.div>
             );
           })}
+          {!messagesLoading && visibleConversations.length > 0 && (
+            <div className="sticky bottom-0 flex items-center justify-between gap-2 border-t border-border-light bg-surface-primary/95 px-3 py-2 backdrop-blur">
+              <button
+                type="button"
+                className="rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold transition-colors hover:bg-surface-hover disabled:opacity-50"
+                onClick={() => setMessagePage((current) => Math.max(1, current - 1))}
+                disabled={!hasPreviousMailboxPage}
+              >
+                Newer
+              </button>
+              <div className="text-[11px] text-text-secondary">
+                Page {mailboxPage}
+                {hasNextMailboxPage ? ' • more mail available' : ''}
+              </div>
+              <button
+                type="button"
+                className="rounded-lg border border-border-light px-2.5 py-1 text-[11px] font-semibold transition-colors hover:bg-surface-hover disabled:opacity-50"
+                onClick={() => setMessagePage((current) => current + 1)}
+                disabled={!hasNextMailboxPage}
+              >
+                Older
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex min-h-0 flex-col overflow-hidden" data-tour="outlook-email-viewer">
@@ -3480,8 +3785,12 @@ export default function OutlookPanel() {
                 </div>
 
                 <div
-                  className="pointer-events-none absolute bottom-4 right-4 z-10 flex max-w-[calc(100%-2rem)] flex-col items-end"
-                  style={{ width: `${assistantPanelSize.width}px` }}
+                  className="pointer-events-none fixed z-30 flex flex-col items-end"
+                  style={{
+                    width: `${assistantPanelSize.width}px`,
+                    left: `${assistantPanelPosition.x}px`,
+                    top: `${assistantPanelPosition.y}px`,
+                  }}
                 >
                   {!assistantPanelOpen && (
                     <button
@@ -3503,7 +3812,7 @@ export default function OutlookPanel() {
                       data-tour="outlook-ai-panel"
                       className={cn(
                         'pointer-events-auto relative w-full overflow-hidden rounded-2xl border border-border-light bg-surface-primary shadow-2xl',
-                        assistantPanelResizing && 'select-none',
+                        (assistantPanelResizing || assistantPanelDragging) && 'select-none',
                       )}
                       style={{ height: `${assistantPanelSize.height}px` }}
                     >
@@ -3524,9 +3833,22 @@ export default function OutlookPanel() {
                             assistantPanelScrolled && 'shadow-sm',
                           )}
                         >
-                          <div className="flex items-center justify-between">
-                            <div className="text-xs font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]">
-                              AI assistant
+                          <div
+                            className="flex items-center justify-between gap-3 rounded-lg"
+                          >
+                            <div
+                              className={cn(
+                                'min-w-0 flex-1 rounded-md',
+                                assistantPanelDragging ? 'cursor-grabbing' : 'cursor-move',
+                              )}
+                              onMouseDown={handleAssistantDragStart}
+                            >
+                              <div className="text-xs font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]">
+                                AI assistant
+                              </div>
+                              <div className="mt-1 text-[11px] text-text-secondary">
+                                Drag this panel anywhere in Cortex.
+                              </div>
                             </div>
                             <button
                               type="button"

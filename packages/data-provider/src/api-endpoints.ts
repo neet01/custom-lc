@@ -73,6 +73,8 @@ const outlookRoot = `${BASE_URL}/api/outlook`;
 
 export const outlookStatus = () => `${outlookRoot}/status`;
 
+export const outlookFolders = () => `${outlookRoot}/folders`;
+
 export const outlookMessages = (params: o.OutlookMessagesParams = {}) =>
   `${outlookRoot}/messages${buildQuery(params)}`;
 

@@ -42,6 +42,10 @@ export function getOutlookStatus(): Promise<o.OutlookStatusResponse> {
   return request.get(endpoints.outlookStatus());
 }
 
+export function getOutlookFolders(): Promise<o.OutlookMailFoldersResponse> {
+  return request.get(endpoints.outlookFolders());
+}
+
 export function getOutlookMessages(
   params: o.OutlookMessagesParams = {},
 ): Promise<o.OutlookMessagesResponse> {

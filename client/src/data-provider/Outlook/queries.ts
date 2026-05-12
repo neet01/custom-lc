@@ -20,6 +20,7 @@ import type {
   OutlookDeleteResponse,
   OutlookDraftRequest,
   OutlookDraftResponse,
+  OutlookMailFoldersResponse,
   OutlookMessage,
   OutlookMeetingSlotsRequest,
   OutlookMeetingSlotsResponse,
@@ -57,6 +58,23 @@ export const useOutlookMessagesQuery = (
     () => dataService.getOutlookMessages(params),
     {
       refetchOnWindowFocus: false,
+      ...config,
+      enabled: (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};
+
+export const useOutlookFoldersQuery = (
+  config?: UseQueryOptions<OutlookMailFoldersResponse>,
+): QueryObserverResult<OutlookMailFoldersResponse> => {
+  const queriesEnabled = useRecoilValue<boolean>(store.queriesEnabled);
+
+  return useQuery<OutlookMailFoldersResponse>(
+    [QueryKeys.outlookFolders],
+    () => dataService.getOutlookFolders(),
+    {
+      refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
       ...config,
       enabled: (config?.enabled ?? true) === true && queriesEnabled,
     },

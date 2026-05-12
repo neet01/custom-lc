@@ -14,6 +14,17 @@ export type OutlookAttachment = {
   type?: string;
 };
 
+export type OutlookMailFolder = {
+  id: string;
+  displayName: string;
+  parentFolderId?: string;
+  childFolderCount?: number;
+  totalItemCount?: number;
+  unreadItemCount?: number;
+  wellKnownName?: string;
+  path?: string;
+};
+
 export type OutlookMessage = {
   id: string;
   conversationId?: string;
@@ -61,14 +72,26 @@ export type OutlookStatusResponse = {
 
 export type OutlookMessagesParams = {
   folder?: 'inbox' | 'drafts' | 'sent' | 'sentitems' | 'all';
+  folderId?: string;
   inboxView?: 'focused' | 'other' | 'all';
   limit?: number;
+  page?: number;
   search?: string;
 };
 
 export type OutlookMessagesResponse = {
   messages: OutlookMessage[];
+  folder?: string;
+  folderId?: string;
+  page: number;
+  limit: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
   search?: string;
+};
+
+export type OutlookMailFoldersResponse = {
+  folders: OutlookMailFolder[];
 };
 
 export type OutlookCalendarAttendee = {
@@ -175,6 +198,7 @@ export type OutlookAnalyzeSelectionResponse = {
 export type OutlookDailyBriefResponse = {
   windowStart: string;
   windowEnd: string;
+  timeZone?: string;
   emailCount: number;
   meetingCount: number;
   messageIds: string[];

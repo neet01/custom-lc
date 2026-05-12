@@ -81,6 +81,12 @@ export function getOutlookMessage(messageId: string): Promise<o.OutlookMessage> 
   return request.get(endpoints.outlookMessage(messageId));
 }
 
+export function getOutlookMessageAttachments(
+  messageId: string,
+): Promise<o.OutlookMessageAttachmentsResponse> {
+  return request.get(endpoints.outlookMessageAttachments(messageId));
+}
+
 export function analyzeOutlookMessage(messageId: string): Promise<o.OutlookAnalyzeResponse> {
   return request.post(endpoints.outlookAnalyzeMessage(messageId), {});
 }

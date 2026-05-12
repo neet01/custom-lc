@@ -22,6 +22,7 @@ import type {
   OutlookDraftResponse,
   OutlookMailFoldersResponse,
   OutlookMessage,
+  OutlookMessageAttachmentsResponse,
   OutlookMeetingSlotsRequest,
   OutlookMeetingSlotsResponse,
   OutlookMessagesParams,
@@ -135,6 +136,23 @@ export const useOutlookMessageQuery = (
   return useQuery<OutlookMessage>(
     [QueryKeys.outlookMessage, messageId],
     () => dataService.getOutlookMessage(messageId ?? ''),
+    {
+      refetchOnWindowFocus: false,
+      ...config,
+      enabled: Boolean(messageId) && (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};
+
+export const useOutlookMessageAttachmentsQuery = (
+  messageId?: string,
+  config?: UseQueryOptions<OutlookMessageAttachmentsResponse>,
+): QueryObserverResult<OutlookMessageAttachmentsResponse> => {
+  const queriesEnabled = useRecoilValue<boolean>(store.queriesEnabled);
+
+  return useQuery<OutlookMessageAttachmentsResponse>(
+    [QueryKeys.outlookMessageAttachments, messageId],
+    () => dataService.getOutlookMessageAttachments(messageId ?? ''),
     {
       refetchOnWindowFocus: false,
       ...config,

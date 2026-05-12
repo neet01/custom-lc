@@ -58,6 +58,7 @@ import {
   useOutlookCalendarQuery,
   useOutlookFoldersQuery,
   useOutlookDailyBriefMutation,
+  useOutlookMessageAttachmentsQuery,
   useOutlookMessageQuery,
   useOutlookMessagesQuery,
   useOutlookStatusQuery,
@@ -129,6 +130,7 @@ type FolderOption = {
   id: string;
   label: string;
   source: 'builtIn' | 'mailFolder';
+  unreadCount?: number;
 };
 
 function loadDensityMode(): DensityMode {
@@ -2300,6 +2302,7 @@ export default function OutlookPanel() {
     buildCalendarFormState(),
   );
   const [selectedFolderId, setSelectedFolderId] = useState('inbox');
+  const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [inboxView, setInboxView] = useState<InboxView>('focused');
   const [messagePage, setMessagePage] = useState(1);
   const [calendarViewMode, setCalendarViewMode] = useState<CalendarViewMode>('week');
@@ -2342,6 +2345,7 @@ export default function OutlookPanel() {
   const pendingDeleteRef = useRef<PendingDeleteBatch[]>([]);
   const assistantResizeCleanupRef = useRef<(() => void) | null>(null);
   const assistantDragCleanupRef = useRef<(() => void) | null>(null);
+  const folderMenuRef = useRef<HTMLDivElement | null>(null);
 
   const { data: status, isLoading: statusLoading } = useOutlookStatusQuery();
   const mailboxEnabled = Boolean(status?.enabled && status?.connected);
@@ -2367,6 +2371,7 @@ export default function OutlookPanel() {
         id: folderId,
         label: folder.path || folder.displayName || 'Untitled folder',
         source: 'mailFolder',
+        unreadCount: folder.unreadItemCount,
       });
       seen.add(folderId);
     }
@@ -2460,6 +2465,16 @@ export default function OutlookPanel() {
   const { data: selectedMessage, isLoading: messageLoading } = useOutlookMessageQuery(selectedId, {
     enabled: mailboxEnabled && Boolean(selectedId),
   });
+  const {
+    data: selectedMessageAttachmentData,
+    isLoading: selectedMessageAttachmentsLoading,
+  } = useOutlookMessageAttachmentsQuery(selectedId, {
+    enabled:
+      mailboxEnabled &&
+      Boolean(selectedId) &&
+      Boolean(selectedMessage?.hasAttachments) &&
+      getVisibleAttachments(selectedMessage).length === 0,
+  });
   const threadMessages = useMemo(
     () => (selectedMessage ? getThreadMessages(selectedMessage) : []),
     [selectedMessage],
@@ -2468,6 +2483,13 @@ export default function OutlookPanel() {
     () => (selectedMessage ? getDraftReplies(selectedMessage) : []),
     [selectedMessage],
   );
+  const selectedVisibleAttachments = useMemo(() => {
+    const attachments = getVisibleAttachments(selectedMessage);
+    if (attachments.length > 0) {
+      return attachments;
+    }
+    return selectedMessageAttachmentData?.attachments ?? [];
+  }, [selectedMessage, selectedMessageAttachmentData?.attachments]);
 
   const analyzeMutation = useAnalyzeOutlookMessageMutation();
   const analyzeSelectedMutation = useAnalyzeSelectedOutlookMessagesMutation();
@@ -2611,6 +2633,21 @@ export default function OutlookPanel() {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [assistantPanelSize]);
+
+  useEffect(() => {
+    if (!folderMenuOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!folderMenuRef.current?.contains(event.target as Node)) {
+        setFolderMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => window.removeEventListener('mousedown', handlePointerDown);
+  }, [folderMenuOpen]);
 
   useEffect(() => {
     const handleTutorialOpenInbox = () => {
@@ -3260,21 +3297,83 @@ export default function OutlookPanel() {
         <div className="mt-3 flex flex-wrap items-center gap-3" data-tour="outlook-workspace-tabs">
           <WorkspaceTabs active={workspaceTab} onChange={setWorkspaceTab} />
           {workspaceTab === 'inbox' && (
-            <label className="inline-flex min-w-[220px] items-center gap-2 rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-xs text-text-secondary">
-              <span className="shrink-0 font-semibold uppercase tracking-wide">Folder</span>
-              <select
-                className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none"
-                value={selectedFolderId}
-                onChange={(event) => setSelectedFolderId(event.target.value)}
+            <div className="relative min-w-[240px]" ref={folderMenuRef}>
+              <button
+                type="button"
+                className="inline-flex w-full items-center justify-between gap-3 rounded-2xl border border-[#f5d000]/20 bg-white/70 px-3 py-2 text-left shadow-[0_10px_30px_rgba(15,23,42,0.08)] backdrop-blur dark:bg-slate-900/65 dark:shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+                onClick={() => setFolderMenuOpen((current) => !current)}
+                aria-haspopup="listbox"
+                aria-expanded={folderMenuOpen}
                 aria-label="Select Outlook mail folder"
               >
-                {folderOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <div className="min-w-0">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
+                    Folder
+                  </div>
+                  <div className="mt-0.5 truncate text-sm font-semibold text-text-primary">
+                    {selectedFolderOption?.label || 'Inbox'}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {Number(selectedFolderOption?.unreadCount) > 0 ? (
+                    <span className="rounded-full bg-[#f5d000]/20 px-2 py-0.5 text-[10px] font-semibold text-[#8a6a00] dark:text-[#f5d000]">
+                      {selectedFolderOption?.unreadCount} unread
+                    </span>
+                  ) : null}
+                  <ChevronDown
+                    className={cn(
+                      'h-4 w-4 text-text-secondary transition-transform duration-150',
+                      folderMenuOpen ? 'rotate-180' : 'rotate-0',
+                    )}
+                    aria-hidden="true"
+                  />
+                </div>
+              </button>
+
+              {folderMenuOpen && (
+                <div
+                  className="absolute left-0 top-[calc(100%+0.5rem)] z-20 w-full overflow-hidden rounded-2xl border border-border-light bg-white/85 shadow-2xl backdrop-blur dark:border-white/10 dark:bg-slate-900/90"
+                  role="listbox"
+                  aria-label="Outlook folders"
+                >
+                  <div className="max-h-72 overflow-y-auto p-1.5">
+                    {folderOptions.map((option) => {
+                      const isActive = option.id === selectedFolderId;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          role="option"
+                          aria-selected={isActive}
+                          className={cn(
+                            'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left transition-colors',
+                            isActive
+                              ? 'bg-[#f5d000]/15 text-text-primary'
+                              : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
+                          )}
+                          onClick={() => {
+                            setSelectedFolderId(option.id);
+                            setFolderMenuOpen(false);
+                          }}
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium">{option.label}</div>
+                            <div className="mt-0.5 text-[11px] uppercase tracking-wide text-text-secondary">
+                              {option.source === 'builtIn' ? 'Default folder' : 'Custom folder'}
+                            </div>
+                          </div>
+                          {Number(option.unreadCount) > 0 ? (
+                            <span className="shrink-0 rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] font-semibold text-text-primary">
+                              {option.unreadCount}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           {workspaceTab === 'calendar' && (
             <div className="flex flex-wrap items-center gap-2">
@@ -3671,8 +3770,22 @@ export default function OutlookPanel() {
                   </div>
                   <AttachmentList
                     messageId={selectedMessage.id}
-                    attachments={getVisibleAttachments(selectedMessage)}
+                    attachments={selectedVisibleAttachments}
                   />
+                  {selectedMessage.hasAttachments &&
+                    selectedVisibleAttachments.length === 0 &&
+                    selectedMessageAttachmentsLoading && (
+                      <div className="mt-3 rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-xs text-text-secondary">
+                        Loading attachments...
+                      </div>
+                    )}
+                  {selectedMessage.hasAttachments &&
+                    selectedVisibleAttachments.length === 0 &&
+                    !selectedMessageAttachmentsLoading && (
+                      <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                        This message reports attachments, but Outlook did not return attachment metadata.
+                      </div>
+                    )}
                   {statusMessage && (
                     <div className="mt-3 rounded-xl border border-green-500/20 bg-green-500/5 px-3 py-2 text-xs text-green-700 dark:text-green-300">
                       {statusMessage}

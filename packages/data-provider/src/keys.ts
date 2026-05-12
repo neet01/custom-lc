@@ -68,6 +68,7 @@ export enum QueryKeys {
   outlookMessages = 'outlookMessages',
   outlookCalendar = 'outlookCalendar',
   outlookMessage = 'outlookMessage',
+  outlookMessageAttachments = 'outlookMessageAttachments',
   /* MCP Servers */
   mcpServers = 'mcpServers',
   mcpServer = 'mcpServer',

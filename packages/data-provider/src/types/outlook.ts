@@ -14,6 +14,11 @@ export type OutlookAttachment = {
   type?: string;
 };
 
+export type OutlookMessageAttachmentsResponse = {
+  messageId: string;
+  attachments: OutlookAttachment[];
+};
+
 export type OutlookMailFolder = {
   id: string;
   displayName: string;

@@ -89,6 +89,9 @@ export const outlookCalendarEvent = (eventId: string) =>
 export const outlookMessage = (messageId: string) =>
   `${outlookRoot}/messages/${encodeURIComponent(messageId)}`;
 
+export const outlookMessageAttachments = (messageId: string) =>
+  `${outlookMessage(messageId)}/attachments`;
+
 export const outlookMessageAttachmentDownload = (messageId: string, attachmentId: string) =>
   `${outlookMessage(messageId)}/attachments/${encodeURIComponent(attachmentId)}/download`;
 

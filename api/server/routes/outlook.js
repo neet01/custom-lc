@@ -325,6 +325,28 @@ router.get('/messages/:messageId', async (req, res) => {
   }
 });
 
+router.get('/messages/:messageId/attachments', async (req, res) => {
+  try {
+    const result = await OutlookService.listMessageAttachments(req.user, req.params.messageId);
+    await recordAudit(req, {
+      action: 'message_viewed',
+      status: 'success',
+      graphMessageId: req.params.messageId,
+      metadata: {
+        attachmentCount: Array.isArray(result.attachments) ? result.attachments.length : 0,
+      },
+    });
+    res.json(result);
+  } catch (error) {
+    await recordAudit(req, {
+      action: 'message_viewed',
+      graphMessageId: req.params.messageId,
+      ...getErrorAudit(error),
+    });
+    handleOutlookError(res, error);
+  }
+});
+
 router.get('/messages/:messageId/attachments/:attachmentId/download', async (req, res) => {
   try {
     const result = await OutlookService.downloadMessageAttachment(

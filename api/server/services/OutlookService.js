@@ -531,15 +531,17 @@ function normalizeMessageSearch(value) {
     .slice(0, 120);
 }
 
-function buildMessageListQuery({ top, skip, searchTerm, folder, inboxView }) {
+function buildMessageListQuery({ top, skip, searchTerm }) {
   const query = {
     $top: top,
-    $skip: skip,
     $select: getMessageSelect(false),
   };
   if (searchTerm) {
     query.$search = `"${searchTerm}"`;
   } else {
+    if (Number(skip) > 0) {
+      query.$skip = skip;
+    }
     query.$orderby = 'receivedDateTime desc';
   }
   return query;
@@ -602,6 +604,17 @@ async function getMessageAttachments(user, messageId) {
   return Array.isArray(payload?.value) ? payload.value.map(normalizeAttachment) : [];
 }
 
+async function listMessageAttachments(user, messageId) {
+  if (!messageId) {
+    throw new OutlookServiceError('Message id is required', 400);
+  }
+
+  return {
+    messageId,
+    attachments: await getMessageAttachments(user, messageId),
+  };
+}
+
 async function attachMessageAttachments(user, messages = []) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages;
@@ -651,17 +664,21 @@ async function listMessages(
   { folder = 'inbox', folderId, inboxView = 'focused', limit = 25, page = 1, search } = {},
 ) {
   const top = Math.min(Math.max(Number(limit) || 25, 1), 100);
-  const normalizedPage = Math.max(Number(page) || 1, 1);
-  const skip = (normalizedPage - 1) * top;
+  const requestedPage = Math.max(Number(page) || 1, 1);
   const searchTerm = normalizeMessageSearch(search);
+  const normalizedPage = searchTerm ? 1 : requestedPage;
+  const skip = (normalizedPage - 1) * top;
   const path = getMailFolderPath(folderId) || getFolderPath(folder);
   const payload = await graphRequest(user, path, {
+    headers: searchTerm
+      ? {
+          ConsistencyLevel: 'eventual',
+        }
+      : undefined,
     query: buildMessageListQuery({
       top: top + 1,
       skip,
       searchTerm,
-      folder: folderId ? 'custom' : folder,
-      inboxView: searchTerm ? 'all' : inboxView,
     }),
   });
   const messages = Array.isArray(payload?.value)
@@ -684,7 +701,7 @@ async function listMessages(
     page: normalizedPage,
     limit: top,
     hasNextPage,
-    hasPreviousPage: normalizedPage > 1,
+    hasPreviousPage: !searchTerm && normalizedPage > 1,
     search: searchTerm || undefined,
   };
 }
@@ -3076,6 +3093,7 @@ module.exports = {
   deleteCalendarEvent,
   getConversationMessages,
   getMessage,
+  listMessageAttachments,
   downloadMessageAttachment,
   updateMessageReadState,
   deleteMessage,

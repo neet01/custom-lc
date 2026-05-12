@@ -963,24 +963,45 @@ async function downloadMessageAttachment(user, messageId, attachmentId) {
     throw new OutlookServiceError('Attachment id is required', 400);
   }
 
-  const [metadata, payload] = await Promise.all([
-    graphRequest(
-      user,
-      `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
-      {
-        query: {
-          $select: 'id,name,contentType,size,isInline,lastModifiedDateTime,contentId',
-        },
+  const metadata = await graphRequest(
+    user,
+    `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    {
+      query: {
+        $select:
+          'id,name,contentType,size,isInline,lastModifiedDateTime,contentId,contentBytes',
       },
-    ),
-    graphBinaryRequest(
-      user,
-      `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/$value`,
-    ),
-  ]);
+    },
+  );
+
+  const normalizedAttachment = normalizeAttachment(metadata);
+  const attachmentType = String(metadata?.['@odata.type'] || '').toLowerCase();
+
+  if (typeof metadata?.contentBytes === 'string' && metadata.contentBytes.length > 0) {
+    const body = Buffer.from(metadata.contentBytes, 'base64');
+    return {
+      attachment: normalizedAttachment,
+      contentType: metadata?.contentType || 'application/octet-stream',
+      contentLength: body.length,
+      body,
+    };
+  }
+
+  if (attachmentType.includes('referenceattachment')) {
+    throw new OutlookServiceError(
+      'Reference attachments cannot be downloaded directly from Outlook in Cortex',
+      400,
+      'reference_attachment_unsupported',
+    );
+  }
+
+  const payload = await graphBinaryRequest(
+    user,
+    `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/$value`,
+  );
 
   return {
-    attachment: normalizeAttachment(metadata),
+    attachment: normalizedAttachment,
     contentType: metadata?.contentType || payload.contentType || 'application/octet-stream',
     contentLength: payload.contentLength,
     body: payload.body,

@@ -3300,7 +3300,7 @@ export default function OutlookPanel() {
             <div className="relative min-w-[240px]" ref={folderMenuRef}>
               <button
                 type="button"
-                className="inline-flex w-full items-center justify-between gap-3 rounded-2xl border border-[#f5d000]/20 bg-white/70 px-3 py-2 text-left shadow-[0_10px_30px_rgba(15,23,42,0.08)] backdrop-blur dark:bg-slate-900/65 dark:shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+                className="inline-flex h-9 w-full items-center justify-between gap-3 rounded-xl border border-border-light bg-surface-secondary px-3 py-1.5 text-left shadow-[0_10px_24px_rgba(15,23,42,0.08)] transition-colors hover:bg-surface-hover dark:bg-slate-900/80 dark:hover:bg-slate-800/90 dark:shadow-[0_10px_24px_rgba(0,0,0,0.3)]"
                 onClick={() => setFolderMenuOpen((current) => !current)}
                 aria-haspopup="listbox"
                 aria-expanded={folderMenuOpen}
@@ -3330,8 +3330,13 @@ export default function OutlookPanel() {
                 </div>
               </button>
 
-              {folderMenuOpen && (
-                <div
+              <AnimatePresence>
+                {folderMenuOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -4, scale: 0.985 }}
+                  transition={{ duration: 0.18, ease: 'easeOut' }}
                   className="absolute left-0 top-[calc(100%+0.5rem)] z-20 w-full overflow-hidden rounded-2xl border border-border-light bg-white/85 shadow-2xl backdrop-blur dark:border-white/10 dark:bg-slate-900/90"
                   role="listbox"
                   aria-label="Outlook folders"
@@ -3348,8 +3353,8 @@ export default function OutlookPanel() {
                           className={cn(
                             'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left transition-colors',
                             isActive
-                              ? 'bg-[#f5d000]/15 text-text-primary'
-                              : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
+                              ? 'bg-[#f5d000]/15 text-text-primary dark:bg-[#f5d000]/20'
+                              : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary dark:hover:bg-slate-800/85 dark:hover:text-white',
                           )}
                           onClick={() => {
                             setSelectedFolderId(option.id);
@@ -3363,7 +3368,7 @@ export default function OutlookPanel() {
                             </div>
                           </div>
                           {Number(option.unreadCount) > 0 ? (
-                            <span className="shrink-0 rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] font-semibold text-text-primary">
+                            <span className="shrink-0 rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] font-semibold text-text-primary dark:bg-slate-800/90 dark:text-slate-100">
                               {option.unreadCount}
                             </span>
                           ) : null}
@@ -3371,8 +3376,9 @@ export default function OutlookPanel() {
                       );
                     })}
                   </div>
-                </div>
+                </motion.div>
               )}
+              </AnimatePresence>
             </div>
           )}
           {workspaceTab === 'calendar' && (
@@ -3905,8 +3911,13 @@ export default function OutlookPanel() {
                     top: `${assistantPanelPosition.y}px`,
                   }}
                 >
+                  <AnimatePresence initial={false}>
                   {!assistantPanelOpen && (
-                    <button
+                    <motion.button
+                      initial={{ opacity: 0, scale: 0.9, y: 18 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.92, y: 14 }}
+                      transition={{ duration: 0.2, ease: 'easeOut' }}
                       type="button"
                       data-tour="outlook-ai-toggle"
                       className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-[#f5d000]/70 bg-[#f5d000] px-4 py-2 text-xs font-semibold text-black shadow-lg shadow-[#f5d000]/20 transition-colors hover:bg-[#ffe05c]"
@@ -3917,11 +3928,18 @@ export default function OutlookPanel() {
                     >
                       <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
                       AI assistant
-                    </button>
+                    </motion.button>
                   )}
 
                   {assistantPanelOpen && (
-                    <div
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.94, y: 22, x: 10, filter: 'blur(4px)' }}
+                      animate={{ opacity: 1, scale: 1, y: 0, x: 0, filter: 'blur(0px)' }}
+                      exit={{ opacity: 0, scale: 0.96, y: 18, x: 8, filter: 'blur(2px)' }}
+                      transition={{
+                        duration: 0.26,
+                        ease: [0.22, 1, 0.36, 1],
+                      }}
                       data-tour="outlook-ai-panel"
                       className={cn(
                         'pointer-events-auto relative w-full overflow-hidden rounded-2xl border border-border-light bg-surface-primary shadow-2xl',
@@ -4159,8 +4177,9 @@ export default function OutlookPanel() {
                           )}
                         </div>
                       </div>
-                    </div>
+                    </motion.div>
                   )}
+                  </AnimatePresence>
                 </div>
               </motion.div>
             )}

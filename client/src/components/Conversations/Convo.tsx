@@ -168,6 +168,7 @@ export default function Conversation({
 
   const convoOptionsProps = {
     title,
+    tags: conversation.tags,
     retainView,
     renameHandler: handleRename,
     isActiveConvo,

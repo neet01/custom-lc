@@ -131,7 +131,11 @@ export default function useMessageActions(props: TMessageActions) {
     } else if (assistant) {
       return assistant.name ?? 'Assistant';
     } else {
-      return message?.sender;
+      const sender = message?.sender?.trim();
+      if (sender?.toLowerCase() === 'bedrock') {
+        return 'Cortex';
+      }
+      return sender || localize('com_ui_assistant');
     }
   }, [message, agent, assistant, UsernameDisplay, user, localize]);
 

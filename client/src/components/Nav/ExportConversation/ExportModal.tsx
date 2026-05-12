@@ -79,6 +79,11 @@ export default function ExportModal({
     recursive,
   });
 
+  const handleExport = useCallback(async () => {
+    await exportConversation();
+    onOpenChange(false);
+  }, [exportConversation, onOpenChange]);
+
   return (
     <OGDialog open={open} onOpenChange={onOpenChange} triggerRef={triggerRef}>
       {children}
@@ -188,7 +193,7 @@ export default function ExportModal({
         }
         buttons={
           <>
-            <Button onClick={exportConversation} variant="submit">
+            <Button onClick={handleExport} variant="submit">
               {localize('com_endpoint_export')}
             </Button>
           </>

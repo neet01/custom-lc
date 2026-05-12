@@ -2,6 +2,7 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export type IssueReportCategory =
   | 'bad_response'
+  | 'feature_request'
   | 'faulty_mcp_tool'
   | 'bad_file_transformation'
   | 'timeout_or_error'
@@ -51,6 +52,7 @@ const issueReportSchema = new Schema<IIssueReport>(
       type: String,
       enum: [
         'bad_response',
+        'feature_request',
         'faulty_mcp_tool',
         'bad_file_transformation',
         'timeout_or_error',

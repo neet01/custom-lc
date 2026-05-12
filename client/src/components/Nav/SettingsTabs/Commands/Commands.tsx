@@ -14,13 +14,6 @@ const commandSwitchConfigs = [
     permissionType: undefined,
   },
   {
-    stateAtom: store.plusCommand,
-    localizationKey: 'com_nav_plus_command_description' as const,
-    switchId: 'plusCommand',
-    key: 'plusCommand',
-    permissionType: PermissionTypes.MULTI_CONVO,
-  },
-  {
     stateAtom: store.slashCommand,
     localizationKey: 'com_nav_slash_command_description' as const,
     switchId: 'slashCommand',
@@ -37,17 +30,9 @@ function Commands() {
     permission: Permissions.USE,
   });
 
-  const hasAccessToMultiConvo = useHasAccess({
-    permissionType: PermissionTypes.MULTI_CONVO,
-    permission: Permissions.USE,
-  });
-
   const getShowSwitch = (permissionType?: PermissionTypes) => {
     if (!permissionType) {
       return true;
-    }
-    if (permissionType === PermissionTypes.MULTI_CONVO) {
-      return hasAccessToMultiConvo === true;
     }
     if (permissionType === PermissionTypes.PROMPTS) {
       return hasAccessToPrompts === true;

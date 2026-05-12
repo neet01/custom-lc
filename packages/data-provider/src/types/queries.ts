@@ -346,6 +346,7 @@ export type AdminUsageSummaryResponse = {
 
 export type IssueReportCategory =
   | 'bad_response'
+  | 'feature_request'
   | 'faulty_mcp_tool'
   | 'bad_file_transformation'
   | 'timeout_or_error'

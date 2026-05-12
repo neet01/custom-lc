@@ -201,6 +201,7 @@ export type AdminIssueReportItem = {
   messageId: string;
   category:
     | 'bad_response'
+    | 'feature_request'
     | 'faulty_mcp_tool'
     | 'bad_file_transformation'
     | 'timeout_or_error'

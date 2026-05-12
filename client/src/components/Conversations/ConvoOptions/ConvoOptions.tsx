@@ -2,9 +2,10 @@ import { useState, useId, useRef, memo, useCallback, useMemo } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { QueryKeys } from 'librechat-data-provider';
+import { BookmarkFilledIcon, BookmarkIcon } from '@radix-ui/react-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { DropdownPopup, Spinner, useToastContext } from '@librechat/client';
-import { Ellipsis, Share2, CopyPlus, Archive, Pen, Trash } from 'lucide-react';
+import { Ellipsis, Share2, CopyPlus, Archive, Pen, Trash, BookmarkPlus } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import type { TMessage } from 'librechat-data-provider';
 import {
@@ -12,10 +13,13 @@ import {
   useDeleteConversationMutation,
   useGetStartupConfig,
   useArchiveConvoMutation,
+  useConversationTagsQuery,
+  useTagConversationMutation,
 } from '~/data-provider';
-import { useLocalize, useNavigateToConvo, useNewConvo } from '~/hooks';
+import { BookmarkEditDialog } from '~/components/Bookmarks';
+import { useLocalize, useNavigateToConvo, useNewConvo, useBookmarkSuccess } from '~/hooks';
 import { NotificationSeverity } from '~/common';
-import { useChatContext } from '~/Providers';
+import { BookmarkContext, useChatContext } from '~/Providers';
 import DeleteButton from './DeleteButton';
 import ShareButton from './ShareButton';
 import { cn } from '~/utils';
@@ -23,6 +27,7 @@ import { cn } from '~/utils';
 function ConvoOptions({
   conversationId,
   title,
+  tags,
   retainView,
   renameHandler,
   isPopoverActive,
@@ -32,6 +37,7 @@ function ConvoOptions({
 }: {
   conversationId: string | null;
   title: string | null;
+  tags?: string[];
   retainView: () => void;
   renameHandler: (e: MouseEvent) => void;
   isPopoverActive: boolean;
@@ -53,11 +59,28 @@ function ConvoOptions({
   const menuId = useId();
   const shareButtonRef = useRef<HTMLButtonElement>(null);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
+  const newBookmarkRef = useRef<HTMLButtonElement>(null);
   const [showShareDialog, setShowShareDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showBookmarkDialog, setShowBookmarkDialog] = useState(false);
   const [announcement, setAnnouncement] = useState('');
+  const updateConvoTags = useBookmarkSuccess(conversationId ?? '');
+  const bookmarkTags = tags ?? [];
 
   const archiveConvoMutation = useArchiveConvoMutation();
+  const tagMutation = useTagConversationMutation(conversationId ?? '', {
+    onSuccess: (newTags) => {
+      updateConvoTags(newTags);
+    },
+    onError: () => {
+      showToast({
+        message: localize('com_ui_bookmarks_update_error'),
+        severity: NotificationSeverity.ERROR,
+        showIcon: true,
+      });
+    },
+  });
+  const { data: availableBookmarks } = useConversationTagsQuery();
 
   const deleteMutation = useDeleteConversationMutation({
     onSuccess: () => {
@@ -183,58 +206,107 @@ function ConvoOptions({
     });
   }, [conversationId, duplicateConversation]);
 
+  const handleBookmarkToggle = useCallback(
+    (tag: string) => {
+      const convoId = conversationId ?? '';
+      if (!convoId || tag.trim().length === 0) {
+        return;
+      }
+
+      const existingTags = (bookmarkTags ?? []).filter((value) =>
+        (availableBookmarks ?? []).some((bookmark) => bookmark.tag === value),
+      );
+      const nextTags = existingTags.includes(tag)
+        ? existingTags.filter((value) => value !== tag)
+        : [...existingTags, tag];
+
+      tagMutation.mutate({ tags: nextTags, tag });
+    },
+    [availableBookmarks, bookmarkTags, conversationId, tagMutation],
+  );
+
   const dropdownItems = useMemo(
-    () => [
-      {
-        label: localize('com_ui_share'),
-        onClick: shareHandler,
-        icon: <Share2 className="icon-sm mr-2 text-text-primary" aria-hidden="true" />,
-        show: startupConfig && startupConfig.sharedLinksEnabled,
-        ariaHasPopup: 'dialog' as const,
-        ariaControls: 'share-conversation-dialog',
-        /** NOTE: THE FOLLOWING PROPS ARE REQUIRED FOR MENU ITEMS THAT OPEN DIALOGS */
-        hideOnClick: false,
-        ref: shareButtonRef,
-        render: (props) => <button {...props} />,
-      },
-      {
-        label: localize('com_ui_rename'),
-        onClick: renameHandler,
-        icon: <Pen className="icon-sm mr-2 text-text-primary" aria-hidden="true" />,
-      },
-      {
-        label: localize('com_ui_duplicate'),
-        onClick: handleDuplicateClick,
-        hideOnClick: false,
-        icon: isDuplicateLoading ? (
-          <Spinner className="size-4" />
-        ) : (
-          <CopyPlus className="icon-sm mr-2 text-text-primary" aria-hidden="true" />
-        ),
-      },
-      {
-        label: localize('com_ui_archive'),
-        onClick: handleArchiveClick,
-        hideOnClick: false,
-        icon: isArchiveLoading ? (
-          <Spinner className="size-4" />
-        ) : (
-          <Archive className="icon-sm mr-2 text-text-primary" aria-hidden="true" />
-        ),
-      },
-      {
-        label: localize('com_ui_delete'),
-        onClick: deleteHandler,
-        icon: <Trash className="icon-sm mr-2 text-text-primary" aria-hidden="true" />,
-        ariaHasPopup: 'dialog' as const,
-        ariaControls: 'delete-conversation-dialog',
-        /** NOTE: THE FOLLOWING PROPS ARE REQUIRED FOR MENU ITEMS THAT OPEN DIALOGS */
-        hideOnClick: false,
-        ref: deleteButtonRef,
-        render: (props) => <button {...props} />,
-      },
-    ],
+    () => {
+      const bookmarkItems = (availableBookmarks ?? []).map((bookmark) => {
+        const isSelected = bookmarkTags.includes(bookmark.tag);
+        return {
+          id: bookmark.tag,
+          label: bookmark.tag,
+          onClick: () => handleBookmarkToggle(bookmark.tag),
+          hideOnClick: false,
+          disabled: tagMutation.isLoading,
+          ariaChecked: isSelected,
+          icon: isSelected ? (
+            <BookmarkFilledIcon className="size-4" />
+          ) : (
+            <BookmarkIcon className="size-4" />
+          ),
+        };
+      });
+
+      return [
+        {
+          label: localize('com_ui_share'),
+          onClick: shareHandler,
+          icon: <Share2 className="icon-sm mr-2 text-text-primary" aria-hidden="true" />,
+          show: startupConfig && startupConfig.sharedLinksEnabled,
+          ariaHasPopup: 'dialog' as const,
+          ariaControls: 'share-conversation-dialog',
+          /** NOTE: THE FOLLOWING PROPS ARE REQUIRED FOR MENU ITEMS THAT OPEN DIALOGS */
+          hideOnClick: false,
+          ref: shareButtonRef,
+          render: (props) => <button {...props} />,
+        },
+        {
+          label: localize('com_ui_bookmarks_new'),
+          onClick: () => setShowBookmarkDialog(true),
+          icon: <BookmarkPlus className="icon-sm mr-2 text-text-primary" aria-hidden="true" />,
+          hideOnClick: false,
+          ref: newBookmarkRef,
+          render: (props) => <button {...props} />,
+        },
+        ...bookmarkItems,
+        {
+          label: localize('com_ui_rename'),
+          onClick: renameHandler,
+          icon: <Pen className="icon-sm mr-2 text-text-primary" aria-hidden="true" />,
+        },
+        {
+          label: localize('com_ui_duplicate'),
+          onClick: handleDuplicateClick,
+          hideOnClick: false,
+          icon: isDuplicateLoading ? (
+            <Spinner className="size-4" />
+          ) : (
+            <CopyPlus className="icon-sm mr-2 text-text-primary" aria-hidden="true" />
+          ),
+        },
+        {
+          label: localize('com_ui_archive'),
+          onClick: handleArchiveClick,
+          hideOnClick: false,
+          icon: isArchiveLoading ? (
+            <Spinner className="size-4" />
+          ) : (
+            <Archive className="icon-sm mr-2 text-text-primary" aria-hidden="true" />
+          ),
+        },
+        {
+          label: localize('com_ui_delete'),
+          onClick: deleteHandler,
+          icon: <Trash className="icon-sm mr-2 text-text-primary" aria-hidden="true" />,
+          ariaHasPopup: 'dialog' as const,
+          ariaControls: 'delete-conversation-dialog',
+          /** NOTE: THE FOLLOWING PROPS ARE REQUIRED FOR MENU ITEMS THAT OPEN DIALOGS */
+          hideOnClick: false,
+          ref: deleteButtonRef,
+          render: (props) => <button {...props} />,
+        },
+      ];
+    },
     [
+      availableBookmarks,
+      bookmarkTags,
       localize,
       shareHandler,
       startupConfig,
@@ -243,7 +315,9 @@ function ConvoOptions({
       isArchiveLoading,
       isDuplicateLoading,
       handleArchiveClick,
+      handleBookmarkToggle,
       handleDuplicateClick,
+      tagMutation.isLoading,
     ],
   );
 
@@ -290,39 +364,41 @@ function ConvoOptions({
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {announcement}
       </span>
-      <DropdownPopup
-        portal={true}
-        menuId={menuId}
-        focusLoop={true}
-        className="z-[125]"
-        unmountOnHide={true}
-        isOpen={isPopoverActive}
-        setIsOpen={setIsPopoverActive}
-        trigger={
-          <Ariakit.MenuButton
-            id={`conversation-menu-${conversationId}`}
-            aria-label={localize('com_nav_convo_menu_options')}
-            aria-expanded={isPopoverActive}
-            className={cn(
-              'inline-flex h-7 w-7 items-center justify-center gap-2 rounded-md border-none p-0 text-sm font-medium ring-ring-primary transition-all duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50',
-              isActiveConvo === true || isPopoverActive
-                ? 'opacity-100'
-                : 'opacity-0 focus:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 data-[open]:opacity-100',
-            )}
-            onClick={(e: MouseEvent<HTMLButtonElement>) => {
-              e.stopPropagation();
-            }}
-            onKeyDown={(e: React.KeyboardEvent<HTMLButtonElement>) => {
-              if (e.key === 'Enter' || e.key === ' ') {
+      <BookmarkContext.Provider value={{ bookmarks: availableBookmarks || [] }}>
+        <DropdownPopup
+          portal={true}
+          menuId={menuId}
+          focusLoop={true}
+          className="z-[125]"
+          unmountOnHide={true}
+          isOpen={isPopoverActive}
+          setIsOpen={setIsPopoverActive}
+          trigger={
+            <Ariakit.MenuButton
+              id={`conversation-menu-${conversationId}`}
+              aria-label={localize('com_nav_convo_menu_options')}
+              aria-expanded={isPopoverActive}
+              className={cn(
+                'inline-flex h-7 w-7 items-center justify-center gap-2 rounded-md border-none p-0 text-sm font-medium ring-ring-primary transition-all duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50',
+                isActiveConvo === true || isPopoverActive
+                  ? 'opacity-100'
+                  : 'opacity-0 focus:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 data-[open]:opacity-100',
+              )}
+              onClick={(e: MouseEvent<HTMLButtonElement>) => {
                 e.stopPropagation();
-              }
-            }}
-          >
-            <Ellipsis className="icon-md text-text-secondary" aria-hidden={true} />
-          </Ariakit.MenuButton>
-        }
-        items={dropdownItems}
-      />
+              }}
+              onKeyDown={(e: React.KeyboardEvent<HTMLButtonElement>) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.stopPropagation();
+                }
+              }}
+            >
+              <Ellipsis className="icon-md text-text-secondary" aria-hidden={true} />
+            </Ariakit.MenuButton>
+          }
+          items={dropdownItems}
+        />
+      </BookmarkContext.Provider>
       {showShareDialog && (
         <ShareButton
           conversationId={conversationId ?? ''}
@@ -342,6 +418,15 @@ function ConvoOptions({
           setShowDeleteDialog={setShowDeleteDialog}
         />
       )}
+      <BookmarkEditDialog
+        open={showBookmarkDialog}
+        setOpen={setShowBookmarkDialog}
+        tags={bookmarkTags}
+        setTags={updateConvoTags}
+        triggerRef={newBookmarkRef}
+        conversationId={conversationId ?? ''}
+        context="ConvoOptions - BookmarkEditDialog"
+      />
     </>
   );
 }

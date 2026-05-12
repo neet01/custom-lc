@@ -82,7 +82,7 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false 
 
 function setupMocks(overrides: { provider?: string } = {}) {
   const translations: Record<string, string> = {
-    com_ui_upload_provider: 'Upload to Provider',
+    com_ui_upload_provider: 'Upload Custom File',
     com_ui_upload_image_input: 'Upload Image',
     com_ui_upload_ocr_text: 'Upload as Text',
     com_ui_upload_file_search: 'Upload for File Search',
@@ -139,33 +139,33 @@ describe('AttachFileMenu', () => {
   beforeEach(jest.clearAllMocks);
 
   describe('Upload to Provider vs Upload Image', () => {
-    it('shows "Upload to Provider" when endpointType is custom (resolved from agent provider)', () => {
+    it('shows "Upload Custom File" when endpointType is custom (resolved from agent provider)', () => {
       setupMocks({ provider: 'Moonshot' });
       renderMenu({ endpointType: EModelEndpoint.custom });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload Custom File')).toBeInTheDocument();
       expect(screen.queryByText('Upload Image')).not.toBeInTheDocument();
     });
 
-    it('shows "Upload to Provider" when endpointType is openAI', () => {
+    it('shows "Upload Custom File" when endpointType is openAI', () => {
       setupMocks({ provider: EModelEndpoint.openAI });
       renderMenu({ endpointType: EModelEndpoint.openAI });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload Custom File')).toBeInTheDocument();
     });
 
-    it('shows "Upload to Provider" when endpointType is anthropic', () => {
+    it('shows "Upload Custom File" when endpointType is anthropic', () => {
       setupMocks({ provider: EModelEndpoint.anthropic });
       renderMenu({ endpointType: EModelEndpoint.anthropic });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload Custom File')).toBeInTheDocument();
     });
 
-    it('shows "Upload to Provider" when endpointType is google', () => {
+    it('shows "Upload Custom File" when endpointType is google', () => {
       setupMocks({ provider: Providers.GOOGLE });
       renderMenu({ endpointType: EModelEndpoint.google });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload Custom File')).toBeInTheDocument();
     });
 
     it('shows "Upload Image" when endpointType is agents (no provider resolution)', () => {
@@ -173,7 +173,7 @@ describe('AttachFileMenu', () => {
       renderMenu({ endpointType: EModelEndpoint.agents });
       openMenu();
       expect(screen.getByText('Upload Image')).toBeInTheDocument();
-      expect(screen.queryByText('Upload to Provider')).not.toBeInTheDocument();
+      expect(screen.queryByText('Upload Custom File')).not.toBeInTheDocument();
     });
 
     it('shows "Upload Image" when neither endpointType nor provider supports documents', () => {
@@ -183,11 +183,11 @@ describe('AttachFileMenu', () => {
       expect(screen.getByText('Upload Image')).toBeInTheDocument();
     });
 
-    it('shows "Upload to Provider" for azureOpenAI with useResponsesApi', () => {
+    it('shows "Upload Custom File" for azureOpenAI with useResponsesApi', () => {
       setupMocks({ provider: EModelEndpoint.azureOpenAI });
       renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload Custom File')).toBeInTheDocument();
     });
 
     it('shows "Upload Image" for azureOpenAI without useResponsesApi', () => {
@@ -199,14 +199,14 @@ describe('AttachFileMenu', () => {
   });
 
   describe('agent provider resolution scenario', () => {
-    it('shows "Upload to Provider" when agents endpoint has custom endpointType from provider', () => {
+    it('shows "Upload Custom File" when agents endpoint has custom endpointType from provider', () => {
       setupMocks({ provider: 'Moonshot' });
       renderMenu({
         endpoint: EModelEndpoint.agents,
         endpointType: EModelEndpoint.custom,
       });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload Custom File')).toBeInTheDocument();
     });
 
     it('shows "Upload Image" when agents endpoint has no resolved provider type', () => {

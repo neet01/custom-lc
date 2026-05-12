@@ -3,7 +3,6 @@ import { useRecoilState } from 'recoil';
 import type { TConversation, TMessage, TFeedback } from 'librechat-data-provider';
 import { EditIcon, Clipboard, CheckMark, ContinueIcon, RegenerateIcon } from '@librechat/client';
 import { useGenerationsByLatest, useLocalize } from '~/hooks';
-import { Fork } from '~/components/Conversations';
 import MessageAudio from './MessageAudio';
 import Feedback from './Feedback';
 import ReportIssueButton from './ReportIssueButton';
@@ -151,7 +150,6 @@ const HoverButtons = ({
     hideEditButton,
     regenerateEnabled,
     continueSupported,
-    forkingSupported,
     isEditableEndpoint,
   } = generationCapabilities;
 
@@ -229,7 +227,7 @@ const HoverButtons = ({
       />
 
       {/* Edit Button */}
-      {isEditableEndpoint && (
+      {isEditableEndpoint && isCreatedByUser && (
         <HoverButton
           id={`edit-${message.messageId}`}
           onClick={onEdit}
@@ -239,18 +237,8 @@ const HoverButtons = ({
           isVisible={!hideEditButton}
           isDisabled={hideEditButton}
           isLast={isLast}
-          className={isCreatedByUser ? '' : 'active'}
         />
       )}
-
-      {/* Fork Button */}
-      <Fork
-        messageId={message.messageId}
-        conversationId={conversation.conversationId}
-        forkingSupported={forkingSupported}
-        latestMessageId={latestMessageId}
-        isLast={isLast}
-      />
 
       {/* Feedback Buttons */}
       {!isCreatedByUser && handleFeedback != null && (

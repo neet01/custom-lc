@@ -14,6 +14,7 @@ type Props = {
 
 const CATEGORY_OPTIONS = [
   { value: 'bad_response', label: 'Bad response' },
+  { value: 'feature_request', label: 'Feature request' },
   { value: 'faulty_mcp_tool', label: 'Faulty MCP tool' },
   { value: 'bad_file_transformation', label: 'Bad file transformation' },
   { value: 'timeout_or_error', label: 'Timeout or error' },

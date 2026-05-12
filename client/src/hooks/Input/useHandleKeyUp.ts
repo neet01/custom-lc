@@ -50,16 +50,11 @@ const useHandleKeyUp = ({
     permissionType: PermissionTypes.PROMPTS,
     permission: Permissions.USE,
   });
-  const hasMultiConvoAccess = useHasAccess({
-    permissionType: PermissionTypes.MULTI_CONVO,
-    permission: Permissions.USE,
-  });
   const latestMessage = useRecoilValue(store.latestMessageFamily(index));
   const setShowPromptsPopover = useSetRecoilState(store.showPromptsPopoverFamily(index));
 
   // Get the current state of command toggles
   const atCommandEnabled = useRecoilValue(store.atCommand);
-  const plusCommandEnabled = useRecoilValue(store.plusCommand);
   const slashCommandEnabled = useRecoilValue(store.slashCommand);
 
   const handleAtCommand = useCallback(() => {
@@ -67,15 +62,6 @@ const useHandleKeyUp = ({
       setShowMentionPopover(true);
     }
   }, [textAreaRef, setShowMentionPopover, atCommandEnabled]);
-
-  const handlePlusCommand = useCallback(() => {
-    if (!hasMultiConvoAccess || !plusCommandEnabled) {
-      return;
-    }
-    if (shouldTriggerCommand(textAreaRef, '+')) {
-      setShowPlusPopover(true);
-    }
-  }, [textAreaRef, setShowPlusPopover, plusCommandEnabled, hasMultiConvoAccess]);
 
   const handlePromptsCommand = useCallback(() => {
     if (!hasPromptsAccess || !slashCommandEnabled) {
@@ -89,10 +75,9 @@ const useHandleKeyUp = ({
   const commandHandlers = useMemo(
     () => ({
       '@': handleAtCommand,
-      '+': handlePlusCommand,
       '/': handlePromptsCommand,
     }),
-    [handleAtCommand, handlePlusCommand, handlePromptsCommand],
+    [handleAtCommand, handlePromptsCommand],
   );
 
   const handleUpArrow = useCallback(

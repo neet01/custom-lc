@@ -376,17 +376,17 @@ export default function useExportConversation({
     download(blob, `${filename}.json`, 'application/json');
   };
 
-  const exportConversation = () => {
+  const exportConversation = async () => {
     if (type === 'json') {
-      exportJSON();
+      await exportJSON();
     } else if (type == 'text') {
-      exportText();
+      await exportText();
     } else if (type == 'markdown') {
-      exportMarkdown();
+      await exportMarkdown();
     } else if (type == 'csv') {
-      exportCSV();
+      await exportCSV();
     } else if (type == 'screenshot') {
-      exportScreenshot();
+      await exportScreenshot();
     }
   };
 

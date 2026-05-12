@@ -596,7 +596,6 @@ async function getMessageAttachments(user, messageId) {
     {
       query: {
         $top: 50,
-        $select: 'id,name,contentType,size,isInline,lastModifiedDateTime,contentId',
       },
     },
   );
@@ -966,12 +965,7 @@ async function downloadMessageAttachment(user, messageId, attachmentId) {
   const metadata = await graphRequest(
     user,
     `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
-    {
-      query: {
-        $select:
-          'id,name,contentType,size,isInline,lastModifiedDateTime,contentId,contentBytes',
-      },
-    },
+    {},
   );
 
   const normalizedAttachment = normalizeAttachment(metadata);

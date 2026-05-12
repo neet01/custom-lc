@@ -476,7 +476,6 @@ function normalizeMailFolder(folder, parentPath = '') {
     unreadItemCount: Number.isFinite(Number(folder?.unreadItemCount))
       ? Number(folder.unreadItemCount)
       : 0,
-    wellKnownName: folder?.wellKnownName || undefined,
     path: normalizedPath,
   };
 }
@@ -542,18 +541,13 @@ function buildMessageListQuery({ top, skip, searchTerm, folder, inboxView }) {
     query.$search = `"${searchTerm}"`;
   } else {
     query.$orderby = 'receivedDateTime desc';
-    const normalizedFolder = String(folder || 'inbox').toLowerCase();
-    const normalizedView = normalizeInboxView(inboxView);
-    if (normalizedFolder === 'inbox' && normalizedView !== 'all') {
-      query.$filter = `inferenceClassification eq '${normalizedView}'`;
-    }
   }
   return query;
 }
 
 async function listMailFolders(user) {
   const select =
-    'id,displayName,parentFolderId,childFolderCount,totalItemCount,unreadItemCount,wellKnownName';
+    'id,displayName,parentFolderId,childFolderCount,totalItemCount,unreadItemCount';
 
   const loadFolderLevel = async (pathname, parentPath = '') => {
     const payload = await graphRequest(user, pathname, {

@@ -18,10 +18,16 @@ const {
   getEndpointFileConfig,
   documentParserMimeTypes,
   inferMimeType,
+  isBedrockDocumentType,
 } = require('librechat-data-provider');
 const { EnvVar } = require('@librechat/agents');
 const { logger } = require('@librechat/data-schemas');
-const { sanitizeFilename, parseText, processAudioFile } = require('@librechat/api');
+const {
+  sanitizeFilename,
+  parseText,
+  processAudioFile,
+  validateBedrockDocument,
+} = require('@librechat/api');
 const {
   convertImage,
   resizeAndConvert,
@@ -488,78 +494,50 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     throw new Error('No agent ID provided for agent file upload');
   }
 
-  const isImage = file.mimetype.startsWith('image');
-  let fileInfoMetadata;
-  const entity_id = messageAttachment === true ? undefined : agent_id;
-  const basePath = mime.getType(file.originalname)?.startsWith('image') ? 'images' : 'uploads';
-  if (tool_resource === EToolResources.execute_code) {
-    const isCodeEnabled = await checkCapability(req, AgentCapabilities.execute_code);
-    if (!isCodeEnabled) {
-      throw new Error('Code execution is not enabled for Agents');
+  /**
+   * @param {object} params
+   * @param {string} params.text
+   * @param {number} params.bytes
+   * @param {string} params.filepath
+   * @param {string} params.type
+   * @return {Promise<void>}
+   */
+  const createTextFile = async ({ text, bytes, filepath, type = 'text/plain' }) => {
+    const textBytes = Buffer.byteLength(text, 'utf8');
+    if (textBytes > 15 * megabyte) {
+      throw new Error(
+        `Extracted text from "${file.originalname}" exceeds the 15MB storage limit (${Math.round(textBytes / megabyte)}MB). Try a shorter document.`,
+      );
     }
-    const { handleFileUpload: uploadCodeEnvFile } = getStrategyFunctions(FileSources.execute_code);
-    const result = await loadAuthValues({ userId: req.user.id, authFields: [EnvVar.CODE_API_KEY] });
-    const stream = fs.createReadStream(file.path);
-    const fileIdentifier = await uploadCodeEnvFile({
-      req,
-      stream,
+    const fileInfo = removeNullishValues({
+      text,
+      bytes,
+      file_id,
+      temp_file_id,
+      user: req.user.id,
+      type,
+      filepath: filepath ?? file.path,
+      source: FileSources.text,
       filename: file.originalname,
-      apiKey: result[EnvVar.CODE_API_KEY],
-      entity_id,
+      model: messageAttachment ? undefined : req.body.model,
+      context: messageAttachment ? FileContext.message_attachment : FileContext.agents,
     });
-    fileInfoMetadata = { fileIdentifier };
-  } else if (tool_resource === EToolResources.file_search) {
-    const isFileSearchEnabled = await checkCapability(req, AgentCapabilities.file_search);
-    if (!isFileSearchEnabled) {
-      throw new Error('File search is not enabled for Agents');
-    }
-    // Note: File search processing continues to dual storage logic below
-  } else if (tool_resource === EToolResources.context) {
-    const { file_id, temp_file_id = null } = metadata;
 
-    /**
-     * @param {object} params
-     * @param {string} params.text
-     * @param {number} params.bytes
-     * @param {string} params.filepath
-     * @param {string} params.type
-     * @return {Promise<void>}
-     */
-    const createTextFile = async ({ text, bytes, filepath, type = 'text/plain' }) => {
-      const textBytes = Buffer.byteLength(text, 'utf8');
-      if (textBytes > 15 * megabyte) {
-        throw new Error(
-          `Extracted text from "${file.originalname}" exceeds the 15MB storage limit (${Math.round(textBytes / megabyte)}MB). Try a shorter document.`,
-        );
-      }
-      const fileInfo = removeNullishValues({
-        text,
-        bytes,
+    if (!messageAttachment && tool_resource) {
+      await db.addAgentResourceFile({
         file_id,
-        temp_file_id,
-        user: req.user.id,
-        type,
-        filepath: filepath ?? file.path,
-        source: FileSources.text,
-        filename: file.originalname,
-        model: messageAttachment ? undefined : req.body.model,
-        context: messageAttachment ? FileContext.message_attachment : FileContext.agents,
+        agent_id,
+        tool_resource,
+        updatingUserId: req?.user?.id,
       });
+    }
+    const result = await db.createFile(fileInfo, true);
+    return res
+      .status(200)
+      .json({ message: 'Agent file uploaded and processed successfully', ...result });
+  };
 
-      if (!messageAttachment && tool_resource) {
-        await db.addAgentResourceFile({
-          file_id,
-          agent_id,
-          tool_resource,
-          updatingUserId: req?.user?.id,
-        });
-      }
-      const result = await db.createFile(fileInfo, true);
-      return res
-        .status(200)
-        .json({ message: 'Agent file uploaded and processed successfully', ...result });
-    };
-
+  const resolveContextTextUpload = async () => {
     const fileConfig = mergeFileConfig(appConfig.fileConfig);
 
     const shouldUseConfiguredOCR =
@@ -632,6 +610,78 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
 
     const { text, bytes } = await parseText({ req, file, file_id });
     return await createTextFile({ text, bytes, type: file.mimetype });
+  };
+
+  const maybeFallbackBedrockMessageAttachment = async () => {
+    const uploadEndpoint =
+      metadata.endpointType ?? req.body.endpointType ?? metadata.endpoint ?? req.body.endpoint;
+
+    if (!messageAttachment || uploadEndpoint !== EModelEndpoint.bedrock) {
+      return false;
+    }
+
+    if (!isBedrockDocumentType(file.mimetype)) {
+      return false;
+    }
+
+    const validation = await validateBedrockDocument(
+      file.size ?? 0,
+      file.mimetype,
+      undefined,
+      undefined,
+      metadata.model ?? req.body.model,
+    );
+
+    if (validation.isValid || !/exceeds the .* limit for Bedrock/i.test(validation.error ?? '')) {
+      return false;
+    }
+
+    logger.warn(
+      `[processAgentFileUpload] Falling back to text extraction for oversized Bedrock attachment "${file.originalname}" (${((file.size ?? 0) / megabyte).toFixed(1)}MB)`,
+    );
+
+    try {
+      await resolveContextTextUpload();
+      return true;
+    } catch (error) {
+      throw new Error(
+        `"${file.originalname}" exceeds Bedrock's document upload limit and Cortex could not extract text automatically: ${error.message}`,
+      );
+    }
+  };
+
+  if (await maybeFallbackBedrockMessageAttachment()) {
+    return;
+  }
+
+  const isImage = file.mimetype.startsWith('image');
+  let fileInfoMetadata;
+  const entity_id = messageAttachment === true ? undefined : agent_id;
+  const basePath = mime.getType(file.originalname)?.startsWith('image') ? 'images' : 'uploads';
+  if (tool_resource === EToolResources.execute_code) {
+    const isCodeEnabled = await checkCapability(req, AgentCapabilities.execute_code);
+    if (!isCodeEnabled) {
+      throw new Error('Code execution is not enabled for Agents');
+    }
+    const { handleFileUpload: uploadCodeEnvFile } = getStrategyFunctions(FileSources.execute_code);
+    const result = await loadAuthValues({ userId: req.user.id, authFields: [EnvVar.CODE_API_KEY] });
+    const stream = fs.createReadStream(file.path);
+    const fileIdentifier = await uploadCodeEnvFile({
+      req,
+      stream,
+      filename: file.originalname,
+      apiKey: result[EnvVar.CODE_API_KEY],
+      entity_id,
+    });
+    fileInfoMetadata = { fileIdentifier };
+  } else if (tool_resource === EToolResources.file_search) {
+    const isFileSearchEnabled = await checkCapability(req, AgentCapabilities.file_search);
+    if (!isFileSearchEnabled) {
+      throw new Error('File search is not enabled for Agents');
+    }
+    // Note: File search processing continues to dual storage logic below
+  } else if (tool_resource === EToolResources.context) {
+    return await resolveContextTextUpload();
   }
 
   // Dual storage pattern for RAG files: Storage + Vector DB

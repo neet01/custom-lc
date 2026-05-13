@@ -111,6 +111,27 @@ Current spreadsheet architecture direction:
 - use environment gating so the Python worker can be enabled gradually
 - keep the LLM in a planning role; do not allow arbitrary Python generation/execution
 
+### Bedrock file upload workaround
+
+Implemented:
+
+- Bedrock message attachments that exceed Bedrock's document upload limit are now intercepted during `/api/files` upload processing.
+- Instead of storing the file as a provider-bound document attachment that later fails at Bedrock Converse time, Cortex now:
+  - detects the oversize Bedrock document upload
+  - extracts text locally using the existing document parser / text parser path
+  - stores the attachment as a `FileSources.text` message attachment
+
+Effect:
+
+- users can continue using `Upload Custom File` with oversized engineering spreadsheets/docs
+- the file is still available to the chat as extracted text context
+- the provider-side Bedrock document rejection is avoided for this class of files
+
+Current limitation:
+
+- this is a text-extraction fallback, not a true provider-side native document upload
+- fidelity for very large/complex spreadsheets is limited to the extracted text representation
+
 ### Teams archive
 
 New backend foundation implemented for Teams archive ingestion and search:

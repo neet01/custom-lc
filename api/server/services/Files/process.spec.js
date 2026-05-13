@@ -12,6 +12,7 @@ jest.mock('@librechat/api', () => ({
   sanitizeFilename: jest.fn((n) => n),
   parseText: jest.fn().mockResolvedValue({ text: '', bytes: 0 }),
   processAudioFile: jest.fn(),
+  validateBedrockDocument: jest.fn().mockResolvedValue({ isValid: true }),
 }));
 
 jest.mock('librechat-data-provider', () => ({
@@ -90,6 +91,7 @@ const { EToolResources, FileSources, AgentCapabilities } = require('librechat-da
 const { mergeFileConfig } = require('librechat-data-provider');
 const { checkCapability } = require('~/server/services/Config');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
+const { validateBedrockDocument } = require('@librechat/api');
 const { processAgentFileUpload } = require('./process');
 
 const PDF_MIME = 'application/pdf';
@@ -147,6 +149,7 @@ describe('processAgentFileUpload', () => {
         .mockResolvedValue({ text: 'extracted text', bytes: 42, filepath: 'doc://result' }),
     });
     mergeFileConfig.mockReturnValue(makeFileConfig());
+    validateBedrockDocument.mockResolvedValue({ isValid: true });
   });
 
   describe('OCR strategy selection', () => {
@@ -383,6 +386,82 @@ describe('processAgentFileUpload', () => {
       await expect(
         processAgentFileUpload({ req, res: mockRes, metadata: makeMetadata() }),
       ).resolves.not.toThrow();
+    });
+  });
+
+  describe('Bedrock message attachment fallback', () => {
+    test('stores oversized Bedrock documents as text-backed message attachments', async () => {
+      validateBedrockDocument.mockResolvedValue({
+        isValid: false,
+        error: 'File size (6.0MB) exceeds the 4.5MB limit for Bedrock',
+      });
+      getStrategyFunctions.mockReturnValue({
+        handleFileUpload: jest.fn().mockResolvedValue({
+          text: 'parsed oversized workbook',
+          bytes: 123,
+          filepath: 'doc://oversized',
+        }),
+      });
+
+      const req = makeReq({
+        mimetype: XLSX_MIME,
+        originalname: 'systems-runway.xlsx',
+        ocrConfig: null,
+      });
+      req.body.endpointType = 'bedrock';
+      req.file.size = 6 * 1024 * 1024;
+
+      const metadata = {
+        file_id: 'file-uuid-123',
+        message_file: true,
+      };
+
+      const { createFile, addAgentResourceFile } = require('~/models');
+
+      await expect(processAgentFileUpload({ req, res: mockRes, metadata })).resolves.not.toThrow();
+
+      expect(validateBedrockDocument).toHaveBeenCalledWith(
+        req.file.size,
+        XLSX_MIME,
+        undefined,
+        undefined,
+        req.body.model,
+      );
+      expect(getStrategyFunctions).toHaveBeenCalledWith(FileSources.document_parser);
+      expect(addAgentResourceFile).not.toHaveBeenCalled();
+      expect(createFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: FileSources.text,
+          context: 'message_attachment',
+          filename: 'systems-runway.xlsx',
+          text: 'parsed oversized workbook',
+        }),
+        true,
+      );
+    });
+
+    test('does not fall back when the Bedrock validation failure is not size-related', async () => {
+      validateBedrockDocument.mockResolvedValue({
+        isValid: false,
+        error: 'Invalid PDF file: missing PDF header',
+      });
+
+      const req = makeReq({
+        mimetype: PDF_MIME,
+        originalname: 'design-review.pdf',
+        ocrConfig: null,
+      });
+      req.body.endpointType = 'bedrock';
+      req.file.size = 1024;
+
+      const metadata = {
+        file_id: 'file-uuid-123',
+        message_file: true,
+      };
+
+      await expect(processAgentFileUpload({ req, res: mockRes, metadata })).resolves.not.toThrow();
+
+      expect(getStrategyFunctions).not.toHaveBeenCalledWith(FileSources.document_parser);
     });
   });
 });

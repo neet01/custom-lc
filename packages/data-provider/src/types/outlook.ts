@@ -119,6 +119,10 @@ export type OutlookCalendarEvent = {
   bodyPreview?: string;
   type?: string;
   attendees?: OutlookCalendarAttendee[];
+  onlineMeeting?: {
+    joinUrl?: string;
+    conferenceId?: string;
+  };
 };
 
 export type OutlookCalendarParams = {

@@ -375,6 +375,12 @@ function normalizeCalendarEvent(event) {
     attendees: Array.isArray(event.attendees)
       ? event.attendees.map(normalizeCalendarAttendee)
       : [],
+    onlineMeeting: event?.onlineMeeting
+      ? {
+          joinUrl: event.onlineMeeting.joinUrl,
+          conferenceId: event.onlineMeeting.conferenceId,
+        }
+      : undefined,
   };
 }
 

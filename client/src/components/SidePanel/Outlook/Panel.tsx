@@ -44,9 +44,8 @@ import type {
   OutlookMeetingSlot,
   OutlookMessage,
   OutlookMessagesResponse,
-  apiBaseUrl,
 } from 'librechat-data-provider';
-import { QueryKeys } from 'librechat-data-provider';
+import { QueryKeys, apiBaseUrl } from 'librechat-data-provider';
 import {
   useAnalyzeOutlookMessageMutation,
   useAnalyzeSelectedOutlookMessagesMutation,
@@ -83,6 +82,14 @@ type CalendarEventFormState = {
   attendees: string;
   body: string;
   isOnlineMeeting: boolean;
+};
+
+type CalendarCreateSeed = {
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  isOnlineMeeting?: boolean;
 };
 
 type OutlookConversation = {
@@ -1187,6 +1194,102 @@ function getCurrentTimeOffset(date: Date, timeZone?: string) {
   return ((minutes - gridStartMinutes) / 60) * CALENDAR_HOUR_SLOT_HEIGHT;
 }
 
+function formatMinutesForCalendarInput(totalMinutes: number) {
+  const boundedMinutes = Math.max(0, Math.min(totalMinutes, 23 * 60 + 59));
+  const hours = Math.floor(boundedMinutes / 60);
+  const minutes = boundedMinutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function roundCalendarMinutes(totalMinutes: number, increment = 30) {
+  return Math.round(totalMinutes / increment) * increment;
+}
+
+function buildCalendarCreateSeed(
+  dateKey: string,
+  startMinutes: number,
+  durationMinutes = 30,
+): CalendarCreateSeed {
+  const dayEndMinutes = CALENDAR_END_HOUR * 60;
+  const roundedStart = Math.max(
+    CALENDAR_START_HOUR * 60,
+    Math.min(roundCalendarMinutes(startMinutes), dayEndMinutes - 15),
+  );
+  const roundedEnd = Math.min(dayEndMinutes, roundedStart + durationMinutes);
+
+  return {
+    startDate: dateKey,
+    startTime: formatMinutesForCalendarInput(roundedStart),
+    endDate: dateKey,
+    endTime: formatMinutesForCalendarInput(Math.max(roundedEnd, roundedStart + 15)),
+    isOnlineMeeting: true,
+  };
+}
+
+function getCurrentCalendarEvent(calendarData?: OutlookCalendarResponse) {
+  const events = calendarData?.events ?? [];
+  if (events.length === 0) {
+    return undefined;
+  }
+
+  const calendarTimeZone = getResolvedCalendarTimeZone(
+    calendarData?.timeZone || calendarData?.workingHours?.timeZone,
+  );
+  const currentParts = getDateTimePartsInTimeZone(new Date(), calendarTimeZone);
+  if (!currentParts) {
+    return undefined;
+  }
+
+  const currentMinutes = currentParts.hours * 60 + currentParts.minutes;
+  const currentDate = currentParts.date;
+
+  const activeEvent = events.find((event) => {
+    if (event.isAllDay) {
+      return false;
+    }
+
+    const start = getCalendarDisplayParts(event.start, calendarTimeZone);
+    const end = getCalendarDisplayParts(event.end, calendarTimeZone);
+    if (!start || !end || start.date !== currentDate || end.date !== currentDate) {
+      return false;
+    }
+
+    const startMinutes = start.hours * 60 + start.minutes;
+    const endMinutes = end.hours * 60 + end.minutes;
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  });
+
+  if (activeEvent) {
+    return activeEvent;
+  }
+
+  const upcomingEvent = events
+    .filter((event) => !event.isAllDay)
+    .map((event) => ({
+      event,
+      start: getCalendarDisplayParts(event.start, calendarTimeZone),
+    }))
+    .filter(
+      (
+        entry,
+      ): entry is { event: OutlookCalendarEvent; start: NonNullable<ReturnType<typeof getCalendarDisplayParts>> } =>
+        Boolean(entry.start) && entry.start.date === currentDate,
+    )
+    .sort(
+      (left, right) =>
+        left.start.hours * 60 +
+        left.start.minutes -
+        (right.start.hours * 60 + right.start.minutes),
+    )
+    .find((entry) => leftOverMinutes(entry.start) >= currentMinutes);
+
+  return upcomingEvent?.event;
+}
+
+function leftOverMinutes(parts: { hours: number; minutes: number }) {
+  return parts.hours * 60 + parts.minutes;
+}
+
 function toCalendarInputParts(
   value?: { dateTime?: string; timeZone?: string },
   preferredTimeZone?: string,
@@ -1302,6 +1405,7 @@ function CalendarWorkspace({
   form,
   onFormChange,
   onStartCreate,
+  onStartCreateAt,
   onStartEdit,
   onCancelEdit,
   onSubmit,
@@ -1319,6 +1423,7 @@ function CalendarWorkspace({
   form: CalendarEventFormState;
   onFormChange: (field: keyof CalendarEventFormState, value: string | boolean) => void;
   onStartCreate: () => void;
+  onStartCreateAt: (seed: CalendarCreateSeed) => void;
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSubmit: () => void;
@@ -1439,6 +1544,14 @@ function CalendarWorkspace({
               const allDayEvents = bucket.events.filter((event) => event.isAllDay);
               const nowOffset = getCurrentTimeOffset(bucket.date, calendarTimeZone);
               const eventLayouts = getCalendarEventLayouts(timedEvents, calendarTimeZone);
+              const handleGridClick = (event: React.MouseEvent<HTMLDivElement>) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const relativeY = Math.max(0, Math.min(event.clientY - rect.top, gridHeight));
+                const slotMinutes =
+                  CALENDAR_START_HOUR * 60 +
+                  Math.round((relativeY / CALENDAR_HOUR_SLOT_HEIGHT) * 60);
+                onStartCreateAt(buildCalendarCreateSeed(bucket.key, slotMinutes));
+              };
 
               return (
                 <section
@@ -1468,8 +1581,8 @@ function CalendarWorkspace({
                                       ? 'border-[#f5d000]/40 bg-[#f5d000]/10'
                                       : 'border-border-light bg-surface-primary hover:bg-surface-hover',
                                   )}
-                                  onClick={() => onSelectEvent(event.id)}
-                                >
+                                onClick={() => onSelectEvent(event.id)}
+                              >
                                   <div className="text-[11px] font-semibold uppercase tracking-wide text-[#b88a00] dark:text-[#f5d000]">
                                     All day
                                   </div>
@@ -1487,6 +1600,7 @@ function CalendarWorkspace({
                     <div
                       className="relative rounded-xl border border-border-light bg-surface-primary"
                       style={{ height: `${gridHeight}px` }}
+                      onClick={handleGridClick}
                     >
                       <div className="absolute inset-0">
                         {hourLabels.slice(0, -1).map((hour, index) => (
@@ -1500,8 +1614,8 @@ function CalendarWorkspace({
 
                       <div className="absolute inset-0">
                         {timedEvents.length === 0 ? (
-                          <div className="flex h-full items-center justify-center px-4 text-xs text-text-secondary">
-                            No scheduled events in this time range.
+                          <div className="pointer-events-none flex h-full items-center justify-center px-4 text-center text-xs text-text-secondary">
+                            No scheduled events in this time range. Click anywhere to create a Teams meeting.
                           </div>
                         ) : null}
 
@@ -1528,7 +1642,10 @@ function CalendarWorkspace({
                                 left: `calc(8px + ((100% - 16px) * ${layout.left}))`,
                                 width: `calc(((100% - 16px) * ${layout.width}) - ${columnGap}px)`,
                               }}
-                              onClick={() => onSelectEvent(event.id)}
+                              onClick={(clickEvent) => {
+                                clickEvent.stopPropagation();
+                                onSelectEvent(event.id);
+                              }}
                             >
                               <div className="line-clamp-1 text-sm font-semibold text-text-primary">
                                 {event.subject}
@@ -1536,6 +1653,11 @@ function CalendarWorkspace({
                               <div className="mt-1 text-[11px] font-medium text-[#b88a00] dark:text-[#f5d000]">
                                 {formatCalendarTimeRange(event, calendarTimeZone)}
                               </div>
+                              {event.onlineMeeting?.joinUrl ? (
+                                <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-300">
+                                  Join on Teams
+                                </div>
+                              ) : null}
                               {event.location ? (
                                 <div className="mt-1 line-clamp-1 text-[11px] text-text-secondary">
                                   {event.location}
@@ -1758,15 +1880,29 @@ function CalendarWorkspace({
                 </div>
               ) : null}
             </div>
-            {selectedEvent.webLink ? (
-              <a
-                className="mt-4 inline-block text-sm font-medium text-blue-600 hover:underline dark:text-blue-300"
-                href={selectedEvent.webLink}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Open in Outlook
-              </a>
+            {(selectedEvent.webLink || selectedEvent.onlineMeeting?.joinUrl) ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {selectedEvent.onlineMeeting?.joinUrl ? (
+                  <a
+                    className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+                    href={selectedEvent.onlineMeeting.joinUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Join Teams meeting
+                  </a>
+                ) : null}
+                {selectedEvent.webLink ? (
+                  <a
+                    className="inline-flex items-center rounded-lg border border-border-light px-3 py-2 text-sm font-medium text-blue-600 transition-colors hover:bg-surface-hover dark:text-blue-300"
+                    href={selectedEvent.webLink}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open in Outlook
+                  </a>
+                ) : null}
+              </div>
             ) : null}
             {mutationError ? (
               <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600">
@@ -2580,10 +2716,14 @@ export default function OutlookPanel() {
       setSelectedCalendarEventId(undefined);
       return;
     }
-    if (!selectedCalendarEventId || !calendarEvents.some((event) => event.id === selectedCalendarEventId)) {
-      setSelectedCalendarEventId(calendarEvents[0].id);
+    if (
+      !selectedCalendarEventId ||
+      !calendarEvents.some((event) => event.id === selectedCalendarEventId)
+    ) {
+      const preferredEvent = getCurrentCalendarEvent(calendarData) || calendarEvents[0];
+      setSelectedCalendarEventId(preferredEvent.id);
     }
-  }, [calendarEvents, selectedCalendarEventId, workspaceTab]);
+  }, [calendarData, calendarEvents, selectedCalendarEventId, workspaceTab]);
 
   useEffect(() => {
     if (workspaceTab !== 'calendar') {
@@ -3115,10 +3255,25 @@ export default function OutlookPanel() {
     [],
   );
 
-  const beginCalendarCreate = useCallback(() => {
+  const beginCalendarCreate = useCallback((seed?: CalendarCreateSeed) => {
     setCalendarMutationError('');
     setCalendarEditorMode('create');
-    setCalendarForm(buildCalendarFormState(undefined, calendarTimeZone));
+    const nextForm = buildCalendarFormState(undefined, calendarTimeZone);
+    setCalendarForm(
+      seed
+        ? {
+            ...nextForm,
+            startDate: seed.startDate,
+            startTime: seed.startTime,
+            endDate: seed.endDate,
+            endTime: seed.endTime,
+            isOnlineMeeting: seed.isOnlineMeeting ?? true,
+          }
+        : {
+            ...nextForm,
+            isOnlineMeeting: true,
+          },
+    );
   }, [calendarTimeZone]);
 
   const beginCalendarEdit = useCallback(() => {
@@ -3561,7 +3716,8 @@ export default function OutlookPanel() {
           editorMode={calendarEditorMode}
           form={calendarForm}
           onFormChange={updateCalendarFormField}
-          onStartCreate={beginCalendarCreate}
+          onStartCreate={() => beginCalendarCreate()}
+          onStartCreateAt={beginCalendarCreate}
           onStartEdit={beginCalendarEdit}
           onCancelEdit={cancelCalendarEdit}
           onSubmit={handleSubmitCalendarEvent}

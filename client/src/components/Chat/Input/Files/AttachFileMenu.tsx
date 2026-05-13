@@ -82,12 +82,18 @@ const AttachFileMenu = ({
     ephemeralAgentByConvoId(conversationId),
   );
   const [toolResource, setToolResource] = useState<EToolResources | undefined>();
-  const { handleFileChange } = useFileHandlingNoChatContext(undefined, {
-    files,
-    setFiles,
-    setFilesLoading,
-    conversation,
-  });
+  const { handleFileChange } = useFileHandlingNoChatContext(
+    {
+      endpointOverride: endpoint ?? undefined,
+      endpointTypeOverride: endpointType ?? undefined,
+    },
+    {
+      files,
+      setFiles,
+      setFilesLoading,
+      conversation,
+    },
+  );
   const { handleSharePointFiles, isProcessing, downloadProgress } =
     useSharePointFileHandlingNoChatContext(
       { toolResource },

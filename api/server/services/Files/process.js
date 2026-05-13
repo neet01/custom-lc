@@ -44,6 +44,15 @@ const { determineFileType } = require('~/server/utils');
 const { STTService } = require('./Audio/STTService');
 const db = require('~/models');
 
+let maybeRegisterDocumentUpload = async () => null;
+try {
+  ({ maybeRegisterDocumentUpload } = require('~/server/services/Documents/register'));
+} catch (error) {
+  if (error?.code !== 'MODULE_NOT_FOUND') {
+    throw error;
+  }
+}
+
 /**
  * Creates a modular file upload wrapper that ensures filename sanitization
  * across all storage strategies. This prevents storage-specific implementations
@@ -460,6 +469,12 @@ const processFileUpload = async ({ req, res, metadata }) => {
     },
     true,
   );
+  await maybeRegisterDocumentUpload({
+    userId: req.user.id,
+    conversationId: metadata.conversationId ?? req.body.conversationId,
+    messageId: metadata.messageId ?? req.body.messageId,
+    file: result,
+  });
   res.status(200).json({ message: 'File uploaded and processed successfully', ...result });
 };
 
@@ -481,6 +496,34 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
   const { agent_id, tool_resource, file_id, temp_file_id = null } = metadata;
 
   let messageAttachment = !!metadata.message_file;
+
+  const resolveUploadEndpoint = async () => {
+    const explicitEndpoint =
+      metadata.endpointType ?? req.body.endpointType ?? metadata.endpoint ?? req.body.endpoint;
+
+    if (
+      explicitEndpoint &&
+      explicitEndpoint !== EModelEndpoint.agents &&
+      explicitEndpoint !== 'agents'
+    ) {
+      return explicitEndpoint;
+    }
+
+    const resolvedAgentId = metadata.agent_id ?? req.body.agent_id;
+    if (!resolvedAgentId) {
+      return explicitEndpoint;
+    }
+
+    try {
+      const agent = await db.getAgent({ id: resolvedAgentId });
+      return agent?.provider ?? explicitEndpoint;
+    } catch (error) {
+      logger.warn(
+        `[processAgentFileUpload] Failed to resolve provider from agent ${resolvedAgentId}: ${error.message}`,
+      );
+      return explicitEndpoint;
+    }
+  };
 
   if (agent_id && !tool_resource && !messageAttachment) {
     throw new Error('No tool resource provided for agent file upload');
@@ -532,6 +575,12 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       });
     }
     const result = await db.createFile(fileInfo, true);
+    await maybeRegisterDocumentUpload({
+      userId: req.user.id,
+      conversationId: metadata.conversationId ?? req.body.conversationId,
+      messageId: metadata.messageId ?? req.body.messageId,
+      file: result,
+    });
     return res
       .status(200)
       .json({ message: 'Agent file uploaded and processed successfully', ...result });
@@ -613,8 +662,11 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
   };
 
   const maybeFallbackBedrockMessageAttachment = async () => {
-    const uploadEndpoint =
-      metadata.endpointType ?? req.body.endpointType ?? metadata.endpoint ?? req.body.endpoint;
+    const uploadEndpoint = await resolveUploadEndpoint();
+
+    logger.debug(
+      `[processAgentFileUpload] upload routing | messageAttachment=${messageAttachment} | endpoint=${metadata.endpoint ?? req.body.endpoint ?? ''} | endpointType=${metadata.endpointType ?? req.body.endpointType ?? ''} | resolvedEndpoint=${uploadEndpoint ?? ''} | agentId=${metadata.agent_id ?? req.body.agent_id ?? ''} | mimeType=${file.mimetype} | bytes=${file.size ?? 0}`,
+    );
 
     if (!messageAttachment || uploadEndpoint !== EModelEndpoint.bedrock) {
       return false;
@@ -773,6 +825,12 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
   });
 
   const result = await db.createFile(fileInfo, true);
+  await maybeRegisterDocumentUpload({
+    userId: req.user.id,
+    conversationId: metadata.conversationId ?? req.body.conversationId,
+    messageId: metadata.messageId ?? req.body.messageId,
+    file: result,
+  });
 
   res.status(200).json({ message: 'Agent file uploaded and processed successfully', ...result });
 };

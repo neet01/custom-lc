@@ -3,6 +3,9 @@ import { createTokenModel } from './token';
 import { createSessionModel } from './session';
 import { createBalanceModel } from './balance';
 import { createConversationModel } from './convo';
+import { createDocumentModel } from './document';
+import { createDocumentVersionModel } from './documentVersion';
+import { createDocumentJobModel } from './documentJob';
 import { createMessageModel } from './message';
 import { createAgentModel } from './agent';
 import { createAgentApiKeyModel } from './agentApiKey';
@@ -45,6 +48,9 @@ export function createModels(mongoose: typeof import('mongoose')) {
     Session: createSessionModel(mongoose),
     Balance: createBalanceModel(mongoose),
     Conversation: createConversationModel(mongoose),
+    Document: createDocumentModel(mongoose),
+    DocumentVersion: createDocumentVersionModel(mongoose),
+    DocumentJob: createDocumentJobModel(mongoose),
     Message: createMessageModel(mongoose),
     Agent: createAgentModel(mongoose),
     AgentApiKey: createAgentApiKeyModel(mongoose),

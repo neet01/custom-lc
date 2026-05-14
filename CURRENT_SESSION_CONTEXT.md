@@ -167,6 +167,48 @@ Current v1 scope:
 
 These are the most recent changes made in this session.
 
+### Document intelligence planning and Phase 1 kickoff
+
+New architecture/design document added:
+
+- [DOCUMENT_INTELLIGENCE_SYSTEM.md](/Users/praneetkotah/Desktop/Development/LibreChat/DOCUMENT_INTELLIGENCE_SYSTEM.md)
+
+Reasoning captured there:
+
+- provider-native uploads are not a stable foundation for enterprise-scale document reasoning
+- Cortex needs its own document ingestion, extraction, chunking, retrieval, and lineage model
+- S3 + Mongo + later OpenSearch is the preferred storage split
+- LibreChat services should remain the processing/orchestration layer, not the durable corpus store
+
+Phase 1 scaffolding implemented:
+
+- new persistence schemas/models/methods for:
+  - `Document`
+  - `DocumentVersion`
+  - `DocumentJob`
+- new upload registration service:
+  - [api/server/services/Documents/register.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Documents/register.js)
+- existing upload flow now auto-registers indexable document-like files into the document pipeline
+
+Current Phase 1 behavior:
+
+- image/audio/video uploads are ignored by the document pipeline
+- document-like uploads create:
+  - a canonical `Document`
+  - initial `DocumentVersion`
+  - initial pending `DocumentJob`
+- text-backed uploads created by the Bedrock oversize fallback enter the pipeline with:
+  - `extractionKind = text`
+  - initial job type `chunk`
+- binary/provider-backed documents enter the pipeline with:
+  - `extractionKind = none`
+  - initial job type `extract`
+
+Intent:
+
+- establish durable Cortex-owned document lineage without changing the current chat/file upload contract
+- create the substrate for later extraction workers and retrieval flows
+
 ### Outlook calendar UI
 
 - Replaced per-day repeated hour labels with one shared left-side timescale.

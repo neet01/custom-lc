@@ -5,6 +5,7 @@ import type { RoleMethods, RoleDeps } from './role';
 import { createUserMethods, DEFAULT_SESSION_EXPIRY, type UserMethods } from './user';
 import { createKeyMethods, type KeyMethods } from './key';
 import { createFileMethods, type FileMethods } from './file';
+import { createDocumentMethods, type DocumentMethods } from './document';
 /* Memories */
 import { createMemoryMethods, type MemoryMethods } from './memory';
 /* Agent Categories */
@@ -69,6 +70,7 @@ export type AllMethods = UserMethods &
   RoleMethods &
   KeyMethods &
   FileMethods &
+  DocumentMethods &
   MemoryMethods &
   AgentCategoryMethods &
   AgentApiKeyMethods &
@@ -195,6 +197,7 @@ export function createMethods(
     ...roleMethods,
     ...createKeyMethods(mongoose),
     ...createFileMethods(mongoose),
+    ...createDocumentMethods(mongoose),
     ...createMemoryMethods(mongoose),
     ...createAgentCategoryMethods(mongoose),
     ...createAgentApiKeyMethods(mongoose),
@@ -239,6 +242,7 @@ export type {
   RoleMethods,
   KeyMethods,
   FileMethods,
+  DocumentMethods,
   MemoryMethods,
   AgentCategoryMethods,
   AgentApiKeyMethods,

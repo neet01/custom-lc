@@ -1,0 +1,357 @@
+# Cortex Document Intelligence System
+
+Last updated: 2026-05-13
+
+## Purpose
+
+This document captures the plan for turning Cortex from a chat application with file uploads into a central enterprise intelligence layer.
+
+The immediate trigger was Bedrock Converse file upload limits. That issue exposed a broader architectural constraint: provider-native file handling is not a stable foundation for enterprise-scale document reasoning.
+
+The correct long-term design is a Cortex-owned document pipeline.
+
+## Why This Needs To Exist
+
+Provider-native uploads are useful, but they are not a reliable system of record.
+
+They fail against enterprise requirements:
+
+- provider size limits block legitimate engineering and finance documents
+- rich files lose too much fidelity when reduced to one flat text blob
+- retrieval quality degrades as file sizes scale
+- provider APIs do not give Cortex enough control over chunking, lineage, and citations
+- different providers impose different document constraints, which leads to inconsistent user behavior
+
+If Cortex is going to be the enterprise intelligence layer, it needs to own:
+
+- document ingestion
+- document metadata
+- extraction strategy
+- chunking
+- retrieval
+- evidence lineage
+
+The model should reason over Cortex-managed evidence, not raw enterprise files whenever scale matters.
+
+## Design Principles
+
+### 1. Keep original files as the source of truth
+
+Every uploaded file should have a durable original artifact.
+
+### 2. Separate storage from reasoning
+
+The LLM should not be the document system. Cortex should manage storage, structure, and retrieval, then supply the relevant slices to the model.
+
+### 3. Prefer structure over flat text
+
+For PDFs, spreadsheets, Word docs, and engineering documentation, preserving structure matters:
+
+- page boundaries
+- headings
+- tables
+- ranges
+- sheet names
+- captions
+- adjacency
+
+### 4. Retrieval before generation
+
+Large files should be answered through retrieval and synthesis, not by pushing the whole artifact into a single model call.
+
+### 5. Evidence must be auditable
+
+Answers should be traceable to:
+
+- document version
+- chunk(s)
+- pages or sheets
+- extraction strategy
+
+## Target Architecture
+
+### Durable storage
+
+- **S3** for original files and derived artifacts
+- **Mongo** for document metadata, jobs, versions, chunks, and lineage
+- **OpenSearch** later for full-text and hybrid retrieval
+
+### Processing layer
+
+LibreChat’s containerized services should remain the orchestration and extraction layer:
+
+- upload intake
+- extraction workers
+- chunking workers
+- retrieval API
+- spreadsheet and document-specific transforms
+
+The containers are the processing layer, not the long-term corpus store.
+
+## Core Entities
+
+### Document
+
+Represents the canonical Cortex record for an uploaded artifact.
+
+Fields:
+
+- user
+- source file id
+- filename
+- mime type
+- bytes
+- source
+- context
+- pipeline status
+- latest version id
+- current job id
+
+### Document Version
+
+Represents one extracted/reasoned-over version of a document.
+
+Fields:
+
+- document id
+- source file id
+- version number
+- source filepath
+- extraction kind
+- text length
+- chunk count
+- status
+
+### Document Job
+
+Represents queued or running work against a document version.
+
+Fields:
+
+- document id
+- document version id
+- user
+- job type
+- status
+- attempts
+- started/completed timestamps
+- error state
+
+### Future: Document Chunk
+
+This is intentionally deferred until the next phase. The long-term chunk model should preserve order and adjacency.
+
+Expected fields:
+
+- document version id
+- order index
+- prev chunk id
+- next chunk id
+- page range
+- sheet name
+- section path
+- token estimate
+- content
+
+## Phased Rollout
+
+## Phase 0: Reliability Stopgap
+
+Status: implemented
+
+Goal:
+
+- prevent Bedrock file-size failures from breaking chats
+
+What was done:
+
+- oversized Bedrock-compatible uploads now fall back to text extraction during upload rather than failing during Converse request assembly
+
+Limitation:
+
+- this is a safety net, not the target architecture
+
+## Phase 1: Canonical Document Registration
+
+Status: being implemented now
+
+Goal:
+
+- create durable Cortex-owned document records at upload time
+
+Scope:
+
+- register uploaded document-like files as `Document` records
+- create first `DocumentVersion`
+- create initial `DocumentJob`
+- link back to the existing file upload record by `sourceFileId`
+
+Reasoning:
+
+- this introduces the document pipeline without changing the chat upload contract
+- uploads remain stable
+- Cortex starts building document lineage immediately
+- future extraction and retrieval workers get a durable queueable substrate
+
+Non-goals:
+
+- no retrieval yet
+- no chunk persistence yet
+- no OpenSearch dependency yet
+- no UI changes yet
+
+## Phase 2: Structured Extraction
+
+Goal:
+
+- extract structured representations for supported document types
+
+Target support:
+
+- PDF
+- DOCX
+- XLSX
+- CSV
+- HTML / Markdown / plain text
+
+Output should preserve structure where possible:
+
+- pages
+- sections
+- headings
+- sheets
+- tables
+- formulas
+
+Reasoning:
+
+- flat text is too lossy for enterprise engineering and finance docs
+
+## Phase 3: Chunk Graph
+
+Goal:
+
+- persist retrieval-ready document chunks with order and adjacency
+
+Requirements:
+
+- structural chunking, not naive character splitting
+- overlap between adjacent chunks
+- page/sheet/section metadata
+- chunk lineage to version/source document
+
+Reasoning:
+
+- this is what allows large documents to be queried without handing the whole file to a model
+
+## Phase 4: Retrieval Layer
+
+Goal:
+
+- answer document questions through retrieval instead of raw file injection
+
+Modes:
+
+- exact keyword
+- metadata-filtered lookup
+- semantic retrieval later
+- adjacency expansion
+
+Routing logic should decide between:
+
+- native provider upload
+- Cortex-managed chunk retrieval
+- spreadsheet-specific analysis flow
+
+## Phase 5: Hierarchical Synthesis
+
+Goal:
+
+- support summaries and answers over large corpora
+
+Patterns:
+
+- chunk-level summarization
+- section-level summarization
+- final synthesis over retrieved evidence
+
+Reasoning:
+
+- enterprise documents will exceed single-context assumptions regularly
+
+## Phase 6: Search Infrastructure
+
+Goal:
+
+- add a proper search backend once chunking/retrieval justify it
+
+Recommended direction:
+
+- OpenSearch for full-text + later hybrid retrieval
+
+Reasoning:
+
+- Mongo is fine for metadata and lineage
+- Mongo is not the right long-term primary retrieval engine for enterprise-scale corpora
+
+## Phase 7: Operations And Governance
+
+Goal:
+
+- make the system observable and auditable
+
+Required admin surfaces:
+
+- ingestion success/failure counts
+- extraction job durations
+- chunk counts per document
+- retrieval hit rates
+- oversized-provider fallback frequency
+- top file types
+- top document-heavy users or workflows
+
+## Infrastructure Position
+
+### What should stay in LibreChat services
+
+- upload handling
+- extraction orchestration
+- spreadsheet/doc processing
+- document registration
+- retrieval API
+
+### What should not live inside containers as durable storage
+
+- the long-term RAG corpus
+- original enterprise documents
+- durable retrieval indexes
+
+### Preferred storage split
+
+- S3: originals and derived artifacts
+- Mongo: metadata, jobs, versions, chunks, lineage
+- OpenSearch: retrieval indexes when Phase 6 is reached
+
+## Phase 1 Implementation Decision
+
+Phase 1 is deliberately conservative.
+
+It is implemented as an additive layer on top of the existing `File` model:
+
+- uploads still create `File` records exactly as before
+- document-like uploads are additionally registered as `Document` records
+- the initial version and initial pending job are created automatically
+
+This is the right first step because it:
+
+- avoids destabilizing the current upload and chat workflow
+- gives Cortex durable document lineage immediately
+- creates a clean handoff point for later extraction and chunking workers
+
+## Immediate Next Steps After Phase 1
+
+1. Add a worker/service that consumes pending `DocumentJob` records.
+2. Persist structured extraction output for PDFs, Word docs, and spreadsheets.
+3. Introduce `DocumentChunk` persistence.
+4. Route oversized Bedrock documents to chunk retrieval instead of plain-text fallback.
+5. Add citations and admin visibility.

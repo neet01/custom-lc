@@ -1,5 +1,6 @@
 const { isEnabled } = require('@librechat/api');
-const { logger } = require('@librechat/data-schemas');
+const { randomUUID } = require('crypto');
+const { logger, runAsSystem } = require('@librechat/data-schemas');
 const { getGraphApiToken } = require('~/server/services/GraphTokenService');
 const db = require('~/models');
 
@@ -28,6 +29,7 @@ const DEFAULT_CHAT_LIMIT = 50;
 const DEFAULT_MESSAGES_PER_CHAT = 250;
 const DEFAULT_SEARCH_LIMIT = 25;
 const DEFAULT_SYNC_STALE_MINUTES = 45;
+const DEFAULT_MAX_CONCURRENT_SYNCS = 3;
 const HEARTBEAT_MIN_INTERVAL_MS = 30 * 1000;
 const HEARTBEAT_CHAT_INTERVAL = 5;
 
@@ -62,6 +64,8 @@ function normalizeGraphBaseUrl(baseUrl = DEFAULT_GRAPH_BASE_URL) {
 }
 
 function getTeamsArchiveConfig() {
+  const parsedMaxConcurrentSyncs = Number(process.env.TEAMS_ARCHIVE_MAX_CONCURRENT_SYNCS);
+
   return {
     enabled: isTeamsArchiveEnabled(),
     graphBaseUrl: normalizeGraphBaseUrl(
@@ -74,7 +78,27 @@ function getTeamsArchiveConfig() {
     defaultSearchLimit: Number(process.env.TEAMS_ARCHIVE_SEARCH_LIMIT) || DEFAULT_SEARCH_LIMIT,
     syncStaleMinutes:
       Number(process.env.TEAMS_ARCHIVE_SYNC_STALE_MINUTES) || DEFAULT_SYNC_STALE_MINUTES,
+    maxConcurrentSyncs:
+      Number.isFinite(parsedMaxConcurrentSyncs) && parsedMaxConcurrentSyncs >= 0
+        ? Math.floor(parsedMaxConcurrentSyncs)
+        : DEFAULT_MAX_CONCURRENT_SYNCS,
   };
+}
+
+function getLeaseDurationMs() {
+  return getTeamsArchiveConfig().syncStaleMinutes * 60 * 1000;
+}
+
+function getUserLeaseKey(userId) {
+  return `user:${userId}`;
+}
+
+function getSlotLeaseKey(slotNumber) {
+  return `slot:${slotNumber}`;
+}
+
+function getLeaseExpiryDate() {
+  return new Date(Date.now() + getLeaseDurationMs());
 }
 
 function assertEnabled() {
@@ -642,6 +666,74 @@ async function heartbeatSyncJob(syncJobId, updates = {}) {
   return db.updateTeamsArchiveSyncJob(syncJobId, updates);
 }
 
+async function acquireSyncLease({ leaseKey, leaseType, ownerToken, userId }) {
+  return runAsSystem(async () =>
+    db.acquireTeamsArchiveSyncLease({
+      leaseKey,
+      leaseType,
+      ownerToken,
+      user: userId,
+      leaseExpiresAt: getLeaseExpiryDate(),
+      lastHeartbeatAt: new Date(),
+    }),
+  );
+}
+
+async function refreshSyncLease(leaseKey, ownerToken) {
+  return runAsSystem(async () =>
+    db.refreshTeamsArchiveSyncLease(leaseKey, ownerToken, getLeaseExpiryDate()),
+  );
+}
+
+async function releaseSyncLease(leaseKey, ownerToken) {
+  return runAsSystem(async () => db.releaseTeamsArchiveSyncLease(leaseKey, ownerToken));
+}
+
+async function countActiveSyncSlots() {
+  return runAsSystem(async () =>
+    db.countActiveTeamsArchiveSyncLeases({
+      leaseType: 'slot',
+      leaseExpiresAt: { $gt: new Date() },
+    }),
+  );
+}
+
+async function acquireGlobalSyncSlot(ownerToken, userId, maxConcurrentSyncs) {
+  if (!maxConcurrentSyncs || maxConcurrentSyncs <= 0) {
+    return null;
+  }
+
+  for (let slotNumber = 0; slotNumber < maxConcurrentSyncs; slotNumber += 1) {
+    const leaseKey = getSlotLeaseKey(slotNumber);
+    const lease = await acquireSyncLease({
+      leaseKey,
+      leaseType: 'slot',
+      ownerToken,
+      userId,
+    });
+
+    if (lease) {
+      return leaseKey;
+    }
+  }
+
+  return null;
+}
+
+async function heartbeatSyncExecution(syncJobId, updates, leaseContext = {}) {
+  const operations = [heartbeatSyncJob(syncJobId, updates)];
+
+  if (leaseContext.userLeaseKey && leaseContext.ownerToken) {
+    operations.push(refreshSyncLease(leaseContext.userLeaseKey, leaseContext.ownerToken));
+  }
+
+  if (leaseContext.slotLeaseKey && leaseContext.ownerToken) {
+    operations.push(refreshSyncLease(leaseContext.slotLeaseKey, leaseContext.ownerToken));
+  }
+
+  await Promise.all(operations);
+}
+
 async function getSyncJobById(syncJobId) {
   if (typeof db.findTeamsArchiveSyncJobById !== 'function') {
     return null;
@@ -722,19 +814,22 @@ async function getStatus(user) {
   const config = getTeamsArchiveConfig();
   const userId = user?.id || user?._id?.toString();
   await reconcileRunningSyncJob(userId);
-  const [conversationCount, messageCount, latestSync, latestProjection] = await Promise.all([
+  const [conversationCount, messageCount, latestSync, latestProjection, activeSyncs] = await Promise.all([
     userId ? db.countTeamsArchiveConversations({ user: userId }) : 0,
     userId ? db.countTeamsArchiveMessages({ user: userId }) : 0,
     userId ? db.findLatestTeamsArchiveSyncJob({ user: userId }) : null,
     typeof db.findLatestEnterpriseMemoryJob === 'function'
       ? db.findLatestEnterpriseMemoryJob({ user: userId, source: 'teams', jobType: 'projection' })
       : null,
+    countActiveSyncSlots(),
   ]);
 
   return {
     enabled: config.enabled,
     graphBaseUrl: config.graphBaseUrl,
     graphScopes: config.scopes,
+    maxConcurrentSyncs: config.maxConcurrentSyncs,
+    activeSyncs,
     syncModes: ['chats'],
     channelSyncSupported: false,
     conversationCount,
@@ -795,6 +890,65 @@ async function cancelRunningSync(user) {
   };
 }
 
+async function getSyncStartAvailability(user) {
+  assertEnabled();
+  assertDelegatedUser(user);
+
+  const userId = user?.id || user?._id?.toString();
+  if (!userId) {
+    throw new TeamsArchiveServiceError('User id is required for Teams archive sync', 400);
+  }
+
+  const config = getTeamsArchiveConfig();
+  const latestRunningJob = await reconcileRunningSyncJob(userId);
+  if (latestRunningJob?.status === 'running') {
+    return {
+      allowed: false,
+      reason: 'already_running',
+      status: 202,
+      syncJob: latestRunningJob,
+      message: 'A Teams archive sync is already running for this user.',
+    };
+  }
+
+  const activeUserLeases = await runAsSystem(async () =>
+    db.countActiveTeamsArchiveSyncLeases({
+      leaseKey: getUserLeaseKey(userId),
+      leaseType: 'user',
+      leaseExpiresAt: { $gt: new Date() },
+    }),
+  );
+
+  if (activeUserLeases > 0) {
+    return {
+      allowed: false,
+      reason: 'user_lock',
+      status: 409,
+      message: 'A Teams archive sync is already in progress or still shutting down for this user.',
+    };
+  }
+
+  const activeSyncs = await countActiveSyncSlots();
+  if (config.maxConcurrentSyncs > 0 && activeSyncs >= config.maxConcurrentSyncs) {
+    return {
+      allowed: false,
+      reason: 'capacity',
+      status: 429,
+      message: 'Teams archive sync capacity is full. Try again in a few minutes.',
+      details: {
+        activeSyncs,
+        maxConcurrentSyncs: config.maxConcurrentSyncs,
+      },
+    };
+  }
+
+  return {
+    allowed: true,
+    activeSyncs,
+    maxConcurrentSyncs: config.maxConcurrentSyncs,
+  };
+}
+
 async function syncUserArchive(user, options = {}) {
   assertEnabled();
   assertDelegatedUser(user);
@@ -811,6 +965,10 @@ async function syncUserArchive(user, options = {}) {
   });
   const mode = options.mode === 'chats' ? 'chats' : 'chats';
   const latestRunningJob = await reconcileRunningSyncJob(userId);
+  const ownerToken = randomUUID();
+  const userLeaseKey = getUserLeaseKey(userId);
+  let slotLeaseKey = null;
+  let syncJob = null;
 
   if (latestRunningJob?.status === 'running') {
     return {
@@ -824,16 +982,63 @@ async function syncUserArchive(user, options = {}) {
     };
   }
 
-  const syncJob = await db.createTeamsArchiveSyncJob({
-    user: userId,
-    status: 'running',
-    mode,
-    conversationCount: 0,
-    messageCount: 0,
-    startedAt: new Date(),
-  });
-
   try {
+    const userLease = await acquireSyncLease({
+      leaseKey: userLeaseKey,
+      leaseType: 'user',
+      ownerToken,
+      userId,
+    });
+
+    if (!userLease) {
+      const concurrentRunningJob = await reconcileRunningSyncJob(userId);
+      if (concurrentRunningJob?.status === 'running') {
+        return {
+          syncJob: concurrentRunningJob,
+          mode,
+          conversationCount: concurrentRunningJob.conversationCount || 0,
+          messageCount: concurrentRunningJob.messageCount || 0,
+          conversations: [],
+          memoryProjection: null,
+          alreadyRunning: true,
+        };
+      }
+
+      throw new TeamsArchiveServiceError(
+        'A Teams archive sync is already in progress or still shutting down for this user',
+        409,
+      );
+    }
+
+    slotLeaseKey = await acquireGlobalSyncSlot(ownerToken, userId, config.maxConcurrentSyncs);
+
+    if (config.maxConcurrentSyncs > 0 && !slotLeaseKey) {
+      const activeSyncs = await countActiveSyncSlots();
+      logger.warn('[TeamsArchiveService] Global Teams sync capacity reached', {
+        userId,
+        activeSyncs,
+        maxConcurrentSyncs: config.maxConcurrentSyncs,
+      });
+
+      throw new TeamsArchiveServiceError(
+        'Teams archive sync capacity is full. Try again in a few minutes.',
+        429,
+        {
+          activeSyncs,
+          maxConcurrentSyncs: config.maxConcurrentSyncs,
+        },
+      );
+    }
+
+    syncJob = await db.createTeamsArchiveSyncJob({
+      user: userId,
+      status: 'running',
+      mode,
+      conversationCount: 0,
+      messageCount: 0,
+      startedAt: new Date(),
+    });
+
     const syncedConversations = [];
     let nextLink = null;
     let processedChats = 0;
@@ -876,10 +1081,14 @@ async function syncUserArchive(user, options = {}) {
         hasNextPage: Boolean(response?.['@odata.nextLink']),
       });
 
-      await heartbeatSyncJob(syncJob._id?.toString?.() || syncJob.id, {
-        conversationCount: processedChats,
-        messageCount: persistedMessages,
-      });
+      await heartbeatSyncExecution(
+        syncJob._id?.toString?.() || syncJob.id,
+        {
+          conversationCount: processedChats,
+          messageCount: persistedMessages,
+        },
+        { userLeaseKey, slotLeaseKey, ownerToken },
+      );
       lastHeartbeatAt = Date.now();
 
       for (const chat of chats) {
@@ -949,10 +1158,14 @@ async function syncUserArchive(user, options = {}) {
           Date.now() - lastHeartbeatAt >= HEARTBEAT_MIN_INTERVAL_MS;
 
         if (shouldHeartbeat) {
-          await heartbeatSyncJob(syncJob._id?.toString?.() || syncJob.id, {
-            conversationCount: processedChats,
-            messageCount: persistedMessages,
-          });
+          await heartbeatSyncExecution(
+            syncJob._id?.toString?.() || syncJob.id,
+            {
+              conversationCount: processedChats,
+              messageCount: persistedMessages,
+            },
+            { userLeaseKey, slotLeaseKey, ownerToken },
+          );
           lastHeartbeatAt = Date.now();
         }
       }
@@ -979,7 +1192,7 @@ async function syncUserArchive(user, options = {}) {
 
     const updatedJob = await db.updateTeamsArchiveSyncJob(syncJob._id?.toString?.() || syncJob.id, {
       status: 'success',
-      conversationCount: syncedConversations.length,
+      conversationCount: processedChats,
       messageCount: persistedMessages,
       completedAt: new Date(),
     });
@@ -1022,6 +1235,10 @@ async function syncUserArchive(user, options = {}) {
       memoryProjection,
     };
   } catch (error) {
+    if (!syncJob) {
+      throw error;
+    }
+
     if (error instanceof TeamsArchiveSyncCancelledError) {
       const cancelledJob =
         (await getSyncJobById(syncJob._id?.toString?.() || syncJob.id)) ||
@@ -1048,6 +1265,14 @@ async function syncUserArchive(user, options = {}) {
       completedAt: new Date(),
     });
     throw error;
+  } finally {
+    const releaseOperations = [releaseSyncLease(userLeaseKey, ownerToken)];
+
+    if (slotLeaseKey) {
+      releaseOperations.push(releaseSyncLease(slotLeaseKey, ownerToken));
+    }
+
+    await Promise.allSettled(releaseOperations);
   }
 }
 
@@ -1661,6 +1886,7 @@ module.exports = {
   TeamsArchiveSyncCancelledError,
   getStatus,
   cancelRunningSync,
+  getSyncStartAvailability,
   syncUserArchive,
   listConversations,
   listConversationMessages,

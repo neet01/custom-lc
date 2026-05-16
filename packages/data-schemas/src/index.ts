@@ -17,6 +17,7 @@ export type { IIssueReport } from './schema/issueReport';
 export type { IOutlookAudit } from './schema/outlookAudit';
 export type { ITeamsArchiveConversation } from './schema/teamsArchiveConversation';
 export type { ITeamsArchiveMessage } from './schema/teamsArchiveMessage';
+export type { ITeamsArchiveSyncLease } from './schema/teamsArchiveSyncLease';
 export type { ITeamsArchiveSyncJob } from './schema/teamsArchiveSyncJob';
 export {
   createMethods,

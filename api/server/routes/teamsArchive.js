@@ -34,6 +34,26 @@ router.post('/sync', async (req, res) => {
     const runAsync = payload.async === true || req.query.async === 'true';
 
     if (runAsync) {
+      const availability = await TeamsArchiveService.getSyncStartAvailability(req.user);
+
+      if (!availability.allowed) {
+        if (availability.reason === 'already_running') {
+          return res.status(202).json({
+            accepted: true,
+            status: 'running',
+            mode: 'chats',
+            alreadyRunning: true,
+            syncJob: availability.syncJob,
+            message: availability.message,
+          });
+        }
+
+        return res.status(availability.status || 409).json({
+          message: availability.message,
+          details: availability.details,
+        });
+      }
+
       void TeamsArchiveService.syncUserArchive(req.user, payload).catch((error) => {
         if (error?.name === 'TeamsArchiveSyncCancelledError') {
           logger.info('[TeamsArchiveRoutes] Background Teams archive sync cancelled by user');

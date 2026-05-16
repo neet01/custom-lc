@@ -324,6 +324,31 @@ Current implementation:
 Why this matters:
 
 - the current failure mode for raw tool retrieval is prompt bloat
+- Monday rollout also needs operational guardrails, not just better retrieval
+
+### Teams sync operational hardening
+
+Status: implemented
+
+Current implementation:
+
+- per-user Teams sync acquisition now uses an atomic Mongo-backed lease
+- global active Teams syncs now use a slot-based concurrency cap
+- stale-job reconciliation still exists and now works alongside the lease model
+- sync status exposes:
+  - `activeSyncs`
+  - `maxConcurrentSyncs`
+
+Operator envs:
+
+- `TEAMS_ARCHIVE_SYNC_STALE_MINUTES`
+- `TEAMS_ARCHIVE_MAX_CONCURRENT_SYNCS`
+
+Why this matters:
+
+- prevents duplicate sync races for the same user across API replicas
+- bounds how many concurrent backfills can compete with normal app traffic
+- provides a safer bridge until the sync engine is moved to a dedicated worker/ECS architecture
 - bounded windows and summaries let Cortex answer high-level questions without replaying entire threads
 - this is the bridge between source archive search and later hybrid/semantic enterprise retrieval
 

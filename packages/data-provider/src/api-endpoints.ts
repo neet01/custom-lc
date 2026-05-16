@@ -245,6 +245,11 @@ export const resendVerificationEmail = () => `${BASE_URL}/api/user/verify/resend
 export const adminUsers = (params: q.AdminUsersListParams = {}) =>
   `${BASE_URL}/api/admin/users${buildQuery(params as Record<string, unknown>)}`;
 
+export const adminBaseConfig = () => `${BASE_URL}/api/admin/config/base`;
+
+export const adminPatchConfigFields = (principalType: string, principalId: string) =>
+  `${BASE_URL}/api/admin/config/${encodeURIComponent(principalType)}/${encodeURIComponent(principalId)}/fields`;
+
 export const adminUserBalance = (userId: string) =>
   `${BASE_URL}/api/admin/users/${encodeURIComponent(userId)}/balance`;
 

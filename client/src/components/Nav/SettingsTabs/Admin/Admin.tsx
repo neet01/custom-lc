@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Spinner, useToastContext } from '@librechat/client';
+import { Spinner, Switch, useToastContext } from '@librechat/client';
 import { BarChart3, Download, Mail, RefreshCw, ShieldAlert, Users } from 'lucide-react';
 import { dataService, SystemRoles } from 'librechat-data-provider';
 import type {
@@ -10,8 +10,10 @@ import type {
   AdminUserListItem,
 } from 'librechat-data-provider';
 import {
+  useAdminBaseConfigQuery,
   useAdminIssuesQuery,
   useAdminOutlookAuditQuery,
+  useAdminSummarizationToggleMutation,
   useAdminUpdateUserBalanceMutation,
   useAdminUsageQuery,
   useAdminUsageSummaryQuery,
@@ -24,6 +26,10 @@ const DAY_OPTIONS = [7, 30, 90];
 const PAGE_SIZE = 25;
 
 type AdminTab = 'usage-users' | 'recent-requests' | 'users' | 'outlook-audit' | 'issues';
+type SummarizationConfigShape = {
+  enabled?: boolean;
+  [key: string]: unknown;
+};
 
 function formatNumber(value: number | null | undefined) {
   return new Intl.NumberFormat().format(value ?? 0);
@@ -158,6 +164,16 @@ function formatAdminDateTime(value: string | null | undefined) {
   }
 }
 
+function isSummarizationEnabled(config: Record<string, unknown> | undefined) {
+  const summarization = config?.summarization;
+
+  if (!summarization || typeof summarization !== 'object') {
+    return true;
+  }
+
+  return (summarization as SummarizationConfigShape).enabled !== false;
+}
+
 function TabButton({
   active,
   icon: Icon,
@@ -284,8 +300,11 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const [issuesOffset, setIssuesOffset] = useState(0);
   const [outlookAuditOffset, setOutlookAuditOffset] = useState(0);
   const [balanceDrafts, setBalanceDrafts] = useState<Record<string, string>>({});
+  const [isExportingFinanceReport, setIsExportingFinanceReport] = useState(false);
   const isAdmin = user?.role === SystemRoles.ADMIN;
   const updateUserBalance = useAdminUpdateUserBalanceMutation();
+  const adminBaseConfigQuery = useAdminBaseConfigQuery({ enabled: isAdmin });
+  const updateSummarization = useAdminSummarizationToggleMutation();
 
   const usersQuery = useAdminUsersQuery(
     { limit: PAGE_SIZE, offset: usersOffset },
@@ -355,6 +374,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
     outlookAuditQuery.isLoading;
   const hasError =
     usersQuery.isError ||
+    adminBaseConfigQuery.isError ||
     summaryQuery.isError ||
     recentUsageQuery.isError ||
     issuesQuery.isError ||
@@ -370,7 +390,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const openIssues = issuesQuery.data?.issues ?? [];
   const outlookAudits = outlookAuditQuery.data?.audits ?? [];
   const directoryUsers = usersQuery.data?.users ?? [];
-  const [isExportingFinanceReport, setIsExportingFinanceReport] = useState(false);
+  const summarizationEnabled = isSummarizationEnabled(adminBaseConfigQuery.data?.config);
 
   const handleBalanceSave = async (row: AdminUserListItem) => {
     const rawValue = balanceDrafts[row.id] ?? String(row.tokenCredits ?? 0);
@@ -408,6 +428,27 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
     } catch (error) {
       const message =
         error instanceof Error && error.message ? error.message : 'Failed to update user balance.';
+      showToast({
+        status: 'error',
+        message,
+      });
+    }
+  };
+
+  const handleSummarizationToggle = async (checked: boolean) => {
+    try {
+      await updateSummarization.mutateAsync(checked);
+      showToast({
+        status: 'success',
+        message: checked
+          ? 'Agent context compaction enabled.'
+          : 'Agent context compaction disabled.',
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Failed to update agent context compaction.';
       showToast({
         status: 'error',
         message,
@@ -493,6 +534,29 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
 
       {!isInitialLoading && !hasError ? (
         <>
+          <section className="rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-text-primary">Agent context compaction</h3>
+                <p className="mt-1 text-xs text-text-secondary">
+                  Globally controls rolling summarization for agent chats when prompts approach the
+                  model context limit.
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-text-secondary">
+                  {summarizationEnabled ? 'Enabled' : 'Disabled'}
+                </span>
+                <Switch
+                  checked={summarizationEnabled}
+                  disabled={adminBaseConfigQuery.isFetching || updateSummarization.isLoading}
+                  onCheckedChange={(checked) => void handleSummarizationToggle(Boolean(checked))}
+                  aria-label="Toggle agent context compaction"
+                />
+              </div>
+            </div>
+          </section>
+
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <MetricCard
               label="Total tokens"

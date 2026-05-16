@@ -33,6 +33,7 @@ import { createConversationTagModel } from './conversationTag';
 import { createSharedLinkModel } from './sharedLink';
 import { createTeamsArchiveConversationModel } from './teamsArchiveConversation';
 import { createTeamsArchiveMessageModel } from './teamsArchiveMessage';
+import { createTeamsArchiveSyncLeaseModel } from './teamsArchiveSyncLease';
 import { createTeamsArchiveSyncJobModel } from './teamsArchiveSyncJob';
 import { createToolCallModel } from './toolCall';
 import { createMemoryModel } from './memory';
@@ -82,6 +83,7 @@ export function createModels(mongoose: typeof import('mongoose')) {
     SharedLink: createSharedLinkModel(mongoose),
     TeamsArchiveConversation: createTeamsArchiveConversationModel(mongoose),
     TeamsArchiveMessage: createTeamsArchiveMessageModel(mongoose),
+    TeamsArchiveSyncLease: createTeamsArchiveSyncLeaseModel(mongoose),
     TeamsArchiveSyncJob: createTeamsArchiveSyncJobModel(mongoose),
     ToolCall: createToolCallModel(mongoose),
     MemoryEntry: createMemoryModel(mongoose),

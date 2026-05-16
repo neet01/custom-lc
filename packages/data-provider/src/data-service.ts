@@ -230,6 +230,21 @@ export function getAdminUsers(
   return request.get(endpoints.adminUsers(params));
 }
 
+export function getAdminBaseConfig(): Promise<{ config: Record<string, unknown> }> {
+  return request.get(endpoints.adminBaseConfig());
+}
+
+export function patchAdminConfigFields(
+  principalType: string,
+  principalId: string,
+  payload: {
+    entries: Array<{ fieldPath: string; value: unknown }>;
+    priority?: number;
+  },
+): Promise<{ config: Record<string, unknown> }> {
+  return request.patch(endpoints.adminPatchConfigFields(principalType, principalId), payload);
+}
+
 export function updateAdminUserBalance(
   userId: string,
   payload: q.AdminUpdateUserBalanceRequest,

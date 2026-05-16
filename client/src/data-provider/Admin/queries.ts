@@ -9,6 +9,8 @@ import type {
 import type t from 'librechat-data-provider';
 import store from '~/store';
 
+type AdminBaseConfigResponse = { config: Record<string, unknown> };
+
 export const useAdminUsersQuery = (
   params: t.AdminUsersListParams = {},
   config?: UseQueryOptions<t.AdminUsersListResponse>,
@@ -18,6 +20,24 @@ export const useAdminUsersQuery = (
   return useQuery<t.AdminUsersListResponse>(
     [QueryKeys.adminUsers, params],
     () => dataService.getAdminUsers(params),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+      enabled: (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};
+
+export const useAdminBaseConfigQuery = (
+  config?: UseQueryOptions<AdminBaseConfigResponse>,
+): QueryObserverResult<AdminBaseConfigResponse> => {
+  const queriesEnabled = useRecoilValue<boolean>(store.queriesEnabled);
+
+  return useQuery<AdminBaseConfigResponse>(
+    [QueryKeys.adminBaseConfig],
+    () => dataService.getAdminBaseConfig(),
     {
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
@@ -100,6 +120,58 @@ export const useAdminOutlookAuditQuery = (
       refetchOnMount: false,
       ...config,
       enabled: (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};
+
+export const useAdminSummarizationToggleMutation = (): UseMutationResult<
+  AdminBaseConfigResponse,
+  unknown,
+  boolean,
+  { previousConfig?: AdminBaseConfigResponse }
+> => {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    (enabled: boolean) =>
+      dataService.patchAdminConfigFields('role', '__base__', {
+        priority: 10,
+        entries: [{ fieldPath: 'summarization.enabled', value: enabled }],
+      }),
+    {
+      onMutate: async (enabled) => {
+        await queryClient.cancelQueries([QueryKeys.adminBaseConfig]);
+        const previousConfig =
+          queryClient.getQueryData<AdminBaseConfigResponse>([QueryKeys.adminBaseConfig]);
+
+        queryClient.setQueryData<AdminBaseConfigResponse>([QueryKeys.adminBaseConfig], (current) => {
+          const config = current?.config ?? {};
+          const summarization =
+            config.summarization && typeof config.summarization === 'object'
+              ? (config.summarization as Record<string, unknown>)
+              : {};
+
+          return {
+            config: {
+              ...config,
+              summarization: {
+                ...summarization,
+                enabled,
+              },
+            },
+          };
+        });
+
+        return { previousConfig };
+      },
+      onError: (_error, _enabled, context) => {
+        if (context?.previousConfig) {
+          queryClient.setQueryData([QueryKeys.adminBaseConfig], context.previousConfig);
+        }
+      },
+      onSettled: () => {
+        queryClient.invalidateQueries([QueryKeys.adminBaseConfig]);
+      },
     },
   );
 };

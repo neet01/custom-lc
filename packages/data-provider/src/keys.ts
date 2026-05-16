@@ -58,6 +58,7 @@ export enum QueryKeys {
   resourcePermissions = 'resourcePermissions',
   effectivePermissions = 'effectivePermissions',
   graphToken = 'graphToken',
+  adminBaseConfig = 'adminBaseConfig',
   adminUsers = 'adminUsers',
   adminUsage = 'adminUsage',
   adminUsageSummary = 'adminUsageSummary',

@@ -2,6 +2,7 @@ import type { FilterQuery, Model } from 'mongoose';
 import logger from '~/config/winston';
 import type { ITeamsArchiveConversation } from '~/schema/teamsArchiveConversation';
 import type { ITeamsArchiveMessage } from '~/schema/teamsArchiveMessage';
+import type { ITeamsArchiveSyncLease } from '~/schema/teamsArchiveSyncLease';
 import type { ITeamsArchiveSyncJob } from '~/schema/teamsArchiveSyncJob';
 import type {
   TeamsArchiveConversationData,
@@ -13,6 +14,15 @@ export interface TeamsArchiveQueryOptions {
   limit?: number;
   offset?: number;
   sort?: Record<string, 1 | -1>;
+}
+
+interface TeamsArchiveSyncLeaseData {
+  leaseKey: string;
+  leaseType: 'user' | 'slot';
+  ownerToken: string;
+  user?: string;
+  leaseExpiresAt: Date;
+  lastHeartbeatAt?: Date;
 }
 
 export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
@@ -172,6 +182,95 @@ export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
     }
   }
 
+  async function acquireTeamsArchiveSyncLease(
+    record: TeamsArchiveSyncLeaseData,
+  ): Promise<ITeamsArchiveSyncLease | null> {
+    try {
+      const TeamsArchiveSyncLease = mongoose.models.TeamsArchiveSyncLease as Model<ITeamsArchiveSyncLease>;
+      const now = new Date();
+
+      return (await TeamsArchiveSyncLease.findOneAndUpdate(
+        {
+          leaseKey: record.leaseKey,
+          $or: [{ leaseExpiresAt: { $lte: now } }, { ownerToken: record.ownerToken }],
+        },
+        {
+          $set: {
+            leaseType: record.leaseType,
+            ownerToken: record.ownerToken,
+            user: record.user,
+            leaseExpiresAt: record.leaseExpiresAt,
+            lastHeartbeatAt: record.lastHeartbeatAt || now,
+          },
+          $setOnInsert: {
+            leaseKey: record.leaseKey,
+          },
+        },
+        {
+          new: true,
+          upsert: true,
+          setDefaultsOnInsert: true,
+        },
+      )) as ITeamsArchiveSyncLease | null;
+    } catch (error) {
+      if ((error as { code?: number })?.code === 11000) {
+        return null;
+      }
+
+      logger.error('[acquireTeamsArchiveSyncLease] Error acquiring Teams archive sync lease', error);
+      throw new Error('Error acquiring Teams archive sync lease');
+    }
+  }
+
+  async function refreshTeamsArchiveSyncLease(
+    leaseKey: string,
+    ownerToken: string,
+    leaseExpiresAt: Date,
+  ): Promise<ITeamsArchiveSyncLease | null> {
+    try {
+      const TeamsArchiveSyncLease = mongoose.models.TeamsArchiveSyncLease as Model<ITeamsArchiveSyncLease>;
+      return (await TeamsArchiveSyncLease.findOneAndUpdate(
+        { leaseKey, ownerToken },
+        {
+          $set: {
+            leaseExpiresAt,
+            lastHeartbeatAt: new Date(),
+          },
+        },
+        { new: true },
+      )) as ITeamsArchiveSyncLease | null;
+    } catch (error) {
+      logger.error('[refreshTeamsArchiveSyncLease] Error refreshing Teams archive sync lease', error);
+      throw new Error('Error refreshing Teams archive sync lease');
+    }
+  }
+
+  async function releaseTeamsArchiveSyncLease(
+    leaseKey: string,
+    ownerToken: string,
+  ): Promise<boolean> {
+    try {
+      const TeamsArchiveSyncLease = mongoose.models.TeamsArchiveSyncLease as Model<ITeamsArchiveSyncLease>;
+      const result = await TeamsArchiveSyncLease.deleteOne({ leaseKey, ownerToken });
+      return Boolean(result?.deletedCount);
+    } catch (error) {
+      logger.error('[releaseTeamsArchiveSyncLease] Error releasing Teams archive sync lease', error);
+      throw new Error('Error releasing Teams archive sync lease');
+    }
+  }
+
+  async function countActiveTeamsArchiveSyncLeases(
+    filter: FilterQuery<ITeamsArchiveSyncLease> = {},
+  ): Promise<number> {
+    try {
+      const TeamsArchiveSyncLease = mongoose.models.TeamsArchiveSyncLease as Model<ITeamsArchiveSyncLease>;
+      return await TeamsArchiveSyncLease.countDocuments(filter);
+    } catch (error) {
+      logger.error('[countActiveTeamsArchiveSyncLeases] Error counting Teams archive sync leases', error);
+      throw new Error('Error counting Teams archive sync leases');
+    }
+  }
+
   return {
     upsertTeamsArchiveConversation,
     bulkUpsertTeamsArchiveMessages,
@@ -183,6 +282,10 @@ export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
     findTeamsArchiveSyncJobById,
     countTeamsArchiveConversations,
     countTeamsArchiveMessages,
+    acquireTeamsArchiveSyncLease,
+    refreshTeamsArchiveSyncLease,
+    releaseTeamsArchiveSyncLease,
+    countActiveTeamsArchiveSyncLeases,
   };
 }
 

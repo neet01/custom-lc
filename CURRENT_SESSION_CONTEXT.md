@@ -229,6 +229,13 @@ Enterprise retrieval status:
   - `get_messages_window` returns a small local message window around an anchor message or latest topic hit
   - tool execution now logs selected Teams actions so backend traces show when the model chose `advanced_search_messages`, `summarize_conversation`, or `get_messages_window`
   - the intent is to stop pulling full raw threads into prompt context for routine questions
+- Teams sync hardening for Monday rollout is now in place:
+  - per-user sync execution is protected by an atomic Mongo-backed lease
+  - global active syncs are protected by a slot-based concurrency cap
+  - new envs:
+    - `TEAMS_ARCHIVE_SYNC_STALE_MINUTES`
+    - `TEAMS_ARCHIVE_MAX_CONCURRENT_SYNCS`
+  - status now exposes `activeSyncs` and `maxConcurrentSyncs` for operator visibility
 
 ## Most Recent Session Changes
 

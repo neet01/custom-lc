@@ -28,6 +28,7 @@ export { default as sessionSchema } from './session';
 export { default as shareSchema } from './share';
 export { default as teamsArchiveConversationSchema } from './teamsArchiveConversation';
 export { default as teamsArchiveMessageSchema } from './teamsArchiveMessage';
+export { default as teamsArchiveSyncLeaseSchema } from './teamsArchiveSyncLease';
 export { default as teamsArchiveSyncJobSchema } from './teamsArchiveSyncJob';
 export { default as tokenSchema } from './token';
 export { default as toolCallSchema } from './toolCall';

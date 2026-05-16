@@ -1,17 +1,16 @@
 import React, { useRef } from 'react';
 import { Link, Pin, PinOff } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { OGDialog, OGDialogContent, Button, useToastContext } from '@librechat/client';
 import {
   QueryKeys,
-  Constants,
-  EModelEndpoint,
   PermissionBits,
   LocalStorageKeys,
   AgentListResponse,
 } from 'librechat-data-provider';
 import type t from 'librechat-data-provider';
-import { useLocalize, useDefaultConvo, useFavorites } from '~/hooks';
+import { useLocalize, useFavorites } from '~/hooks';
 import { renderAgentAvatar, clearMessagesCache } from '~/utils';
 import { useChatContext } from '~/Providers';
 
@@ -34,11 +33,11 @@ interface AgentDetailProps {
  */
 const AgentDetail: React.FC<AgentDetailProps> = ({ agent, isOpen, onClose }) => {
   const localize = useLocalize();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { showToast } = useToastContext();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const getDefaultConversation = useDefaultConvo();
-  const { conversation, newConversation } = useChatContext();
+  const { conversation } = useChatContext();
   const { isFavoriteAgent, toggleFavoriteAgent } = useFavorites();
   const isFavorite = isFavoriteAgent(agent?.id);
 
@@ -66,24 +65,7 @@ const AgentDetail: React.FC<AgentDetailProps> = ({ agent, isOpen, onClose }) => 
 
       clearMessagesCache(queryClient, conversation?.conversationId);
       queryClient.invalidateQueries([QueryKeys.messages]);
-
-      /** Template with agent configuration */
-      const template = {
-        conversationId: Constants.NEW_CONVO as string,
-        endpoint: EModelEndpoint.agents,
-        agent_id: agent.id,
-        title: localize('com_agents_chat_with', { name: agent.name || localize('com_ui_agent') }),
-      };
-
-      const currentConvo = getDefaultConversation({
-        conversation: { ...(conversation ?? {}), ...template },
-        preset: template,
-      });
-
-      newConversation({
-        template: currentConvo,
-        preset: template,
-      });
+      navigate(`/c/new?agent_id=${encodeURIComponent(agent.id)}`);
     }
   };
 

@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RecoilRoot } from 'recoil';
 
 import type t from 'librechat-data-provider';
-import { Constants, EModelEndpoint } from 'librechat-data-provider';
+import { QueryKeys } from 'librechat-data-provider';
 
 import AgentDetail from '../AgentDetail';
 
@@ -132,8 +132,8 @@ describe('AgentDetail', () => {
     const { useLocalize, useDefaultConvo } = require('~/hooks');
     (useLocalize as jest.Mock).mockReturnValue(mockLocalize);
     (useDefaultConvo as jest.Mock).mockReturnValue(() => ({
-      conversationId: Constants.NEW_CONVO,
-      endpoint: EModelEndpoint.agents,
+      conversationId: 'new',
+      endpoint: 'agents',
     }));
 
     // Mock useChatContext
@@ -228,7 +228,6 @@ describe('AgentDetail', () => {
   describe('Interactions', () => {
     it('should navigate to chat when Start Chat button is clicked', async () => {
       const user = userEvent.setup();
-      const mockNewConversation = jest.fn();
       const mockQueryClient = {
         getQueryData: jest.fn().mockReturnValue(null),
         setQueryData: jest.fn(),
@@ -239,7 +238,7 @@ describe('AgentDetail', () => {
       const { useChatContext } = require('~/Providers');
       (useChatContext as jest.Mock).mockReturnValue({
         conversation: { conversationId: 'test-convo-id' },
-        newConversation: mockNewConversation,
+        newConversation: jest.fn(),
       });
 
       const { useQueryClient } = require('@tanstack/react-query');
@@ -250,18 +249,8 @@ describe('AgentDetail', () => {
       const startChatButton = screen.getByRole('button', { name: 'com_agents_start_chat' });
       await user.click(startChatButton);
 
-      expect(mockNewConversation).toHaveBeenCalledWith({
-        template: {
-          conversationId: Constants.NEW_CONVO,
-          endpoint: EModelEndpoint.agents,
-        },
-        preset: {
-          conversationId: Constants.NEW_CONVO,
-          endpoint: EModelEndpoint.agents,
-          agent_id: 'test-agent-id',
-          title: 'Chat with Test Agent',
-        },
-      });
+      expect(mockQueryClient.invalidateQueries).toHaveBeenCalledWith([QueryKeys.messages]);
+      expect(mockNavigate).toHaveBeenCalledWith('/c/new?agent_id=test-agent-id');
     });
 
     it('should not navigate when agent is null', async () => {

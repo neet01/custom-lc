@@ -8,14 +8,27 @@ const teamsArchiveJsonSchema = {
   properties: {
     action: {
       type: 'string',
-      enum: ['status', 'sync_archive', 'search_messages', 'list_conversations', 'get_messages'],
+      enum: [
+        'status',
+        'sync_archive',
+        'search_messages',
+        'advanced_search_messages',
+        'recent_messages',
+        'list_conversations',
+        'get_messages',
+      ],
       description:
-        'Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages to query archived content, list_conversations to inspect available archived chats, and get_messages to read a specific archived chat thread.',
+        'Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages to query archived content, advanced_search_messages for structured discovery across topic, sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, and get_messages to read a specific archived chat thread.',
     },
     query: {
       type: 'string',
       description:
-        'For search_messages: the search query to run against archived Teams chat content.',
+        'For search_messages or recent_messages: the search query to run against archived Teams chat content.',
+    },
+    topic: {
+      type: 'string',
+      description:
+        'For advanced_search_messages: the core topic or subject to search for. Pass the distilled subject, not the full user question.',
     },
     chatId: {
       type: 'string',
@@ -48,6 +61,38 @@ const teamsArchiveJsonSchema = {
       description:
         'For sync_archive: maximum number of messages to ingest per Teams chat during this sync request.',
     },
+    daysBack: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 3650,
+      description:
+        'For recent_messages or advanced_search_messages: how many days back to search.',
+    },
+    senderScope: {
+      type: 'string',
+      enum: ['any', 'me', 'others'],
+      description:
+        'For advanced_search_messages: whether to search messages from anyone, only the signed-in user, or everyone except the signed-in user.',
+    },
+    chatType: {
+      type: 'string',
+      enum: ['any', 'oneOnOne', 'group', 'meeting'],
+      description:
+        'For advanced_search_messages: optionally restrict to one-on-one chats, group chats, or meeting chats.',
+    },
+    participants: {
+      type: 'array',
+      items: { type: 'string' },
+      maxItems: 10,
+      description:
+        'For advanced_search_messages: optional participant names or emails to narrow the search to specific chats.',
+    },
+    sortBy: {
+      type: 'string',
+      enum: ['recent', 'oldest'],
+      description:
+        'For advanced_search_messages: whether to return the newest matches first or the oldest matches first.',
+    },
   },
   required: ['action'],
 };
@@ -58,7 +103,21 @@ function formatJsonResult(result) {
 
 function createTeamsArchiveTool({ req }) {
   return tool(
-    async ({ action, query, chatId, limit, offset, chatLimit, messagesPerChat }) => {
+    async ({
+      action,
+      query,
+      topic,
+      chatId,
+      limit,
+      offset,
+      chatLimit,
+      messagesPerChat,
+      daysBack,
+      senderScope,
+      chatType,
+      participants,
+      sortBy,
+    }) => {
       const user = req?.user;
 
       if (!user) {
@@ -90,6 +149,32 @@ function createTeamsArchiveTool({ req }) {
         );
       }
 
+      if (action === 'advanced_search_messages') {
+        return formatJsonResult(
+          await TeamsArchiveService.advancedSearchMessages(user, {
+            query,
+            topic,
+            limit,
+            offset,
+            daysBack,
+            senderScope,
+            chatType,
+            participants,
+            sortBy,
+          }),
+        );
+      }
+
+      if (action === 'recent_messages') {
+        return formatJsonResult(
+          await TeamsArchiveService.recentMessages(user, {
+            query,
+            limit,
+            daysBack,
+          }),
+        );
+      }
+
       if (action === 'list_conversations') {
         return formatJsonResult(
           await TeamsArchiveService.listConversations(user, {
@@ -113,7 +198,7 @@ function createTeamsArchiveTool({ req }) {
     {
       name: TEAMS_ARCHIVE_TOOL_NAME,
       description:
-        'Searches and retrieves archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. For a normal query, use action="search_messages". Use this to query old Teams discussions after Teams becomes read-only.',
+        'Searches and retrieves archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. Use action="advanced_search_messages" for questions like what has been discussed about a topic, optionally constrained by timeframe, participants, chat type, or sender scope. Use action="recent_messages" when the user asks what they sent recently or asks for their own recent Teams messages.',
       schema: teamsArchiveJsonSchema,
     },
   );

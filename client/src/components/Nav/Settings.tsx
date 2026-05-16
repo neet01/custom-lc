@@ -86,7 +86,7 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
     {
       value: SettingsTabValues.COMMANDS,
       icon: <Command className="icon-sm" aria-hidden="true" />,
-      label: 'Connections',
+      label: 'com_nav_commands',
     },
     {
       value: SettingsTabValues.SPEECH,

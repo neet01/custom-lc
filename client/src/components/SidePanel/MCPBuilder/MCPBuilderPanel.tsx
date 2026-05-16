@@ -3,13 +3,16 @@ import { Plus } from 'lucide-react';
 import { PermissionTypes, Permissions } from 'librechat-data-provider';
 import { Button, Spinner, FilterInput, OGDialogTrigger, TooltipAnchor } from '@librechat/client';
 import { useLocalize, useMCPServerManager, useHasAccess } from '~/hooks';
+import { useGetStartupConfig } from '~/data-provider';
 import MCPConfigDialog from '~/components/MCP/MCPConfigDialog';
+import TeamsArchiveStatus from '~/components/Nav/SettingsTabs/Account/TeamsArchiveStatus';
 import MCPAdminSettings from './MCPAdminSettings';
 import MCPServerDialog from './MCPServerDialog';
 import MCPServerList from './MCPServerList';
 
 export default function MCPBuilderPanel() {
   const localize = useLocalize();
+  const { data: startupConfig } = useGetStartupConfig();
   const { availableMCPServers, isLoading, getServerStatusIconProps, getConfigDialogProps } =
     useMCPServerManager();
 
@@ -38,6 +41,12 @@ export default function MCPBuilderPanel() {
   return (
     <div className="flex h-auto w-full flex-col px-3 pb-3" data-tour="mcp-builder-panel">
       <div role="region" aria-label={localize('com_ui_mcp_servers')} className="space-y-2">
+        {startupConfig?.teamsArchiveEnabled === true && (
+          <div className="pb-2">
+            <TeamsArchiveStatus />
+          </div>
+        )}
+
         {/* Toolbar: Search + Add Button */}
         <div className="flex items-center gap-2">
           <FilterInput

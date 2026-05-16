@@ -2,9 +2,7 @@ import { memo } from 'react';
 import { InfoHoverCard, ESide } from '@librechat/client';
 import { PermissionTypes, Permissions } from 'librechat-data-provider';
 import { useLocalize, useHasAccess } from '~/hooks';
-import { useGetStartupConfig } from '~/data-provider';
 import ToggleSwitch from '../ToggleSwitch';
-import TeamsArchiveStatus from '../Account/TeamsArchiveStatus';
 import store from '~/store';
 
 const commandSwitchConfigs = [
@@ -26,7 +24,6 @@ const commandSwitchConfigs = [
 
 function Commands() {
   const localize = useLocalize();
-  const { data: startupConfig } = useGetStartupConfig();
 
   const hasAccessToPrompts = useHasAccess({
     permissionType: PermissionTypes.PROMPTS,
@@ -45,12 +42,6 @@ function Commands() {
 
   return (
     <div className="space-y-4 p-1">
-      {startupConfig?.teamsArchiveEnabled === true && (
-        <div className="pb-2">
-          <TeamsArchiveStatus />
-        </div>
-      )}
-
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <h3 className="text-lg font-medium text-text-primary">

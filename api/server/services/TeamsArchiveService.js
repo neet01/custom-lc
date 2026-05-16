@@ -328,6 +328,126 @@ function summarizeChatTypes(chats = []) {
   );
 }
 
+function getUserSenderClauses(user) {
+  const normalizedEmail = String(user?.email || '')
+    .trim()
+    .toLowerCase();
+  const normalizedName = String(user?.name || '')
+    .trim();
+  const normalizedUsername = String(user?.username || '')
+    .trim();
+  const openidId = String(user?.openidId || '')
+    .trim();
+
+  return [
+    ...(openidId ? [{ fromUserId: openidId }] : []),
+    ...(normalizedEmail ? [{ fromEmail: normalizedEmail }, { fromEmail: user?.email }] : []),
+    ...(normalizedName ? [{ fromDisplayName: normalizedName }] : []),
+    ...(normalizedUsername ? [{ fromDisplayName: normalizedUsername }] : []),
+  ];
+}
+
+function getUserMessageIdentityFilter(user, userId) {
+  const senderOr = getUserSenderClauses(user);
+  return {
+    user: userId,
+    ...(senderOr.length > 0 ? { $or: senderOr } : {}),
+  };
+}
+
+const SEARCHABLE_MESSAGE_FIELDS = [
+  'bodyText',
+  'bodyPreview',
+  'bodyContent',
+  'summary',
+  'subject',
+  'fromDisplayName',
+  'fromEmail',
+  'attachments.name',
+  'mentions.displayName',
+];
+
+function buildFieldOrClause(fields, regex) {
+  return {
+    $or: fields.map((field) => ({ [field]: regex })),
+  };
+}
+
+function buildTopicTerms(value) {
+  const stopWords = new Set([
+    'what',
+    'has',
+    'have',
+    'been',
+    'about',
+    'with',
+    'from',
+    'into',
+    'that',
+    'this',
+    'those',
+    'these',
+    'discussion',
+    'discussed',
+    'messages',
+    'message',
+    'chat',
+    'chats',
+    'teams',
+    'recently',
+    'recent',
+    'show',
+    'find',
+    'look',
+    'search',
+    'around',
+    'regarding',
+  ]);
+
+  return [...new Set(
+    String(value || '')
+      .toLowerCase()
+      .split(/[^a-z0-9._-]+/i)
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 2 && !stopWords.has(term)),
+  )].slice(0, 8);
+}
+
+function buildTopicSearchClauses(value) {
+  const phraseRegex = buildSearchRegex(value);
+  const termRegexes = buildTopicTerms(value).map((term) => buildSearchRegex(term)).filter(Boolean);
+  const clauses = [];
+
+  if (phraseRegex) {
+    clauses.push(buildFieldOrClause(SEARCHABLE_MESSAGE_FIELDS, phraseRegex));
+  }
+
+  if (termRegexes.length > 1) {
+    clauses.push({
+      $and: termRegexes.map((regex) => buildFieldOrClause(SEARCHABLE_MESSAGE_FIELDS, regex)),
+    });
+  }
+
+  return {
+    phraseRegex,
+    termRegexes,
+    clauses,
+  };
+}
+
+function buildParticipantConversationClauses(participants = []) {
+  return toArray(participants)
+    .map((participant) => String(participant || '').trim())
+    .filter(Boolean)
+    .slice(0, 10)
+    .map((participant) => {
+      const regex = buildSearchRegex(participant);
+      return {
+        $or: [{ 'participants.displayName': regex }, { 'participants.email': regex }],
+      };
+    });
+}
+
 async function listChatsPage(user, { top = DEFAULT_CHAT_LIMIT, nextLink } = {}) {
   if (nextLink) {
     return graphRequest(user, nextLink);
@@ -796,6 +916,200 @@ async function searchMessages(user, options = {}) {
   };
 }
 
+async function recentMessages(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const limit = clampInteger(options.limit, 20, { max: 100 });
+  const daysBack = clampInteger(options.daysBack, 14, { min: 1, max: 3650 });
+  const query = String(options.query || '').trim();
+  const sentAfter = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
+  const identityFilter = getUserMessageIdentityFilter(user, userId);
+  const queryRegex = query ? buildSearchRegex(query) : null;
+
+  const filter = {
+    ...identityFilter,
+    sentDateTime: { $gte: sentAfter },
+    ...(queryRegex
+      ? {
+          $and: [
+            {
+              $or: [
+                { bodyText: queryRegex },
+                { bodyPreview: queryRegex },
+                { bodyContent: queryRegex },
+                { summary: queryRegex },
+                { subject: queryRegex },
+                { 'attachments.name': queryRegex },
+                { 'mentions.displayName': queryRegex },
+              ],
+            },
+          ],
+        }
+      : {}),
+  };
+
+  const messages = await db.findTeamsArchiveMessages(filter, {
+    limit,
+    offset: 0,
+    sort: { sentDateTime: -1, createdAt: -1 },
+  });
+
+  const conversationIds = [...new Set(messages.map((message) => message.graphChatId).filter(Boolean))];
+  const conversations = conversationIds.length
+    ? await db.findTeamsArchiveConversations(
+        { user: userId, graphChatId: { $in: conversationIds } },
+        { limit: Math.max(conversationIds.length, 1) },
+      )
+    : [];
+  const conversationMap = new Map(
+    conversations.map((conversation) => [conversation.graphChatId, conversation]),
+  );
+
+  return {
+    daysBack,
+    query: query || undefined,
+    results: messages.map((message) => {
+      const conversation = conversationMap.get(message.graphChatId);
+      return {
+        id: message._id?.toString?.() || message.id,
+        graphMessageId: message.graphMessageId,
+        graphChatId: message.graphChatId,
+        topic: conversation?.topic || '',
+        chatType: conversation?.chatType || '',
+        fromDisplayName: message.fromDisplayName || '',
+        fromEmail: message.fromEmail || '',
+        subject: message.subject || '',
+        summary: message.summary || '',
+        bodyPreview: message.bodyPreview || '',
+        bodyText: message.bodyText || '',
+        sentDateTime: message.sentDateTime,
+        webUrl: message.webUrl || '',
+      };
+    }),
+  };
+}
+
+async function advancedSearchMessages(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const topic = String(options.topic || options.query || '').trim();
+  const senderScope = String(options.senderScope || 'any').trim();
+  const chatType = String(options.chatType || 'any').trim();
+  const sortBy = String(options.sortBy || 'recent').trim();
+  const limit = clampInteger(options.limit, getTeamsArchiveConfig().defaultSearchLimit, {
+    max: 100,
+  });
+  const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
+  const daysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : undefined;
+
+  const validSenderScopes = new Set(['any', 'me', 'others']);
+  const validChatTypes = new Set(['any', 'oneOnOne', 'group', 'meeting']);
+  const normalizedSenderScope = validSenderScopes.has(senderScope) ? senderScope : 'any';
+  const normalizedChatType = validChatTypes.has(chatType) ? chatType : 'any';
+
+  const { phraseRegex, termRegexes, clauses: topicClauses } = buildTopicSearchClauses(topic);
+  const participantClauses = buildParticipantConversationClauses(options.participants);
+  const conversationFilter = {
+    user: userId,
+    ...(normalizedChatType !== 'any' ? { chatType: normalizedChatType } : {}),
+    ...((phraseRegex || termRegexes.length > 0 || participantClauses.length > 0)
+      ? {
+          $and: [
+            ...(topic ? [buildFieldOrClause(['topic'], phraseRegex || termRegexes[0])] : []),
+            ...participantClauses,
+          ],
+        }
+      : {}),
+  };
+
+  let matchedConversationIds = [];
+  if (normalizedChatType !== 'any' || topic || participantClauses.length > 0) {
+    const matchedConversations = await db.findTeamsArchiveConversations(conversationFilter, {
+      limit: 1000,
+    });
+    matchedConversationIds = matchedConversations
+      .map((conversation) => conversation.graphChatId)
+      .filter(Boolean);
+
+    if (matchedConversationIds.length === 0) {
+      return {
+        topic: topic || undefined,
+        senderScope: normalizedSenderScope,
+        chatType: normalizedChatType,
+        daysBack,
+        participants: toArray(options.participants).filter(Boolean),
+        results: [],
+      };
+    }
+  }
+
+  const senderClauses = getUserSenderClauses(user);
+  const senderFilter =
+    normalizedSenderScope === 'me'
+      ? senderClauses.length > 0
+        ? { $or: senderClauses }
+        : {}
+      : normalizedSenderScope === 'others'
+        ? senderClauses.length > 0
+          ? { $nor: senderClauses }
+          : {}
+        : {};
+
+  const messageFilter = {
+    user: userId,
+    ...(matchedConversationIds.length > 0 ? { graphChatId: { $in: matchedConversationIds } } : {}),
+    ...(daysBack ? { sentDateTime: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } } : {}),
+    ...senderFilter,
+    ...(topicClauses.length > 0 ? { $and: topicClauses } : {}),
+  };
+
+  const messages = await db.findTeamsArchiveMessages(messageFilter, {
+    limit,
+    offset,
+    sort: sortBy === 'oldest' ? { sentDateTime: 1, createdAt: 1 } : { sentDateTime: -1, createdAt: -1 },
+  });
+
+  const conversationIds = [...new Set(messages.map((message) => message.graphChatId).filter(Boolean))];
+  const conversations = conversationIds.length
+    ? await db.findTeamsArchiveConversations(
+        { user: userId, graphChatId: { $in: conversationIds } },
+        { limit: Math.max(conversationIds.length, 1) },
+      )
+    : [];
+  const conversationMap = new Map(
+    conversations.map((conversation) => [conversation.graphChatId, conversation]),
+  );
+
+  return {
+    topic: topic || undefined,
+    senderScope: normalizedSenderScope,
+    chatType: normalizedChatType,
+    daysBack,
+    participants: toArray(options.participants).filter(Boolean),
+    results: messages.map((message) => {
+      const conversation = conversationMap.get(message.graphChatId);
+      return {
+        id: message._id?.toString?.() || message.id,
+        graphMessageId: message.graphMessageId,
+        graphChatId: message.graphChatId,
+        topic: conversation?.topic || '',
+        chatType: conversation?.chatType || '',
+        participants: conversation?.participants || [],
+        fromDisplayName: message.fromDisplayName || '',
+        fromEmail: message.fromEmail || '',
+        subject: message.subject || '',
+        summary: message.summary || '',
+        bodyPreview: message.bodyPreview || '',
+        bodyText: message.bodyText || '',
+        sentDateTime: message.sentDateTime,
+        webUrl: message.webUrl || '',
+      };
+    }),
+  };
+}
+
 module.exports = {
   TeamsArchiveServiceError,
   getStatus,
@@ -803,4 +1117,6 @@ module.exports = {
   listConversations,
   listConversationMessages,
   searchMessages,
+  recentMessages,
+  advancedSearchMessages,
 };

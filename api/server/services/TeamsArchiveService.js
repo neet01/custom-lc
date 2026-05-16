@@ -1,6 +1,7 @@
 const { isEnabled } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 const { getGraphApiToken } = require('~/server/services/GraphTokenService');
+const { projectTeamsArchiveSyncToMemory } = require('~/server/services/EnterpriseMemory/teamsProjection');
 const db = require('~/models');
 
 const DEFAULT_GRAPH_BASE_URL = 'https://graph.microsoft.us/v1.0';
@@ -485,12 +486,34 @@ async function syncUserArchive(user, options = {}) {
       completedAt: new Date(),
     });
 
+    let memoryProjection = null;
+    try {
+      memoryProjection = await projectTeamsArchiveSyncToMemory({
+        userId,
+        tenantId: user?.tenantId,
+        syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
+        graphChatIds: syncedConversations.map((conversation) => conversation.graphChatId),
+      });
+    } catch (projectionError) {
+      logger.error('[TeamsArchiveService] Teams enterprise memory projection failed', {
+        userId,
+        syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
+        error: projectionError?.message || projectionError,
+      });
+
+      memoryProjection = {
+        status: 'failure',
+        errorMessage: projectionError?.message || 'Teams enterprise memory projection failed',
+      };
+    }
+
     return {
       syncJob: updatedJob || syncJob,
       mode,
       conversationCount: syncedConversations.length,
       messageCount: persistedMessages,
       conversations: syncedConversations,
+      memoryProjection,
     };
   } catch (error) {
     await db.updateTeamsArchiveSyncJob(syncJob._id?.toString?.() || syncJob.id, {
@@ -529,6 +552,29 @@ async function listConversations(user, options = {}) {
   };
 }
 
+async function resolveConversationGraphChatId(userId, chatId) {
+  const normalizedChatId = String(chatId || '').trim();
+  if (!normalizedChatId) {
+    return null;
+  }
+
+  const directMatches = await db.findTeamsArchiveConversations(
+    { user: userId, graphChatId: normalizedChatId },
+    { limit: 1 },
+  );
+
+  if (directMatches[0]?.graphChatId) {
+    return directMatches[0].graphChatId;
+  }
+
+  const archivedMatches = await db.findTeamsArchiveConversations(
+    { user: userId, _id: normalizedChatId },
+    { limit: 1 },
+  );
+
+  return archivedMatches[0]?.graphChatId || null;
+}
+
 async function listConversationMessages(user, chatId, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
@@ -538,14 +584,24 @@ async function listConversationMessages(user, chatId, options = {}) {
 
   const limit = clampInteger(options.limit, 100, { max: 500 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
+  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+
+  if (!resolvedGraphChatId) {
+    return {
+      chatId,
+      graphChatId: null,
+      messages: [],
+    };
+  }
 
   const messages = await db.findTeamsArchiveMessages(
-    { user: userId, graphChatId: chatId },
+    { user: userId, graphChatId: resolvedGraphChatId },
     { limit, offset, sort: { sentDateTime: 1, createdAt: 1 } },
   );
 
   return {
     chatId,
+    graphChatId: resolvedGraphChatId,
     messages: messages.map((message) => ({
       id: message._id?.toString?.() || message.id,
       graphMessageId: message.graphMessageId,
@@ -581,10 +637,11 @@ async function searchMessages(user, options = {}) {
   });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const chatId = options.chatId ? String(options.chatId) : undefined;
+  const resolvedGraphChatId = chatId ? await resolveConversationGraphChatId(userId, chatId) : undefined;
   const regex = new RegExp(escapeRegex(query), 'i');
   const filter = {
     user: userId,
-    ...(chatId ? { graphChatId: chatId } : {}),
+    ...(resolvedGraphChatId ? { graphChatId: resolvedGraphChatId } : {}),
     $or: [
       { bodyText: regex },
       { bodyPreview: regex },
@@ -614,6 +671,8 @@ async function searchMessages(user, options = {}) {
 
   return {
     query,
+    chatId: chatId || undefined,
+    graphChatId: resolvedGraphChatId || undefined,
     results: messages.map((message) => {
       const conversation = conversationMap.get(message.graphChatId);
       return {

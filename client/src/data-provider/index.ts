@@ -9,6 +9,7 @@ export * from './Memories';
 export * from './Messages';
 export * from './Misc';
 export * from './Outlook';
+export * from './TeamsArchive';
 export * from './Tools';
 export * from './connection';
 export * from './Favorites';

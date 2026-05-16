@@ -8,6 +8,7 @@ import * as q from './types/queries';
 import * as f from './types/files';
 import * as mcp from './types/mcpServers';
 import * as o from './types/outlook';
+import * as ta from './types/teamsArchive';
 import * as config from './config';
 import request from './request';
 import * as s from './schemas';
@@ -117,6 +118,16 @@ export function updateOutlookMessageReadState(
 
 export function getOutlookDailyBrief(): Promise<o.OutlookDailyBriefResponse> {
   return request.post(endpoints.outlookDailyBrief(), {});
+}
+
+export function getTeamsArchiveStatus(): Promise<ta.TeamsArchiveStatusResponse> {
+  return request.get(endpoints.teamsArchiveStatus());
+}
+
+export function syncTeamsArchive(
+  payload: ta.TeamsArchiveSyncRequest = {},
+): Promise<ta.TeamsArchiveSyncResponse> {
+  return request.post(endpoints.teamsArchiveSync(), payload);
 }
 
 export function proposeOutlookMeetingSlots(

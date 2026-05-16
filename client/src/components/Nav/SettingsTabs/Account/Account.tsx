@@ -4,6 +4,7 @@ import DeleteAccount from './DeleteAccount';
 import Avatar from './Avatar';
 import EnableTwoFactorItem from './TwoFactorAuthentication';
 import BackupCodesItem from './BackupCodesItem';
+import TeamsArchiveStatus from './TeamsArchiveStatus';
 import { useGetStartupConfig } from '~/data-provider';
 import { useAuthContext } from '~/hooks';
 import { useTutorial } from '~/Providers';
@@ -75,6 +76,11 @@ function Account({ onRequestClose }: { onRequestClose?: () => void }) {
       <div className="pb-3">
         <Avatar />
       </div>
+      {startupConfig?.teamsArchiveEnabled === true && (
+        <div className="pb-3">
+          <TeamsArchiveStatus />
+        </div>
+      )}
       {user?.provider === 'local' && (
         <>
           <div className="pb-3">

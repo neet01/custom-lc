@@ -1,8 +1,17 @@
 const { isEnabled } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 const { getGraphApiToken } = require('~/server/services/GraphTokenService');
-const { projectTeamsArchiveSyncToMemory } = require('~/server/services/EnterpriseMemory/teamsProjection');
 const db = require('~/models');
+
+let projectTeamsArchiveSyncToMemory = null;
+
+try {
+  ({ projectTeamsArchiveSyncToMemory } = require('~/server/services/EnterpriseMemory/teamsProjection'));
+} catch (error) {
+  if (error?.code !== 'MODULE_NOT_FOUND') {
+    throw error;
+  }
+}
 
 const DEFAULT_GRAPH_BASE_URL = 'https://graph.microsoft.us/v1.0';
 const DEFAULT_SCOPES = 'https://graph.microsoft.us/.default';
@@ -487,23 +496,30 @@ async function syncUserArchive(user, options = {}) {
     });
 
     let memoryProjection = null;
-    try {
-      memoryProjection = await projectTeamsArchiveSyncToMemory({
-        userId,
-        tenantId: user?.tenantId,
-        syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
-        graphChatIds: syncedConversations.map((conversation) => conversation.graphChatId),
-      });
-    } catch (projectionError) {
-      logger.error('[TeamsArchiveService] Teams enterprise memory projection failed', {
-        userId,
-        syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
-        error: projectionError?.message || projectionError,
-      });
+    if (typeof projectTeamsArchiveSyncToMemory === 'function') {
+      try {
+        memoryProjection = await projectTeamsArchiveSyncToMemory({
+          userId,
+          tenantId: user?.tenantId,
+          syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
+          graphChatIds: syncedConversations.map((conversation) => conversation.graphChatId),
+        });
+      } catch (projectionError) {
+        logger.error('[TeamsArchiveService] Teams enterprise memory projection failed', {
+          userId,
+          syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
+          error: projectionError?.message || projectionError,
+        });
 
+        memoryProjection = {
+          status: 'failure',
+          errorMessage: projectionError?.message || 'Teams enterprise memory projection failed',
+        };
+      }
+    } else {
       memoryProjection = {
-        status: 'failure',
-        errorMessage: projectionError?.message || 'Teams enterprise memory projection failed',
+        status: 'skipped',
+        reason: 'enterprise_memory_projection_unavailable',
       };
     }
 

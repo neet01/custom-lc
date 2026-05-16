@@ -6,6 +6,7 @@ import { createUserMethods, DEFAULT_SESSION_EXPIRY, type UserMethods } from './u
 import { createKeyMethods, type KeyMethods } from './key';
 import { createFileMethods, type FileMethods } from './file';
 import { createDocumentMethods, type DocumentMethods } from './document';
+import { createEnterpriseMemoryMethods, type EnterpriseMemoryMethods } from './enterpriseMemory';
 /* Memories */
 import { createMemoryMethods, type MemoryMethods } from './memory';
 /* Agent Categories */
@@ -71,6 +72,7 @@ export type AllMethods = UserMethods &
   KeyMethods &
   FileMethods &
   DocumentMethods &
+  EnterpriseMemoryMethods &
   MemoryMethods &
   AgentCategoryMethods &
   AgentApiKeyMethods &
@@ -198,6 +200,7 @@ export function createMethods(
     ...createKeyMethods(mongoose),
     ...createFileMethods(mongoose),
     ...createDocumentMethods(mongoose),
+    ...createEnterpriseMemoryMethods(mongoose),
     ...createMemoryMethods(mongoose),
     ...createAgentCategoryMethods(mongoose),
     ...createAgentApiKeyMethods(mongoose),
@@ -243,6 +246,7 @@ export type {
   KeyMethods,
   FileMethods,
   DocumentMethods,
+  EnterpriseMemoryMethods,
   MemoryMethods,
   AgentCategoryMethods,
   AgentApiKeyMethods,

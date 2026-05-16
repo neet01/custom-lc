@@ -88,6 +88,46 @@ LibreChat’s containerized services should remain the orchestration and extract
 
 The containers are the processing layer, not the long-term corpus store.
 
+## Cross-Source Memory Layer
+
+Document intelligence is only one part of the broader enterprise system.
+
+Cortex needs a canonical layer that can align:
+
+- documents
+- Teams chats
+- Outlook mail and calendar data
+- SharePoint content
+- Jira and Confluence records
+- future GitLab and Slack sources
+
+The first canonical memory primitives are:
+
+- `EnterpriseMemoryEntity`
+- `EnterpriseMemoryRelationship`
+- `EnterpriseMemoryChunk`
+- `EnterpriseMemoryJob`
+
+Purpose of each:
+
+- `EnterpriseMemoryEntity`
+  - canonical people, conversations, projects, documents, issues, topics
+- `EnterpriseMemoryRelationship`
+  - graph edges between canonical entities
+- `EnterpriseMemoryChunk`
+  - source-backed retrieval units with provenance and visibility metadata
+- `EnterpriseMemoryJob`
+  - projection/enrichment/indexing job state
+
+This layer is not a replacement for source-native archives.
+
+The correct pattern is:
+
+1. preserve source-native records
+2. project them into canonical memory records
+3. retrieve across memory chunks
+4. later enrich and link across sources
+
 ## Core Entities
 
 ### Document
@@ -338,6 +378,48 @@ Required admin surfaces:
 - oversized-provider fallback frequency
 - top file types
 - top document-heavy users or workflows
+
+## Enterprise Memory Phase 1
+
+Status: implemented in repo for Teams as the first source adapter
+
+Goal:
+
+- establish a canonical cross-source memory substrate without waiting for full RAG/indexing infrastructure
+
+What is implemented:
+
+- canonical Mongo persistence for:
+  - `EnterpriseMemoryEntity`
+  - `EnterpriseMemoryRelationship`
+  - `EnterpriseMemoryChunk`
+  - `EnterpriseMemoryJob`
+- Teams archive projection service that runs after successful sync
+
+Current Teams projection behavior:
+
+- each Teams chat becomes a `conversation` entity
+- participants/senders/mentions become `person` entities
+- conversation membership is stored as `has_participant` relationships
+- each Teams message becomes a `message` chunk with:
+  - source provenance
+  - parent conversation reference
+  - linked entity ids
+  - normalized text body
+
+Why this order is correct:
+
+- it keeps source-native Teams data intact
+- it creates a reusable retrieval substrate now
+- it avoids coupling early enterprise memory work to OpenSearch before the canonical data model exists
+
+Current limitations:
+
+- user-scoped visibility only
+- no cross-source entity linking yet
+- no tenant-wide memory governance model yet
+- no OpenSearch/hybrid retrieval over enterprise memory chunks yet
+- no SharePoint/Jira/Confluence/GitLab/Slack projection adapters yet
 
 ## Infrastructure Position
 

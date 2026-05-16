@@ -6,6 +6,10 @@ import { createConversationModel } from './convo';
 import { createDocumentModel } from './document';
 import { createDocumentVersionModel } from './documentVersion';
 import { createDocumentJobModel } from './documentJob';
+import { createEnterpriseMemoryEntityModel } from './enterpriseMemoryEntity';
+import { createEnterpriseMemoryRelationshipModel } from './enterpriseMemoryRelationship';
+import { createEnterpriseMemoryChunkModel } from './enterpriseMemoryChunk';
+import { createEnterpriseMemoryJobModel } from './enterpriseMemoryJob';
 import { createMessageModel } from './message';
 import { createAgentModel } from './agent';
 import { createAgentApiKeyModel } from './agentApiKey';
@@ -51,6 +55,10 @@ export function createModels(mongoose: typeof import('mongoose')) {
     Document: createDocumentModel(mongoose),
     DocumentVersion: createDocumentVersionModel(mongoose),
     DocumentJob: createDocumentJobModel(mongoose),
+    EnterpriseMemoryEntity: createEnterpriseMemoryEntityModel(mongoose),
+    EnterpriseMemoryRelationship: createEnterpriseMemoryRelationshipModel(mongoose),
+    EnterpriseMemoryChunk: createEnterpriseMemoryChunkModel(mongoose),
+    EnterpriseMemoryJob: createEnterpriseMemoryJobModel(mongoose),
     Message: createMessageModel(mongoose),
     Agent: createAgentModel(mongoose),
     AgentApiKey: createAgentApiKeyModel(mongoose),

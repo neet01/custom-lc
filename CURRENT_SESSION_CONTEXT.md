@@ -199,6 +199,21 @@ Current v1 scope:
 - no UI yet beyond API/config exposure
 - access today is via API routes or the built-in `teams_archive_search` tool
 
+Enterprise memory projection status:
+
+- Teams archive now also projects into a canonical enterprise memory layer after successful sync
+- new canonical persistence introduced for:
+  - `EnterpriseMemoryEntity`
+  - `EnterpriseMemoryRelationship`
+  - `EnterpriseMemoryChunk`
+  - `EnterpriseMemoryJob`
+- current projection scope is intentionally conservative:
+  - Teams conversations become `conversation` entities
+  - Teams participants/senders/mentions become `person` entities
+  - conversation-to-participant edges are stored as relationships
+  - Teams messages become retrieval chunks with provenance metadata
+- projection failure is recorded separately and does not discard the underlying Teams archive sync result
+
 ## Most Recent Session Changes
 
 These are the most recent changes made in this session.
@@ -273,6 +288,39 @@ Files most relevant to the Phase 0 fix:
 
 - [api/server/services/Files/process.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Files/process.js)
 - [client/src/components/Chat/Input/Files/AttachFileMenu.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Chat/Input/Files/AttachFileMenu.tsx)
+
+### Enterprise memory layer Phase 1 kickoff
+
+New canonical memory scaffolding implemented:
+
+- new data-schemas layer for:
+  - `EnterpriseMemoryEntity`
+  - `EnterpriseMemoryRelationship`
+  - `EnterpriseMemoryChunk`
+  - `EnterpriseMemoryJob`
+- new DB methods for:
+  - entity upsert
+  - relationship bulk upsert
+  - chunk bulk upsert
+  - projection job create/update
+  - basic entity/chunk lookup
+- new Teams projection service:
+  - [api/server/services/EnterpriseMemory/teamsProjection.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/EnterpriseMemory/teamsProjection.js)
+- Teams sync now triggers that projection after a successful archive sync and returns a `memoryProjection` result block
+
+Current Phase 1 memory behavior:
+
+- source records remain the source of truth:
+  - `TeamsArchiveConversation`
+  - `TeamsArchiveMessage`
+  - `TeamsArchiveSyncJob`
+- canonical enterprise memory is a projection layer on top of source records, not a replacement
+- visibility is currently user-scoped
+- chunks are currently Mongo-backed retrieval units; no OpenSearch indexing yet
+- entity resolution is intentionally conservative:
+  - `conversation` entities keyed by Teams chat id
+  - `person` entities keyed by AAD user id, then email, then display name fallback
+- no cross-source linking yet between Teams and Outlook/docs/Jira/Confluence/etc.
 
 ### Outlook calendar UI
 
@@ -436,6 +484,9 @@ Fix:
 - no dedicated UI yet
 - no Teams channel post ingestion yet
 - no vector/hybrid retrieval yet; search is stored-text based
+- enterprise memory projection exists for Teams, but only as a first source adapter
+- no tenant-wide/shared visibility model yet; current projection remains user-scoped
+- no OpenSearch or hybrid retrieval over enterprise memory chunks yet
 
 ### Outlook
 

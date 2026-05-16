@@ -7,6 +7,7 @@ import type {
   UseQueryOptions,
 } from '@tanstack/react-query';
 import type {
+  TeamsArchiveCancelResponse,
   TeamsArchiveSyncAcceptedResponse,
   TeamsArchiveStatusResponse,
   TeamsArchiveSyncRequest,
@@ -36,4 +37,12 @@ export const useSyncTeamsArchiveMutation = (): UseMutationResult<
   TeamsArchiveSyncRequest
 > => {
   return useMutation((payload: TeamsArchiveSyncRequest) => dataService.syncTeamsArchive(payload));
+};
+
+export const useCancelTeamsArchiveSyncMutation = (): UseMutationResult<
+  TeamsArchiveCancelResponse,
+  unknown,
+  void
+> => {
+  return useMutation(() => dataService.cancelTeamsArchiveSync());
 };

@@ -111,6 +111,7 @@ export const outlookDailyBrief = () => `${outlookRoot}/daily-brief`;
 
 export const teamsArchiveStatus = () => `${teamsArchiveRoot}/status`;
 export const teamsArchiveSync = () => `${teamsArchiveRoot}/sync`;
+export const teamsArchiveCancel = () => `${teamsArchiveRoot}/cancel`;
 
 export const outlookMeetingSlots = (messageId: string) =>
   `${outlookMessage(messageId)}/meeting-slots`;

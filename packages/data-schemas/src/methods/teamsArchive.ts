@@ -137,6 +137,16 @@ export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
     }
   }
 
+  async function findTeamsArchiveSyncJobById(id: string): Promise<ITeamsArchiveSyncJob | null> {
+    try {
+      const TeamsArchiveSyncJob = mongoose.models.TeamsArchiveSyncJob as Model<ITeamsArchiveSyncJob>;
+      return (await TeamsArchiveSyncJob.findById(id).lean()) as ITeamsArchiveSyncJob | null;
+    } catch (error) {
+      logger.error('[findTeamsArchiveSyncJobById] Error finding Teams archive sync job by id', error);
+      throw new Error('Error finding Teams archive sync job by id');
+    }
+  }
+
   async function countTeamsArchiveConversations(
     filter: FilterQuery<ITeamsArchiveConversation> = {},
   ): Promise<number> {
@@ -170,6 +180,7 @@ export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
     findTeamsArchiveConversations,
     findTeamsArchiveMessages,
     findLatestTeamsArchiveSyncJob,
+    findTeamsArchiveSyncJobById,
     countTeamsArchiveConversations,
     countTeamsArchiveMessages,
   };

@@ -35,6 +35,10 @@ router.post('/sync', async (req, res) => {
 
     if (runAsync) {
       void TeamsArchiveService.syncUserArchive(req.user, payload).catch((error) => {
+        if (error?.name === 'TeamsArchiveSyncCancelledError') {
+          logger.info('[TeamsArchiveRoutes] Background Teams archive sync cancelled by user');
+          return;
+        }
         logger.error('[TeamsArchiveRoutes] Background Teams archive sync failed', error);
       });
 
@@ -47,6 +51,15 @@ router.post('/sync', async (req, res) => {
     }
 
     const result = await TeamsArchiveService.syncUserArchive(req.user, payload);
+    res.json(result);
+  } catch (error) {
+    handleTeamsArchiveError(res, error);
+  }
+});
+
+router.post('/cancel', async (req, res) => {
+  try {
+    const result = await TeamsArchiveService.cancelRunningSync(req.user);
     res.json(result);
   } catch (error) {
     handleTeamsArchiveError(res, error);

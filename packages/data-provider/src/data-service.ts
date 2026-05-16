@@ -130,6 +130,10 @@ export function syncTeamsArchive(
   return request.post(endpoints.teamsArchiveSync(), payload);
 }
 
+export function cancelTeamsArchiveSync(): Promise<ta.TeamsArchiveCancelResponse> {
+  return request.post(endpoints.teamsArchiveCancel(), {});
+}
+
 export function proposeOutlookMeetingSlots(
   messageId: string,
   payload: o.OutlookMeetingSlotsRequest,

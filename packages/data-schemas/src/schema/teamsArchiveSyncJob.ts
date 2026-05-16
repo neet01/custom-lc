@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
-export type TeamsArchiveSyncStatus = 'running' | 'success' | 'failure';
+export type TeamsArchiveSyncStatus = 'running' | 'success' | 'failure' | 'cancelled';
 
 export interface ITeamsArchiveSyncJob extends Document {
   user: Types.ObjectId;
@@ -26,7 +26,7 @@ const teamsArchiveSyncJobSchema = new Schema<ITeamsArchiveSyncJob>(
     },
     status: {
       type: String,
-      enum: ['running', 'success', 'failure'],
+      enum: ['running', 'success', 'failure', 'cancelled'],
       required: true,
       index: true,
     },

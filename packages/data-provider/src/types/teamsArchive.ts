@@ -1,4 +1,4 @@
-export type TeamsArchiveSyncStatus = 'running' | 'success' | 'failure';
+export type TeamsArchiveSyncStatus = 'running' | 'success' | 'failure' | 'cancelled';
 
 export type TeamsArchiveLatestSync = {
   id: string;
@@ -88,5 +88,22 @@ export type TeamsArchiveSyncAcceptedResponse = {
   accepted: true;
   status: 'running';
   mode: string;
+  message: string;
+};
+
+export type TeamsArchiveCancelResponse = {
+  cancelled: boolean;
+  status: 'cancelled' | 'idle';
+  syncJob?: {
+    _id?: string;
+    id?: string;
+    status?: TeamsArchiveSyncStatus;
+    mode?: string;
+    conversationCount?: number;
+    messageCount?: number;
+    startedAt?: string;
+    completedAt?: string;
+    errorMessage?: string;
+  } | null;
   message: string;
 };

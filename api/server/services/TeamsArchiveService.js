@@ -40,6 +40,13 @@ class TeamsArchiveServiceError extends Error {
   }
 }
 
+class TeamsArchiveSyncCancelledError extends Error {
+  constructor(message = 'Teams archive sync cancelled by user') {
+    super(message);
+    this.name = 'TeamsArchiveSyncCancelledError';
+  }
+}
+
 function isTeamsArchiveEnabled() {
   return isEnabled(process.env.TEAMS_ARCHIVE_ENABLED);
 }
@@ -635,6 +642,24 @@ async function heartbeatSyncJob(syncJobId, updates = {}) {
   return db.updateTeamsArchiveSyncJob(syncJobId, updates);
 }
 
+async function getSyncJobById(syncJobId) {
+  if (typeof db.findTeamsArchiveSyncJobById !== 'function') {
+    return null;
+  }
+
+  return db.findTeamsArchiveSyncJobById(syncJobId);
+}
+
+async function ensureSyncJobActive(syncJobId) {
+  const currentJob = await getSyncJobById(syncJobId);
+
+  if (currentJob?.status === 'cancelled') {
+    throw new TeamsArchiveSyncCancelledError();
+  }
+
+  return currentJob;
+}
+
 async function listChatsPage(user, { top = DEFAULT_CHAT_LIMIT, nextLink } = {}) {
   if (nextLink) {
     return graphRequest(user, nextLink);
@@ -739,6 +764,37 @@ async function getStatus(user) {
   };
 }
 
+async function cancelRunningSync(user) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const latestRunningJob = await reconcileRunningSyncJob(userId);
+
+  if (!latestRunningJob || latestRunningJob.status !== 'running') {
+    return {
+      cancelled: false,
+      status: 'idle',
+      syncJob: null,
+      message: 'No running Teams archive sync was found.',
+    };
+  }
+
+  const cancelledJob = await db.updateTeamsArchiveSyncJob(
+    latestRunningJob._id?.toString?.() || latestRunningJob.id,
+    {
+      status: 'cancelled',
+      errorMessage: 'Sync cancelled by user',
+      completedAt: new Date(),
+    },
+  );
+
+  return {
+    cancelled: true,
+    status: 'cancelled',
+    syncJob: cancelledJob,
+    message: 'Teams archive sync cancellation requested.',
+  };
+}
+
 async function syncUserArchive(user, options = {}) {
   assertEnabled();
   assertDelegatedUser(user);
@@ -789,6 +845,7 @@ async function syncUserArchive(user, options = {}) {
     const processedChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
 
     while (processedChats < chatLimit) {
+      await ensureSyncJobActive(syncJob._id?.toString?.() || syncJob.id);
       pageNumber += 1;
       const response = await listChatsPage(user, {
         top: Math.min(chatLimit - processedChats, 50),
@@ -826,6 +883,7 @@ async function syncUserArchive(user, options = {}) {
       lastHeartbeatAt = Date.now();
 
       for (const chat of chats) {
+        await ensureSyncJobActive(syncJob._id?.toString?.() || syncJob.id);
         if (processedChats >= chatLimit) {
           break;
         }
@@ -964,6 +1022,26 @@ async function syncUserArchive(user, options = {}) {
       memoryProjection,
     };
   } catch (error) {
+    if (error instanceof TeamsArchiveSyncCancelledError) {
+      const cancelledJob =
+        (await getSyncJobById(syncJob._id?.toString?.() || syncJob.id)) ||
+        (await db.updateTeamsArchiveSyncJob(syncJob._id?.toString?.() || syncJob.id, {
+          status: 'cancelled',
+          errorMessage: 'Sync cancelled by user',
+          completedAt: new Date(),
+        }));
+
+      return {
+        syncJob: cancelledJob || syncJob,
+        mode,
+        conversationCount: cancelledJob?.conversationCount || 0,
+        messageCount: cancelledJob?.messageCount || 0,
+        conversations: [],
+        memoryProjection: null,
+        cancelled: true,
+      };
+    }
+
     await db.updateTeamsArchiveSyncJob(syncJob._id?.toString?.() || syncJob.id, {
       status: 'failure',
       errorMessage: error?.message || 'Teams archive sync failed',
@@ -1580,7 +1658,9 @@ async function summarizeConversation(user, options = {}) {
 
 module.exports = {
   TeamsArchiveServiceError,
+  TeamsArchiveSyncCancelledError,
   getStatus,
+  cancelRunningSync,
   syncUserArchive,
   listConversations,
   listConversationMessages,

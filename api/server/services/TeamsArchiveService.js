@@ -457,6 +457,117 @@ function buildParticipantConversationClauses(participants = []) {
     });
 }
 
+function getNestedFieldValues(value, pathSegments) {
+  if (pathSegments.length === 0) {
+    if (Array.isArray(value)) {
+      return value.flatMap((entry) => getNestedFieldValues(entry, []));
+    }
+    return value === undefined || value === null ? [] : [value];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => getNestedFieldValues(entry, pathSegments));
+  }
+
+  if (value === undefined || value === null || typeof value !== 'object') {
+    return [];
+  }
+
+  const [head, ...tail] = pathSegments;
+  return getNestedFieldValues(value[head], tail);
+}
+
+function messageMatchesRegex(message, regex) {
+  if (!regex) {
+    return true;
+  }
+
+  return SEARCHABLE_MESSAGE_FIELDS.some((field) => {
+    const values = getNestedFieldValues(message, field.split('.'));
+    return values.some((value) => regex.test(String(value || '')));
+  });
+}
+
+function mapMessageResult(message, conversation) {
+  return {
+    id: message._id?.toString?.() || message.id,
+    graphMessageId: message.graphMessageId,
+    graphChatId: message.graphChatId,
+    topic: conversation?.topic || '',
+    chatType: conversation?.chatType || '',
+    participants: conversation?.participants || [],
+    fromDisplayName: message.fromDisplayName || '',
+    fromEmail: message.fromEmail || '',
+    subject: message.subject || '',
+    summary: message.summary || '',
+    bodyPreview: message.bodyPreview || '',
+    bodyText: message.bodyText || '',
+    attachments: message.attachments || [],
+    mentions: message.mentions || [],
+    sentDateTime: message.sentDateTime,
+    webUrl: message.webUrl || '',
+  };
+}
+
+function summarizeSenderCounts(messages = []) {
+  const senderCounts = new Map();
+
+  for (const message of messages) {
+    const key =
+      String(message?.fromDisplayName || '').trim() ||
+      String(message?.fromEmail || '').trim() ||
+      'Unknown sender';
+    senderCounts.set(key, (senderCounts.get(key) || 0) + 1);
+  }
+
+  return [...senderCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([sender, count]) => ({ sender, count }));
+}
+
+function summarizeConversationText({
+  topic,
+  chatType,
+  totalMessages,
+  matchedMessages,
+  daysBack,
+  topSenders,
+}) {
+  const segments = [];
+  const normalizedTopic = String(topic || '').trim();
+
+  if (normalizedTopic) {
+    segments.push(`Conversation topic: ${normalizedTopic}.`);
+  } else {
+    segments.push('Conversation topic is not labeled in Teams.');
+  }
+
+  if (chatType) {
+    segments.push(`Chat type: ${chatType}.`);
+  }
+
+  if (typeof daysBack === 'number') {
+    segments.push(`Window searched: last ${daysBack} days.`);
+  }
+
+  segments.push(
+    matchedMessages === totalMessages
+      ? `${totalMessages} archived messages were included in the summary.`
+      : `${matchedMessages} matching messages were found out of ${totalMessages} archived messages in scope.`,
+  );
+
+  if (topSenders.length > 0) {
+    segments.push(
+      `Most active senders in scope: ${topSenders
+        .map(({ sender, count }) => `${sender} (${count})`)
+        .join(', ')}.`,
+    );
+  }
+
+  return segments.join(' ');
+}
+
 async function listChatsPage(user, { top = DEFAULT_CHAT_LIMIT, nextLink } = {}) {
   if (nextLink) {
     return graphRequest(user, nextLink);
@@ -790,6 +901,29 @@ async function resolveConversationGraphChatId(userId, chatId) {
   return archivedMatches[0]?.graphChatId || null;
 }
 
+async function resolveMessageRecord(userId, messageId) {
+  const normalizedMessageId = String(messageId || '').trim();
+  if (!normalizedMessageId) {
+    return null;
+  }
+
+  const graphMatches = await db.findTeamsArchiveMessages(
+    { user: userId, graphMessageId: normalizedMessageId },
+    { limit: 1 },
+  );
+
+  if (graphMatches[0]) {
+    return graphMatches[0];
+  }
+
+  const archivedMatches = await db.findTeamsArchiveMessages(
+    { user: userId, _id: normalizedMessageId },
+    { limit: 1 },
+  );
+
+  return archivedMatches[0] || null;
+}
+
 async function listConversationMessages(user, chatId, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
@@ -818,24 +952,124 @@ async function listConversationMessages(user, chatId, options = {}) {
     chatId,
     graphChatId: resolvedGraphChatId,
     messages: messages.map((message) => ({
-      id: message._id?.toString?.() || message.id,
-      graphMessageId: message.graphMessageId,
+      ...mapMessageResult(message),
       replyToId: message.replyToId || '',
-      fromDisplayName: message.fromDisplayName || '',
-      fromEmail: message.fromEmail || '',
-      subject: message.subject || '',
-      summary: message.summary || '',
       importance: message.importance || '',
-      bodyPreview: message.bodyPreview || '',
-      bodyText: message.bodyText || '',
       bodyContentType: message.bodyContentType || 'html',
       bodyContent: message.bodyContent || '',
-      webUrl: message.webUrl || '',
-      sentDateTime: message.sentDateTime,
       lastModifiedDateTime: message.lastModifiedDateTime,
-      attachments: message.attachments || [],
-      mentions: message.mentions || [],
     })),
+  };
+}
+
+async function getMessagesWindow(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const chatId = String(options.chatId || '').trim();
+  if (!chatId) {
+    throw new TeamsArchiveServiceError('Chat id is required', 400);
+  }
+
+  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+  if (!resolvedGraphChatId) {
+    return {
+      chatId,
+      graphChatId: null,
+      anchorMessageId: null,
+      messages: [],
+    };
+  }
+
+  const before = clampInteger(options.before, 5, { min: 0, max: 50 });
+  const after = clampInteger(options.after, 5, { min: 0, max: 50 });
+  const fallbackLimit = clampInteger(options.limit, before + after + 1, { min: 1, max: 100 });
+  const query = String(options.query || '').trim();
+  const queryRegex = query ? buildSearchRegex(query) : null;
+
+  let anchorMessage = options.aroundMessageId
+    ? await resolveMessageRecord(userId, options.aroundMessageId)
+    : null;
+
+  if (!anchorMessage && queryRegex) {
+    const matchedMessages = await db.findTeamsArchiveMessages(
+      {
+        user: userId,
+        graphChatId: resolvedGraphChatId,
+        $or: SEARCHABLE_MESSAGE_FIELDS.map((field) => ({ [field]: queryRegex })),
+      },
+      { limit: 1, sort: { sentDateTime: -1, createdAt: -1 } },
+    );
+    anchorMessage = matchedMessages[0] || null;
+  }
+
+  const conversations = await db.findTeamsArchiveConversations(
+    { user: userId, graphChatId: resolvedGraphChatId },
+    { limit: 1 },
+  );
+  const conversation = conversations[0] || null;
+
+  if (!anchorMessage) {
+    const recentMessages = await db.findTeamsArchiveMessages(
+      { user: userId, graphChatId: resolvedGraphChatId },
+      { limit: fallbackLimit, sort: { sentDateTime: -1, createdAt: -1 } },
+    );
+
+    return {
+      chatId,
+      graphChatId: resolvedGraphChatId,
+      topic: conversation?.topic || '',
+      chatType: conversation?.chatType || '',
+      participants: conversation?.participants || [],
+      anchorMessageId: null,
+      anchorGraphMessageId: null,
+      messages: recentMessages.reverse().map((message) => mapMessageResult(message, conversation)),
+    };
+  }
+
+  const anchorTime = anchorMessage.sentDateTime || anchorMessage.createdAt || new Date();
+  const [beforeMessages, afterMessages] = await Promise.all([
+    db.findTeamsArchiveMessages(
+      {
+        user: userId,
+        graphChatId: resolvedGraphChatId,
+        sentDateTime: { $lte: anchorTime },
+      },
+      { limit: before + 1, sort: { sentDateTime: -1, createdAt: -1 } },
+    ),
+    db.findTeamsArchiveMessages(
+      {
+        user: userId,
+        graphChatId: resolvedGraphChatId,
+        sentDateTime: { $gte: anchorTime },
+      },
+      { limit: after + 1, sort: { sentDateTime: 1, createdAt: 1 } },
+    ),
+  ]);
+
+  const messageMap = new Map();
+  for (const message of [...beforeMessages.reverse(), ...afterMessages]) {
+    const key = message._id?.toString?.() || message.id || message.graphMessageId;
+    messageMap.set(key, message);
+  }
+
+  const messages = [...messageMap.values()]
+    .sort((a, b) => {
+      const aTime = a.sentDateTime?.getTime?.() ?? 0;
+      const bTime = b.sentDateTime?.getTime?.() ?? 0;
+      return aTime - bTime;
+    })
+    .slice(-(before + after + 1));
+
+  return {
+    chatId,
+    graphChatId: resolvedGraphChatId,
+    topic: conversation?.topic || '',
+    chatType: conversation?.chatType || '',
+    participants: conversation?.participants || [],
+    anchorMessageId: anchorMessage._id?.toString?.() || anchorMessage.id,
+    anchorGraphMessageId: anchorMessage.graphMessageId,
+    query: query || undefined,
+    messages: messages.map((message) => mapMessageResult(message, conversation)),
   };
 }
 
@@ -1134,23 +1368,91 @@ async function advancedSearchMessages(user, options = {}) {
     participants: toArray(options.participants).filter(Boolean),
     results: messages.map((message) => {
       const conversation = conversationMap.get(message.graphChatId);
-      return {
-        id: message._id?.toString?.() || message.id,
-        graphMessageId: message.graphMessageId,
-        graphChatId: message.graphChatId,
-        topic: conversation?.topic || '',
-        chatType: conversation?.chatType || '',
-        participants: conversation?.participants || [],
-        fromDisplayName: message.fromDisplayName || '',
-        fromEmail: message.fromEmail || '',
-        subject: message.subject || '',
-        summary: message.summary || '',
-        bodyPreview: message.bodyPreview || '',
-        bodyText: message.bodyText || '',
-        sentDateTime: message.sentDateTime,
-        webUrl: message.webUrl || '',
-      };
+      return mapMessageResult(message, conversation);
     }),
+  };
+}
+
+async function summarizeConversation(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const chatId = String(options.chatId || '').trim();
+  if (!chatId) {
+    throw new TeamsArchiveServiceError('Chat id is required', 400);
+  }
+
+  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+  if (!resolvedGraphChatId) {
+    return {
+      chatId,
+      graphChatId: null,
+      summary: 'No archived conversation was found for the requested chat.',
+      highlights: [],
+    };
+  }
+
+  const query = String(options.query || options.topic || '').trim();
+  const queryRegex = query ? buildSearchRegex(query) : null;
+  const daysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : undefined;
+  const highlightLimit = clampInteger(options.limit, 6, { min: 1, max: 12 });
+
+  const [conversations, messages] = await Promise.all([
+    db.findTeamsArchiveConversations({ user: userId, graphChatId: resolvedGraphChatId }, { limit: 1 }),
+    db.findTeamsArchiveMessages(
+      {
+        user: userId,
+        graphChatId: resolvedGraphChatId,
+        ...(daysBack
+          ? { sentDateTime: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } }
+          : {}),
+      },
+      { limit: 5000, sort: { sentDateTime: 1, createdAt: 1 } },
+    ),
+  ]);
+
+  const conversation = conversations[0] || null;
+  const scopedMessages = queryRegex
+    ? messages.filter((message) => messageMatchesRegex(message, queryRegex))
+    : messages;
+  const highlightSource = scopedMessages.length > 0 ? scopedMessages : messages;
+  const highlights = highlightSource.slice(-highlightLimit);
+  const topSenders = summarizeSenderCounts(scopedMessages.length > 0 ? scopedMessages : messages);
+  const firstMessageAt = messages[0]?.sentDateTime || null;
+  const lastMessageAt = messages[messages.length - 1]?.sentDateTime || null;
+
+  return {
+    retrievalMode: 'conversation_summary',
+    chatId,
+    graphChatId: resolvedGraphChatId,
+    topic: conversation?.topic || '',
+    chatType: conversation?.chatType || '',
+    participants: conversation?.participants || [],
+    daysBack,
+    query: query || undefined,
+    totalMessages: messages.length,
+    matchedMessages: scopedMessages.length,
+    firstMessageAt,
+    lastMessageAt,
+    topSenders,
+    summary: summarizeConversationText({
+      topic: conversation?.topic,
+      chatType: conversation?.chatType,
+      totalMessages: messages.length,
+      matchedMessages: scopedMessages.length,
+      daysBack,
+      topSenders,
+    }),
+    highlights: highlights.map((message) => ({
+      id: message._id?.toString?.() || message.id,
+      graphMessageId: message.graphMessageId,
+      fromDisplayName: message.fromDisplayName || '',
+      fromEmail: message.fromEmail || '',
+      sentDateTime: message.sentDateTime,
+      excerpt: message.bodyPreview || message.summary || message.bodyText?.slice(0, 500) || '',
+      webUrl: message.webUrl || '',
+    })),
   };
 }
 
@@ -1160,7 +1462,9 @@ module.exports = {
   syncUserArchive,
   listConversations,
   listConversationMessages,
+  getMessagesWindow,
   searchMessages,
   recentMessages,
   advancedSearchMessages,
+  summarizeConversation,
 };

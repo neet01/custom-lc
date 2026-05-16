@@ -298,6 +298,35 @@ What it does not solve yet:
 - no neighbor-window expansion yet
 - no cross-source ranking yet
 
+### Teams retrieval Phase 3: bounded context and summaries
+
+Status: started
+
+Goal:
+
+- stop loading full raw Teams threads into model context for normal research questions
+
+Current implementation:
+
+- `teams_archive_search` now exposes:
+  - `summarize_conversation`
+  - `get_messages_window`
+- `summarize_conversation` returns a bounded summary for one archived chat:
+  - participant list
+  - date range
+  - total/matched message counts
+  - top senders
+  - recent highlights
+- `get_messages_window` returns a small local slice around:
+  - a specific message id, or
+  - the most recent query match inside a specific chat
+
+Why this matters:
+
+- the current failure mode for raw tool retrieval is prompt bloat
+- bounded windows and summaries let Cortex answer high-level questions without replaying entire threads
+- this is the bridge between source archive search and later hybrid/semantic enterprise retrieval
+
 Infrastructure impact:
 
 - no new infrastructure is required for this first Phase 2 slice

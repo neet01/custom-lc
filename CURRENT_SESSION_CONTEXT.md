@@ -185,7 +185,7 @@ New backend foundation implemented for Teams archive ingestion and search:
   - `GET /api/teams-archive/search?q=...`
 - built-in Cortex tool:
   - `teams_archive_search`
-  - actions: `status`, `sync_archive`, `search_messages`, `advanced_search_messages`, `recent_messages`, `list_conversations`, `get_messages`
+  - actions: `status`, `sync_archive`, `search_messages`, `advanced_search_messages`, `recent_messages`, `list_conversations`, `get_messages`, `get_messages_window`, `summarize_conversation`
 - startup config now exposes `teamsArchiveEnabled`
 - `.env.example` now includes `TEAMS_ARCHIVE_*` variables
 
@@ -223,6 +223,12 @@ Enterprise retrieval status:
   - `advanced_search_messages` and `recent_messages` attempt `EnterpriseMemoryChunk` retrieval first
   - if enterprise-memory retrieval is unavailable or errors, the service falls back to source-archive retrieval
   - this retrieval path is still lexical/structured, not semantic/vector-based
+- Phase 3 has started for Teams retrieval
+- current Phase 3 behavior:
+  - `summarize_conversation` returns bounded conversation summaries with participant/date-range/highlight metadata
+  - `get_messages_window` returns a small local message window around an anchor message or latest topic hit
+  - tool execution now logs selected Teams actions so backend traces show when the model chose `advanced_search_messages`, `summarize_conversation`, or `get_messages_window`
+  - the intent is to stop pulling full raw threads into prompt context for routine questions
 
 ## Most Recent Session Changes
 

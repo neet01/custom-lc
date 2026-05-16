@@ -1,4 +1,5 @@
 const { tool } = require('@langchain/core/tools');
+const { logger } = require('@librechat/data-schemas');
 const TeamsArchiveService = require('~/server/services/TeamsArchiveService');
 
 const TEAMS_ARCHIVE_TOOL_NAME = 'teams_archive_search';
@@ -16,9 +17,11 @@ const teamsArchiveJsonSchema = {
         'recent_messages',
         'list_conversations',
         'get_messages',
+        'get_messages_window',
+        'summarize_conversation',
       ],
       description:
-        'Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages to query archived content, advanced_search_messages for structured discovery across topic, sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, and get_messages to read a specific archived chat thread.',
+        'Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages to query archived content, advanced_search_messages for structured discovery across topic, sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, get_messages to read a specific archived chat thread, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
     },
     query: {
       type: 'string',
@@ -93,6 +96,25 @@ const teamsArchiveJsonSchema = {
       description:
         'For advanced_search_messages: whether to return the newest matches first or the oldest matches first.',
     },
+    aroundMessageId: {
+      type: 'string',
+      description:
+        'For get_messages_window: optional archived message id or Teams graph message id to center the window around.',
+    },
+    before: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 50,
+      description:
+        'For get_messages_window: how many messages to return before the anchor message.',
+    },
+    after: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 50,
+      description:
+        'For get_messages_window: how many messages to return after the anchor message.',
+    },
   },
   required: ['action'],
 };
@@ -117,12 +139,23 @@ function createTeamsArchiveTool({ req }) {
       chatType,
       participants,
       sortBy,
+      aroundMessageId,
+      before,
+      after,
     }) => {
       const user = req?.user;
 
       if (!user) {
         throw new Error('Authenticated user context is required for Teams archive access');
       }
+
+      logger.debug('[teams_archive_search] Executing action', {
+        userId: user?.id || user?._id?.toString?.(),
+        action,
+        chatId,
+        topic,
+        query,
+      });
 
       if (action === 'status') {
         return formatJsonResult(await TeamsArchiveService.getStatus(user));
@@ -193,12 +226,37 @@ function createTeamsArchiveTool({ req }) {
         );
       }
 
+      if (action === 'get_messages_window') {
+        return formatJsonResult(
+          await TeamsArchiveService.getMessagesWindow(user, {
+            chatId,
+            aroundMessageId,
+            query,
+            before,
+            after,
+            limit,
+          }),
+        );
+      }
+
+      if (action === 'summarize_conversation') {
+        return formatJsonResult(
+          await TeamsArchiveService.summarizeConversation(user, {
+            chatId,
+            query,
+            topic,
+            daysBack,
+            limit,
+          }),
+        );
+      }
+
       throw new Error(`Unsupported Teams archive action: ${action}`);
     },
     {
       name: TEAMS_ARCHIVE_TOOL_NAME,
       description:
-        'Searches and retrieves archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. Use action="advanced_search_messages" for questions like what has been discussed about a topic, optionally constrained by timeframe, participants, chat type, or sender scope. Use action="recent_messages" when the user asks what they sent recently or asks for their own recent Teams messages.',
+        'Searches and retrieves archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. Use action="advanced_search_messages" for questions like what has been discussed about a topic, optionally constrained by timeframe, participants, chat type, or sender scope. Use action="recent_messages" when the user asks what they sent recently or asks for their own recent Teams messages. Use action="summarize_conversation" for high-level questions about one specific chat. Use action="get_messages_window" to inspect a small local slice around a relevant message instead of loading a whole thread.',
       schema: teamsArchiveJsonSchema,
     },
   );

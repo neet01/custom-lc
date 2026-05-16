@@ -362,6 +362,19 @@ function buildSearchRegex(value) {
   return new RegExp(escapeRegex(normalized).replace(/\\ /g, '\\s+'), 'i');
 }
 
+function truncateText(value, max = 280) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  if (normalized.length <= max) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
 function summarizeChatTypes(chats = []) {
   return chats.reduce(
     (acc, chat) => {
@@ -542,6 +555,72 @@ function mapMessageResult(message, conversation) {
     mentions: message.mentions || [],
     sentDateTime: message.sentDateTime,
     webUrl: message.webUrl || '',
+  };
+}
+
+function mapCompactParticipants(participants = [], max = 4) {
+  return toArray(participants)
+    .slice(0, max)
+    .map((participant) => ({
+      displayName: participant?.displayName || '',
+      email: participant?.email || '',
+    }))
+    .filter((participant) => participant.displayName || participant.email);
+}
+
+function mapCompactConversation(conversation) {
+  return {
+    id: conversation._id?.toString?.() || conversation.id,
+    graphChatId: conversation.graphChatId,
+    chatType: conversation.chatType || '',
+    topic: conversation.topic || '',
+    participants: mapCompactParticipants(conversation.participants || []),
+    webUrl: conversation.webUrl || '',
+    lastMessageAt: conversation.lastMessageAt,
+    lastSyncedAt: conversation.lastSyncedAt,
+    sourceUpdatedAt: conversation.sourceUpdatedAt,
+    messageCount: conversation.messageCount || 0,
+  };
+}
+
+function mapCompactMessageResult(message, conversation, options = {}) {
+  const {
+    excerptLimit = 280,
+    includeConversation = true,
+    includeReplyToId = false,
+    includeImportance = false,
+  } = options;
+
+  const excerptSource = message.bodyPreview || message.summary || message.bodyText || '';
+
+  return {
+    id: message._id?.toString?.() || message.id,
+    graphMessageId: message.graphMessageId,
+    graphChatId: message.graphChatId,
+    ...(includeConversation
+      ? {
+          topic: conversation?.topic || '',
+          chatType: conversation?.chatType || '',
+          participants: mapCompactParticipants(conversation?.participants || []),
+        }
+      : {}),
+    fromDisplayName: message.fromDisplayName || '',
+    fromEmail: message.fromEmail || '',
+    subject: message.subject || '',
+    summary: truncateText(message.summary || '', 180),
+    excerpt: truncateText(excerptSource, excerptLimit),
+    attachmentNames: toArray(message.attachments)
+      .map((attachment) => attachment?.name)
+      .filter(Boolean)
+      .slice(0, 3),
+    mentions: toArray(message.mentions)
+      .map((mention) => mention?.displayName)
+      .filter(Boolean)
+      .slice(0, 5),
+    sentDateTime: message.sentDateTime,
+    webUrl: message.webUrl || '',
+    ...(includeReplyToId ? { replyToId: message.replyToId || '' } : {}),
+    ...(includeImportance ? { importance: message.importance || '' } : {}),
   };
 }
 
@@ -1279,7 +1358,7 @@ async function syncUserArchive(user, options = {}) {
 async function listConversations(user, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
-  const limit = clampInteger(options.limit, 50, { max: 200 });
+  const limit = clampInteger(options.limit, 20, { max: 50 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
 
   const conversations = await db.findTeamsArchiveConversations(
@@ -1288,18 +1367,8 @@ async function listConversations(user, options = {}) {
   );
 
   return {
-    conversations: conversations.map((conversation) => ({
-      id: conversation._id?.toString?.() || conversation.id,
-      graphChatId: conversation.graphChatId,
-      chatType: conversation.chatType || '',
-      topic: conversation.topic || '',
-      participants: conversation.participants || [],
-      webUrl: conversation.webUrl || '',
-      lastMessageAt: conversation.lastMessageAt,
-      lastSyncedAt: conversation.lastSyncedAt,
-      sourceUpdatedAt: conversation.sourceUpdatedAt,
-      messageCount: conversation.messageCount || 0,
-    })),
+    retrievalMode: 'conversation_list',
+    conversations: conversations.map((conversation) => mapCompactConversation(conversation)),
   };
 }
 
@@ -1356,7 +1425,7 @@ async function listConversationMessages(user, chatId, options = {}) {
     throw new TeamsArchiveServiceError('Chat id is required', 400);
   }
 
-  const limit = clampInteger(options.limit, 100, { max: 500 });
+  const limit = clampInteger(options.limit, 20, { max: 50 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
 
@@ -1373,17 +1442,28 @@ async function listConversationMessages(user, chatId, options = {}) {
     { limit, offset, sort: { sentDateTime: 1, createdAt: 1 } },
   );
 
+  const conversations = await db.findTeamsArchiveConversations(
+    { user: userId, graphChatId: resolvedGraphChatId },
+    { limit: 1 },
+  );
+  const conversation = conversations[0] || null;
+
   return {
+    retrievalMode: 'thread_previews',
     chatId,
     graphChatId: resolvedGraphChatId,
-    messages: messages.map((message) => ({
-      ...mapMessageResult(message),
-      replyToId: message.replyToId || '',
-      importance: message.importance || '',
-      bodyContentType: message.bodyContentType || 'html',
-      bodyContent: message.bodyContent || '',
-      lastModifiedDateTime: message.lastModifiedDateTime,
-    })),
+    topic: conversation?.topic || '',
+    chatType: conversation?.chatType || '',
+    participants: mapCompactParticipants(conversation?.participants || []),
+    guidance:
+      'These are compact thread previews. Use summarize_conversation for a high-level answer or get_messages_window for a bounded slice around the most relevant message.',
+    messages: messages.map((message) =>
+      mapCompactMessageResult(message, conversation, {
+        includeReplyToId: true,
+        includeImportance: true,
+        excerptLimit: 320,
+      }),
+    ),
   };
 }
 
@@ -1440,14 +1520,20 @@ async function getMessagesWindow(user, options = {}) {
     );
 
     return {
+      retrievalMode: 'message_window',
       chatId,
       graphChatId: resolvedGraphChatId,
       topic: conversation?.topic || '',
       chatType: conversation?.chatType || '',
-      participants: conversation?.participants || [],
+      participants: mapCompactParticipants(conversation?.participants || []),
       anchorMessageId: null,
       anchorGraphMessageId: null,
-      messages: recentMessages.reverse().map((message) => mapMessageResult(message, conversation)),
+      messages: recentMessages.reverse().map((message) =>
+        mapCompactMessageResult(message, conversation, {
+          includeReplyToId: true,
+          excerptLimit: 360,
+        }),
+      ),
     };
   }
 
@@ -1486,15 +1572,21 @@ async function getMessagesWindow(user, options = {}) {
     .slice(-(before + after + 1));
 
   return {
+    retrievalMode: 'message_window',
     chatId,
     graphChatId: resolvedGraphChatId,
     topic: conversation?.topic || '',
     chatType: conversation?.chatType || '',
-    participants: conversation?.participants || [],
+    participants: mapCompactParticipants(conversation?.participants || []),
     anchorMessageId: anchorMessage._id?.toString?.() || anchorMessage.id,
     anchorGraphMessageId: anchorMessage.graphMessageId,
     query: query || undefined,
-    messages: messages.map((message) => mapMessageResult(message, conversation)),
+    messages: messages.map((message) =>
+      mapCompactMessageResult(message, conversation, {
+        includeReplyToId: true,
+        excerptLimit: 360,
+      }),
+    ),
   };
 }
 
@@ -1506,8 +1598,8 @@ async function searchMessages(user, options = {}) {
     throw new TeamsArchiveServiceError('Search query is required', 400);
   }
 
-  const limit = clampInteger(options.limit, getTeamsArchiveConfig().defaultSearchLimit, {
-    max: 100,
+  const limit = clampInteger(options.limit, Math.min(getTeamsArchiveConfig().defaultSearchLimit, 8), {
+    max: 12,
   });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const chatId = options.chatId ? String(options.chatId) : undefined;
@@ -1559,28 +1651,18 @@ async function searchMessages(user, options = {}) {
   );
 
   return {
+    retrievalMode: 'message_previews',
     query,
     chatId: chatId || undefined,
     graphChatId: resolvedGraphChatId || undefined,
-    results: messages.map((message) => {
-      const conversation = conversationMap.get(message.graphChatId);
-      return {
-        id: message._id?.toString?.() || message.id,
-        graphMessageId: message.graphMessageId,
-        graphChatId: message.graphChatId,
-        topic: conversation?.topic || '',
-        chatType: conversation?.chatType || '',
-        fromDisplayName: message.fromDisplayName || '',
-        fromEmail: message.fromEmail || '',
-        subject: message.subject || '',
-        summary: message.summary || '',
-        bodyPreview: message.bodyPreview || '',
-        bodyText: message.bodyText || '',
-        attachments: message.attachments || [],
-        sentDateTime: message.sentDateTime,
-        webUrl: message.webUrl || '',
-      };
-    }),
+    guidance:
+      'These are compact message previews. If one chat is clearly relevant, prefer summarize_conversation first, then get_messages_window if you need local context.',
+    resultCount: messages.length,
+    results: messages.map((message) =>
+      mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {
+        excerptLimit: 260,
+      }),
+    ),
   };
 }
 
@@ -1608,7 +1690,7 @@ async function recentMessages(user, options = {}) {
   }
 
   const userId = user?.id || user?._id?.toString();
-  const limit = clampInteger(options.limit, 20, { max: 100 });
+  const limit = clampInteger(options.limit, 8, { max: 12 });
   const daysBack = clampInteger(options.daysBack, 14, { min: 1, max: 3650 });
   const query = String(options.query || '').trim();
   const sentAfter = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
@@ -1655,26 +1737,17 @@ async function recentMessages(user, options = {}) {
   );
 
   return {
+    retrievalMode: 'recent_message_previews',
     daysBack,
     query: query || undefined,
-    results: messages.map((message) => {
-      const conversation = conversationMap.get(message.graphChatId);
-      return {
-        id: message._id?.toString?.() || message.id,
-        graphMessageId: message.graphMessageId,
-        graphChatId: message.graphChatId,
-        topic: conversation?.topic || '',
-        chatType: conversation?.chatType || '',
-        fromDisplayName: message.fromDisplayName || '',
-        fromEmail: message.fromEmail || '',
-        subject: message.subject || '',
-        summary: message.summary || '',
-        bodyPreview: message.bodyPreview || '',
-        bodyText: message.bodyText || '',
-        sentDateTime: message.sentDateTime,
-        webUrl: message.webUrl || '',
-      };
-    }),
+    guidance:
+      'These are compact previews of recent messages sent by the signed-in user. Use get_messages_window for local context around one result.',
+    resultCount: messages.length,
+    results: messages.map((message) =>
+      mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {
+        excerptLimit: 220,
+      }),
+    ),
   };
 }
 
@@ -1699,8 +1772,8 @@ async function advancedSearchMessages(user, options = {}) {
   const senderScope = String(options.senderScope || 'any').trim();
   const chatType = String(options.chatType || 'any').trim();
   const sortBy = String(options.sortBy || 'recent').trim();
-  const limit = clampInteger(options.limit, getTeamsArchiveConfig().defaultSearchLimit, {
-    max: 100,
+  const limit = clampInteger(options.limit, Math.min(getTeamsArchiveConfig().defaultSearchLimit, 8), {
+    max: 12,
   });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const daysBack = options.daysBack
@@ -1738,11 +1811,14 @@ async function advancedSearchMessages(user, options = {}) {
 
     if (matchedConversationIds.length === 0) {
       return {
+        retrievalMode: 'advanced_message_previews',
         topic: topic || undefined,
         senderScope: normalizedSenderScope,
         chatType: normalizedChatType,
         daysBack,
         participants: toArray(options.participants).filter(Boolean),
+        guidance:
+          'No matching chats were found. Consider broadening the topic, participants, or timeframe.',
         results: [],
       };
     }
@@ -1786,15 +1862,20 @@ async function advancedSearchMessages(user, options = {}) {
   );
 
   return {
+    retrievalMode: 'advanced_message_previews',
     topic: topic || undefined,
     senderScope: normalizedSenderScope,
     chatType: normalizedChatType,
     daysBack,
     participants: toArray(options.participants).filter(Boolean),
-    results: messages.map((message) => {
-      const conversation = conversationMap.get(message.graphChatId);
-      return mapMessageResult(message, conversation);
-    }),
+    guidance:
+      'These are compact previews optimized for topic discovery. If a single conversation stands out, use summarize_conversation before expanding with get_messages_window.',
+    resultCount: messages.length,
+    results: messages.map((message) =>
+      mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {
+        excerptLimit: 260,
+      }),
+    ),
   };
 }
 
@@ -1853,7 +1934,7 @@ async function summarizeConversation(user, options = {}) {
     graphChatId: resolvedGraphChatId,
     topic: conversation?.topic || '',
     chatType: conversation?.chatType || '',
-    participants: conversation?.participants || [],
+    participants: mapCompactParticipants(conversation?.participants || []),
     daysBack,
     query: query || undefined,
     totalMessages: messages.length,

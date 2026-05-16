@@ -28,6 +28,19 @@ function buildSearchRegex(value) {
   return new RegExp(escapeRegex(normalized).replace(/\\ /g, '\\s+'), 'i');
 }
 
+function truncateText(value, max = 280) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  if (normalized.length <= max) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
 function buildTopicTerms(value) {
   const stopWords = new Set([
     'what',
@@ -124,6 +137,16 @@ function buildParticipantConversationClauses(participants = []) {
     });
 }
 
+function mapCompactParticipants(participants = [], max = 4) {
+  return toArray(participants)
+    .slice(0, max)
+    .map((participant) => ({
+      displayName: participant?.displayName || '',
+      email: participant?.email || '',
+    }))
+    .filter((participant) => participant.displayName || participant.email);
+}
+
 async function searchTeamsMemoryChunks(user, options = {}) {
   if (typeof db.findEnterpriseMemoryChunks !== 'function') {
     return null;
@@ -134,7 +157,7 @@ async function searchTeamsMemoryChunks(user, options = {}) {
   const senderScope = String(options.senderScope || 'any').trim();
   const chatType = String(options.chatType || 'any').trim();
   const sortBy = String(options.sortBy || 'recent').trim();
-  const limit = clampInteger(options.limit, 25, { max: 100 });
+  const limit = clampInteger(options.limit, 8, { max: 12 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const daysBack = options.daysBack
     ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
@@ -178,6 +201,8 @@ async function searchTeamsMemoryChunks(user, options = {}) {
         chatType: normalizedChatType,
         daysBack,
         participants: toArray(options.participants).filter(Boolean),
+        guidance:
+          'No matching memory chunks were found. Consider broadening the topic, participants, or timeframe.',
         results: [],
       };
     }
@@ -226,6 +251,9 @@ async function searchTeamsMemoryChunks(user, options = {}) {
     chatType: normalizedChatType,
     daysBack,
     participants: toArray(options.participants).filter(Boolean),
+    guidance:
+      'These are compact enterprise-memory previews. If one conversation stands out, summarize that conversation before expanding to a bounded message window.',
+    resultCount: chunks.length,
     results: chunks.map((chunk) => {
       const conversation = conversationMap.get(chunk.sourceParentRecordId);
       return {
@@ -234,13 +262,12 @@ async function searchTeamsMemoryChunks(user, options = {}) {
         graphChatId: chunk.sourceParentRecordId,
         topic: conversation?.topic || '',
         chatType: conversation?.chatType || '',
-        participants: conversation?.participants || [],
+        participants: mapCompactParticipants(conversation?.participants || []),
         fromDisplayName: chunk?.metadata?.fromDisplayName || '',
         fromEmail: chunk?.metadata?.fromEmail || '',
         subject: chunk?.metadata?.subject || '',
-        summary: chunk.summary || '',
-        bodyPreview: chunk.summary || '',
-        bodyText: chunk.text || '',
+        summary: truncateText(chunk.summary || '', 180),
+        excerpt: truncateText(chunk.summary || chunk.text || '', 260),
         sentDateTime: chunk.sourceTimestamp,
         webUrl: chunk?.metadata?.webUrl || '',
       };

@@ -21,12 +21,12 @@ const teamsArchiveJsonSchema = {
         'summarize_conversation',
       ],
       description:
-        'Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages to query archived content, advanced_search_messages for structured discovery across topic, sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, get_messages to read a specific archived chat thread, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
+        'Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages for quick preview retrieval, advanced_search_messages for structured topic discovery across sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, get_messages for compact thread previews, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
     },
     query: {
       type: 'string',
       description:
-        'For search_messages or recent_messages: the search query to run against archived Teams chat content.',
+        'For search_messages or recent_messages: a short search phrase for preview retrieval. Do not pass the full user question.',
     },
     topic: {
       type: 'string',
@@ -36,13 +36,14 @@ const teamsArchiveJsonSchema = {
     chatId: {
       type: 'string',
       description:
-        'For get_messages or search_messages: the archived Teams chat id to scope the request to.',
+        'For get_messages, get_messages_window, summarize_conversation, or search_messages: the archived Teams chat id to scope the request to.',
     },
     limit: {
       type: 'integer',
       minimum: 1,
       maximum: 100,
-      description: 'Optional result limit for searches, conversation lists, and message retrieval.',
+      description:
+        'Optional result limit for searches, conversation lists, and message retrieval. Keep this small unless the user explicitly asks for exhaustive output.',
     },
     offset: {
       type: 'integer',
@@ -106,14 +107,14 @@ const teamsArchiveJsonSchema = {
       minimum: 0,
       maximum: 50,
       description:
-        'For get_messages_window: how many messages to return before the anchor message.',
+        'For get_messages_window: how many messages to return before the anchor message. Prefer small windows.',
     },
     after: {
       type: 'integer',
       minimum: 0,
       maximum: 50,
       description:
-        'For get_messages_window: how many messages to return after the anchor message.',
+        'For get_messages_window: how many messages to return after the anchor message. Prefer small windows.',
     },
   },
   required: ['action'],
@@ -256,7 +257,7 @@ function createTeamsArchiveTool({ req }) {
     {
       name: TEAMS_ARCHIVE_TOOL_NAME,
       description:
-        'Searches and retrieves archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. Use action="advanced_search_messages" for questions like what has been discussed about a topic, optionally constrained by timeframe, participants, chat type, or sender scope. Use action="recent_messages" when the user asks what they sent recently or asks for their own recent Teams messages. Use action="summarize_conversation" for high-level questions about one specific chat. Use action="get_messages_window" to inspect a small local slice around a relevant message instead of loading a whole thread.',
+        'Searches and retrieves archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. For broad questions like what has been discussed about a topic, prefer action="advanced_search_messages". For questions about the signed-in user\'s recent messages, prefer action="recent_messages". For one specific chat, prefer action="summarize_conversation" first and action="get_messages_window" second. Use action="search_messages" only for quick previews. Avoid running multiple broad searches in one turn, and avoid loading whole threads unless the user explicitly asks for that level of detail.',
       schema: teamsArchiveJsonSchema,
     },
   );

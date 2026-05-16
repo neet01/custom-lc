@@ -11,6 +11,15 @@ export type TeamsArchiveLatestSync = {
   errorMessage?: string;
 };
 
+export type TeamsArchiveLatestProjection = {
+  id: string;
+  status: 'pending' | 'running' | 'success' | 'failure';
+  startedAt?: string;
+  completedAt?: string;
+  errorMessage?: string;
+  stats?: Record<string, unknown>;
+};
+
 export type TeamsArchiveStatusResponse = {
   enabled: boolean;
   graphBaseUrl: string;
@@ -20,12 +29,14 @@ export type TeamsArchiveStatusResponse = {
   conversationCount: number;
   messageCount: number;
   latestSync: TeamsArchiveLatestSync | null;
+  latestProjection: TeamsArchiveLatestProjection | null;
 };
 
 export type TeamsArchiveSyncRequest = {
   mode?: 'chats';
   chatLimit?: number;
   messagesPerChat?: number;
+  async?: boolean;
 };
 
 export type TeamsArchiveSyncConversation = {
@@ -71,4 +82,11 @@ export type TeamsArchiveSyncResponse = {
         reason?: string;
       }
     | null;
+};
+
+export type TeamsArchiveSyncAcceptedResponse = {
+  accepted: true;
+  status: 'running';
+  mode: string;
+  message: string;
 };

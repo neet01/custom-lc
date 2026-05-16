@@ -188,6 +188,20 @@ export function createEnterpriseMemoryMethods(mongoose: typeof import('mongoose'
     }
   }
 
+  async function findLatestEnterpriseMemoryJob(
+    filter: FilterQuery<IEnterpriseMemoryJob> = {},
+  ): Promise<IEnterpriseMemoryJob | null> {
+    try {
+      const EnterpriseMemoryJob = mongoose.models.EnterpriseMemoryJob as Model<IEnterpriseMemoryJob>;
+      return (await EnterpriseMemoryJob.findOne(filter).sort({ createdAt: -1 }).lean()) as
+        | IEnterpriseMemoryJob
+        | null;
+    } catch (error) {
+      logger.error('[findLatestEnterpriseMemoryJob] Error finding enterprise memory job', error);
+      throw new Error('Error finding enterprise memory job');
+    }
+  }
+
   return {
     upsertEnterpriseMemoryEntity,
     bulkUpsertEnterpriseMemoryRelationships,
@@ -196,6 +210,7 @@ export function createEnterpriseMemoryMethods(mongoose: typeof import('mongoose'
     updateEnterpriseMemoryJob,
     findEnterpriseMemoryEntities,
     findEnterpriseMemoryChunks,
+    findLatestEnterpriseMemoryJob,
   };
 }
 

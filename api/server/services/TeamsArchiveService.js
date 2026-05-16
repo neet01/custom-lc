@@ -365,10 +365,13 @@ async function listChatMessages(user, chatId, { top = DEFAULT_MESSAGES_PER_CHAT 
 async function getStatus(user) {
   const config = getTeamsArchiveConfig();
   const userId = user?.id || user?._id?.toString();
-  const [conversationCount, messageCount, latestSync] = await Promise.all([
+  const [conversationCount, messageCount, latestSync, latestProjection] = await Promise.all([
     userId ? db.countTeamsArchiveConversations({ user: userId }) : 0,
     userId ? db.countTeamsArchiveMessages({ user: userId }) : 0,
     userId ? db.findLatestTeamsArchiveSyncJob({ user: userId }) : null,
+    typeof db.findLatestEnterpriseMemoryJob === 'function'
+      ? db.findLatestEnterpriseMemoryJob({ user: userId, source: 'teams', jobType: 'projection' })
+      : null,
   ]);
 
   return {
@@ -389,6 +392,16 @@ async function getStatus(user) {
           startedAt: latestSync.startedAt,
           completedAt: latestSync.completedAt,
           errorMessage: latestSync.errorMessage,
+        }
+      : null,
+    latestProjection: latestProjection
+      ? {
+          id: latestProjection._id?.toString?.() || latestProjection.id,
+          status: latestProjection.status,
+          startedAt: latestProjection.startedAt,
+          completedAt: latestProjection.completedAt,
+          errorMessage: latestProjection.errorMessage,
+          stats: latestProjection.stats || {},
         }
       : null,
   };

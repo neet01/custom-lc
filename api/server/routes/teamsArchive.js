@@ -30,7 +30,23 @@ router.get('/status', async (req, res) => {
 
 router.post('/sync', async (req, res) => {
   try {
-    const result = await TeamsArchiveService.syncUserArchive(req.user, req.body || {});
+    const payload = req.body || {};
+    const runAsync = payload.async === true || req.query.async === 'true';
+
+    if (runAsync) {
+      void TeamsArchiveService.syncUserArchive(req.user, payload).catch((error) => {
+        logger.error('[TeamsArchiveRoutes] Background Teams archive sync failed', error);
+      });
+
+      return res.status(202).json({
+        accepted: true,
+        status: 'running',
+        mode: 'chats',
+        message: 'Teams archive sync started in the background',
+      });
+    }
+
+    const result = await TeamsArchiveService.syncUserArchive(req.user, payload);
     res.json(result);
   } catch (error) {
     handleTeamsArchiveError(res, error);

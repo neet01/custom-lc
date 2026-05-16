@@ -126,7 +126,7 @@ export function getTeamsArchiveStatus(): Promise<ta.TeamsArchiveStatusResponse> 
 
 export function syncTeamsArchive(
   payload: ta.TeamsArchiveSyncRequest = {},
-): Promise<ta.TeamsArchiveSyncResponse> {
+): Promise<ta.TeamsArchiveSyncResponse | ta.TeamsArchiveSyncAcceptedResponse> {
   return request.post(endpoints.teamsArchiveSync(), payload);
 }
 

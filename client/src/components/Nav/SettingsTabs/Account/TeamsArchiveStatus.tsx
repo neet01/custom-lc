@@ -166,13 +166,13 @@ export default function TeamsArchiveStatus() {
             {syncStatus === 'running' ? (
               <button
                 type="button"
-                className="inline-flex items-center justify-center rounded-2xl border border-rose-300/60 bg-rose-50/80 px-4 py-2 text-sm font-medium text-rose-700 shadow-sm backdrop-blur transition-colors hover:bg-rose-100/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-500/20 dark:bg-rose-950/40 dark:text-rose-200 dark:hover:bg-rose-950/55"
+                className="inline-flex min-w-[7.5rem] items-center justify-center whitespace-nowrap rounded-2xl border border-rose-300/60 bg-rose-50/80 px-3 py-1.5 text-xs font-medium text-rose-700 shadow-sm backdrop-blur transition-colors hover:bg-rose-100/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-500/20 dark:bg-rose-950/40 dark:text-rose-200 dark:hover:bg-rose-950/55"
                 onClick={handleCancel}
                 disabled={cancelMutation.isLoading}
               >
                 {cancelMutation.isLoading ? (
                   <>
-                    <Spinner className="mr-2 h-4 w-4" />
+                    <Spinner className="mr-1.5 h-3.5 w-3.5" />
                     Cancelling…
                   </>
                 ) : (

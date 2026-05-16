@@ -44,6 +44,14 @@ function formatAuditAction(action: string) {
     .join(' ');
 }
 
+function getBrowserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function getDownloadFilename(
   headerValue: string | undefined,
   fallback: string,
@@ -128,7 +136,26 @@ function formatAdminDateTime(value: string | null | undefined) {
     return 'n/a';
   }
 
-  return formatDateTime(value);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'n/a';
+  }
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: getBrowserTimeZone(),
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+      timeZoneName: 'short',
+    }).format(date);
+  } catch {
+    return formatDateTime(value);
+  }
 }
 
 function TabButton({

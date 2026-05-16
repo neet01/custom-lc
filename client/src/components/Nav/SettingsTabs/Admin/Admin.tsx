@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Spinner, useToastContext } from '@librechat/client';
-import { BarChart3, Download, Mail, ShieldAlert, Users } from 'lucide-react';
+import { BarChart3, Download, Mail, RefreshCw, ShieldAlert, Users } from 'lucide-react';
 import { dataService, SystemRoles } from 'librechat-data-provider';
 import type {
   AdminIssueReportItem,
@@ -18,7 +18,7 @@ import {
   useAdminUsersQuery,
 } from '~/data-provider';
 import { useAuthContext } from '~/hooks';
-import { cn, formatDate } from '~/utils';
+import { cn, formatDate, formatDateTime } from '~/utils';
 
 const DAY_OPTIONS = [7, 30, 90];
 const PAGE_SIZE = 25;
@@ -74,11 +74,13 @@ function MetricCard({ label, value, detail }: { label: string; value: string; de
 function TableShell({
   title,
   description,
+  actions,
   children,
   className,
 }: {
   title: string;
   description?: string;
+  actions?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
 }) {
@@ -89,13 +91,44 @@ function TableShell({
         className,
       )}
     >
-      <div className="mb-3">
-        <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
-        {description ? <p className="mt-1 text-xs text-text-secondary">{description}</p> : null}
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
+          {description ? <p className="mt-1 text-xs text-text-secondary">{description}</p> : null}
+        </div>
+        {actions ? <div className="shrink-0">{actions}</div> : null}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </section>
   );
+}
+
+function PanelRefreshButton({
+  onClick,
+  isRefreshing,
+}: {
+  onClick: () => void;
+  isRefreshing: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={isRefreshing}
+      className="inline-flex items-center gap-2 rounded-xl border border-border-medium bg-surface-secondary px-3 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <RefreshCw className={cn('h-4 w-4', isRefreshing ? 'animate-spin' : undefined)} />
+      Refresh
+    </button>
+  );
+}
+
+function formatAdminDateTime(value: string | null | undefined) {
+  if (!value) {
+    return 'n/a';
+  }
+
+  return formatDateTime(value);
 }
 
 function TabButton({
@@ -497,6 +530,12 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="Usage by user"
               description="Token and request totals for users active in the selected reporting window. Export includes estimated cost columns derived from the repo pricing table."
+              actions={
+                <PanelRefreshButton
+                  onClick={() => void summaryQuery.refetch()}
+                  isRefreshing={summaryQuery.isFetching}
+                />
+              }
               className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -544,7 +583,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                         <td className="py-3 pr-4">{formatNumber(row.inputTokens)}</td>
                         <td className="py-3 pr-4">{formatNumber(row.outputTokens)}</td>
                         <td className="py-3 pr-4 text-text-secondary">
-                          {row.lastSeenAt ? formatDate(row.lastSeenAt) : 'No usage in window'}
+                          {row.lastSeenAt ? formatAdminDateTime(row.lastSeenAt) : 'No usage in window'}
                         </td>
                       </tr>
                     ))}
@@ -570,6 +609,12 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="Recent requests"
               description="Latest tracked model requests, including request source, model, and token totals."
+              actions={
+                <PanelRefreshButton
+                  onClick={() => void recentUsageQuery.refetch()}
+                  isRefreshing={recentUsageQuery.isFetching}
+                />
+              }
               className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
               <div className="min-h-0 flex-1 overflow-auto">
@@ -591,7 +636,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                       return (
                         <tr key={record.id}>
                           <td className="py-3 pr-4 text-text-secondary">
-                            {record.createdAt ? formatDate(record.createdAt) : 'n/a'}
+                            {formatAdminDateTime(record.createdAt)}
                           </td>
                           <td className="py-3 pr-4">
                             {matchedUser?.email || matchedUser?.name || record.userId}
@@ -627,6 +672,12 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="User directory"
               description="All users known to LibreChat, independent of current activity in the reporting window."
+              actions={
+                <PanelRefreshButton
+                  onClick={() => void usersQuery.refetch()}
+                  isRefreshing={usersQuery.isFetching}
+                />
+              }
               className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
               <div className="min-h-0 flex-1 overflow-auto">
@@ -694,10 +745,10 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                         <td className="py-3 pr-4 text-text-secondary">{row.role}</td>
                         <td className="py-3 pr-4 text-text-secondary">{row.provider}</td>
                         <td className="py-3 pr-4 text-text-secondary">
-                          {row.createdAt ? formatDate(row.createdAt) : 'n/a'}
+                          {formatAdminDateTime(row.createdAt)}
                         </td>
                         <td className="py-3 pr-4 text-text-secondary">
-                          {row.updatedAt ? formatDate(row.updatedAt) : 'n/a'}
+                          {formatAdminDateTime(row.updatedAt)}
                         </td>
                       </tr>
                     ))}
@@ -720,6 +771,12 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="Outlook AI audit trail"
               description="Metadata-only trace of AI Inbox views, analyses, and draft creation. Email bodies are not stored here."
+              actions={
+                <PanelRefreshButton
+                  onClick={() => void outlookAuditQuery.refetch()}
+                  isRefreshing={outlookAuditQuery.isFetching}
+                />
+              }
               className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
               <div className="min-h-0 flex-1 overflow-auto">
@@ -739,7 +796,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                     {outlookAudits.map((audit: AdminOutlookAuditItem) => (
                       <tr key={audit.id} className="align-top">
                         <td className="py-3 pr-4 text-text-secondary">
-                          {audit.createdAt ? formatDate(audit.createdAt) : 'n/a'}
+                          {formatAdminDateTime(audit.createdAt)}
                         </td>
                         <td className="py-3 pr-4">
                           <div className="font-medium text-text-primary">
@@ -797,6 +854,12 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             <TableShell
               title="Reported issues"
               description="Open user reports for bad responses, MCP failures, and file transformation problems."
+              actions={
+                <PanelRefreshButton
+                  onClick={() => void issuesQuery.refetch()}
+                  isRefreshing={issuesQuery.isFetching}
+                />
+              }
               className={workspaceMode ? 'min-h-[55vh] overflow-hidden' : undefined}
             >
               <div className="min-h-0 flex-1 overflow-auto">
@@ -834,7 +897,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                           </div>
                         </td>
                         <td className="py-3 pr-4 text-text-secondary">
-                          {issue.createdAt ? formatDate(issue.createdAt) : 'n/a'}
+                          {formatAdminDateTime(issue.createdAt)}
                         </td>
                       </tr>
                     ))}

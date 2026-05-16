@@ -27,6 +27,9 @@ const DEFAULT_SCOPES = 'https://graph.microsoft.us/.default';
 const DEFAULT_CHAT_LIMIT = 50;
 const DEFAULT_MESSAGES_PER_CHAT = 250;
 const DEFAULT_SEARCH_LIMIT = 25;
+const DEFAULT_SYNC_STALE_MINUTES = 45;
+const HEARTBEAT_MIN_INTERVAL_MS = 30 * 1000;
+const HEARTBEAT_CHAT_INTERVAL = 5;
 
 class TeamsArchiveServiceError extends Error {
   constructor(message, status = 500, details) {
@@ -62,6 +65,8 @@ function getTeamsArchiveConfig() {
     defaultMessagesPerChat:
       Number(process.env.TEAMS_ARCHIVE_MAX_MESSAGES_PER_CHAT) || DEFAULT_MESSAGES_PER_CHAT,
     defaultSearchLimit: Number(process.env.TEAMS_ARCHIVE_SEARCH_LIMIT) || DEFAULT_SEARCH_LIMIT,
+    syncStaleMinutes:
+      Number(process.env.TEAMS_ARCHIVE_SYNC_STALE_MINUTES) || DEFAULT_SYNC_STALE_MINUTES,
   };
 }
 
@@ -575,6 +580,61 @@ function isRecoverableChatMessageError(error) {
   );
 }
 
+function getSyncHeartbeatReference(job) {
+  return (
+    toDate(job?.updatedAt) ||
+    toDate(job?.startedAt) ||
+    toDate(job?.createdAt) ||
+    null
+  );
+}
+
+function isRunningSyncJobStale(job) {
+  if (!job || job.status !== 'running') {
+    return false;
+  }
+
+  const reference = getSyncHeartbeatReference(job);
+  if (!reference) {
+    return false;
+  }
+
+  const staleMinutes = getTeamsArchiveConfig().syncStaleMinutes;
+  return Date.now() - reference.getTime() > staleMinutes * 60 * 1000;
+}
+
+async function reconcileRunningSyncJob(userId) {
+  const latestRunningJob = await db.findLatestTeamsArchiveSyncJob({
+    user: userId,
+    status: 'running',
+  });
+
+  if (!latestRunningJob) {
+    return null;
+  }
+
+  if (!isRunningSyncJobStale(latestRunningJob)) {
+    return latestRunningJob;
+  }
+
+  logger.warn('[TeamsArchiveService] Reconciling stale running sync job', {
+    userId,
+    syncJobId: latestRunningJob._id?.toString?.() || latestRunningJob.id,
+    startedAt: latestRunningJob.startedAt,
+    updatedAt: latestRunningJob.updatedAt,
+  });
+
+  return db.updateTeamsArchiveSyncJob(latestRunningJob._id?.toString?.() || latestRunningJob.id, {
+    status: 'failure',
+    errorMessage: 'Sync interrupted by restart or worker shutdown',
+    completedAt: new Date(),
+  });
+}
+
+async function heartbeatSyncJob(syncJobId, updates = {}) {
+  return db.updateTeamsArchiveSyncJob(syncJobId, updates);
+}
+
 async function listChatsPage(user, { top = DEFAULT_CHAT_LIMIT, nextLink } = {}) {
   if (nextLink) {
     return graphRequest(user, nextLink);
@@ -636,6 +696,7 @@ async function listChatMessages(user, chatId, { top = DEFAULT_MESSAGES_PER_CHAT 
 async function getStatus(user) {
   const config = getTeamsArchiveConfig();
   const userId = user?.id || user?._id?.toString();
+  await reconcileRunningSyncJob(userId);
   const [conversationCount, messageCount, latestSync, latestProjection] = await Promise.all([
     userId ? db.countTeamsArchiveConversations({ user: userId }) : 0,
     userId ? db.countTeamsArchiveMessages({ user: userId }) : 0,
@@ -693,6 +754,19 @@ async function syncUserArchive(user, options = {}) {
     max: 1000,
   });
   const mode = options.mode === 'chats' ? 'chats' : 'chats';
+  const latestRunningJob = await reconcileRunningSyncJob(userId);
+
+  if (latestRunningJob?.status === 'running') {
+    return {
+      syncJob: latestRunningJob,
+      mode,
+      conversationCount: latestRunningJob.conversationCount || 0,
+      messageCount: latestRunningJob.messageCount || 0,
+      conversations: [],
+      memoryProjection: null,
+      alreadyRunning: true,
+    };
+  }
 
   const syncJob = await db.createTeamsArchiveSyncJob({
     user: userId,
@@ -710,6 +784,7 @@ async function syncUserArchive(user, options = {}) {
     let persistedMessages = 0;
     let skippedMessageChats = 0;
     let pageNumber = 0;
+    let lastHeartbeatAt = Date.now();
     const graphChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
     const processedChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
 
@@ -743,6 +818,12 @@ async function syncUserArchive(user, options = {}) {
         pageChatTypeSummary,
         hasNextPage: Boolean(response?.['@odata.nextLink']),
       });
+
+      await heartbeatSyncJob(syncJob._id?.toString?.() || syncJob.id, {
+        conversationCount: processedChats,
+        messageCount: persistedMessages,
+      });
+      lastHeartbeatAt = Date.now();
 
       for (const chat of chats) {
         if (processedChats >= chatLimit) {
@@ -804,6 +885,18 @@ async function syncUserArchive(user, options = {}) {
 
         processedChatTypeSummary[chatType] = (processedChatTypeSummary[chatType] || 0) + 1;
         processedChats += 1;
+
+        const shouldHeartbeat =
+          processedChats % HEARTBEAT_CHAT_INTERVAL === 0 ||
+          Date.now() - lastHeartbeatAt >= HEARTBEAT_MIN_INTERVAL_MS;
+
+        if (shouldHeartbeat) {
+          await heartbeatSyncJob(syncJob._id?.toString?.() || syncJob.id, {
+            conversationCount: processedChats,
+            messageCount: persistedMessages,
+          });
+          lastHeartbeatAt = Date.now();
+        }
       }
 
       nextLink =

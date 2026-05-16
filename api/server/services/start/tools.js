@@ -7,6 +7,39 @@ const { zodToJsonSchema } = require('zod-to-json-schema');
 const { Tools, ImageVisionTool } = require('librechat-data-provider');
 const { getToolkitKey, oaiToolkit, geminiToolkit } = require('@librechat/api');
 const { toolkits } = require('~/app/clients/tools/manifest');
+const {
+  SPREADSHEET_TOOL_NAME,
+  spreadsheetTransformJsonSchema,
+} = require('~/app/clients/tools/util/spreadsheet');
+const {
+  WORD_DOCUMENT_TOOL_NAME,
+  wordDocumentTransformJsonSchema,
+} = require('~/app/clients/tools/util/wordDocument');
+const {
+  TEAMS_ARCHIVE_TOOL_NAME,
+  teamsArchiveJsonSchema,
+} = require('~/app/clients/tools/util/teamsArchive');
+
+const customBuiltinToolDefinitions = [
+  {
+    name: SPREADSHEET_TOOL_NAME,
+    description:
+      'Inspect attached spreadsheets and create downloadable spreadsheet exports directly in chat. Use this when the user wants to inspect workbook structure, clean columns, add or update rows and cells, calculate values, sort data, or merge and split sheets.',
+    schema: spreadsheetTransformJsonSchema,
+  },
+  {
+    name: WORD_DOCUMENT_TOOL_NAME,
+    description:
+      'Inspect attached .docx files and create downloadable Word documents directly in chat. Use this to preview a document, redact phrases, replace text, or generate a rewritten .docx file.',
+    schema: wordDocumentTransformJsonSchema,
+  },
+  {
+    name: TEAMS_ARCHIVE_TOOL_NAME,
+    description:
+      'Search and retrieve archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. For a normal query, use action="search_messages".',
+    schema: teamsArchiveJsonSchema,
+  },
+];
 
 /**
  * Loads and formats tools from the specified tool directory.
@@ -97,6 +130,25 @@ function loadAndFormatTools({ directory, adminFilter = [], adminIncluded = [] })
       continue;
     }
     tools.push(formattedTool);
+  }
+
+  for (const toolDefinition of customBuiltinToolDefinitions) {
+    if (filter.has(toolDefinition.name) && included.size === 0) {
+      continue;
+    }
+
+    if (included.size > 0 && !included.has(toolDefinition.name)) {
+      continue;
+    }
+
+    tools.push({
+      type: Tools.function,
+      [Tools.function]: {
+        name: toolDefinition.name,
+        description: toolDefinition.description,
+        parameters: toolDefinition.schema,
+      },
+    });
   }
 
   tools.push(ImageVisionTool);

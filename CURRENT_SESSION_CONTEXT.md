@@ -1,6 +1,6 @@
 # Current Session Context
 
-Last updated: 2026-05-04
+Last updated: 2026-05-15
 
 This file is the current working handoff for the LibreChat customization effort. Use this as the primary reference for future turns instead of relying on prior chat history.
 
@@ -23,6 +23,18 @@ This LibreChat fork is being turned into an internal enterprise AI platform for 
 - AWS Bedrock Claude Sonnet models are the primary LLM backend.
 - Token balance / usage controls exist in the product and are surfaced to users.
 - Admin reporting exists and has been moved toward a full-page workspace layout instead of a cramped settings-only view.
+- Main chat UI has been simplified from stock LibreChat behavior:
+  - visible message forking UI removed
+  - visible multi-conversation UI removed
+  - assistant sender label displays `Cortex` instead of `bedrock`
+  - prompt editing is allowed, assistant-response editing is not
+  - user chat bubbles use a translucent Hermeus yellow background
+- Chat sidebar and export tweaks implemented:
+  - bookmark actions available from the conversation three-dot menu
+  - chat export modal now closes after successful export
+- Upload menu terminology updated:
+  - `Upload as Text`
+  - `Upload Custom File`
 
 ### Outlook workspace
 
@@ -42,6 +54,9 @@ Implemented:
   - bulk selection
   - bulk delete
 - email detail view with thread display
+- attachment awareness in the message list and message detail view
+- mailbox pagination controls for older/newer messages
+- folder picker for Outlook mail folders
 - AI actions:
   - analyze email
   - create reply draft
@@ -49,15 +64,26 @@ Implemented:
   - find meeting times
   - schedule meeting
 - floating AI assistant panel:
+  - opens by default in Outlook workspace
+  - draggable
   - resizable
   - sticky controls
   - persists size
+  - animated open/close transitions
 - calendar view with:
   - day/week view
   - shared left-side time scale
   - current-time indicator
   - overlapping meetings rendered side by side
   - create/edit/delete event support
+  - click-open empty slots to create an event
+  - Teams meeting join link surfaced on event detail when available
+
+Known Outlook status:
+
+- timezone rendering bug was addressed in both backend and frontend paths
+- folder loading/search regressions were corrected by moving back toward safer Graph request shapes
+- attachment metadata and download code paths have been revised several times and should be treated as implemented but worth regression-testing after major Outlook changes
 
 ### Admin / enterprise features
 
@@ -69,6 +95,8 @@ Implemented or discussed previously in this repo:
 - user token progress / balance UI
 - admin reporting UI
 - issue reporting / user feedback flow
+- finance CSV export from admin usage reporting
+- feature request option added to issue reporting
 
 ### Guided tutorials
 
@@ -102,6 +130,7 @@ Implemented or discussed previously:
 - spreadsheet transformation flow
 - emphasis on preserving formatting better than plaintext extraction
 - special handling for document outputs returned by tools
+- default spreadsheet transform file-return path fixed so generated files are attached back into chat correctly
 
 Current spreadsheet architecture direction:
 
@@ -110,6 +139,11 @@ Current spreadsheet architecture direction:
 - route both tool-driven and direct file spreadsheet transforms through the shared spreadsheet service
 - use environment gating so the Python worker can be enabled gradually
 - keep the LLM in a planning role; do not allow arbitrary Python generation/execution
+
+Current worker direction:
+
+- Python is the intended primary engine for supported spreadsheet processing
+- JS remains as fallback/legacy coverage for operations not yet moved over cleanly
 
 ### Bedrock file upload workaround
 
@@ -131,6 +165,7 @@ Current limitation:
 
 - this is a text-extraction fallback, not a true provider-side native document upload
 - fidelity for very large/complex spreadsheets is limited to the extracted text representation
+- old conversations that already contain provider-bound Bedrock document attachments can still replay those stale attachments on later turns; a fresh conversation/upload path is required to validate the Phase 0 fix cleanly
 
 ### Teams archive
 
@@ -162,6 +197,7 @@ Current v1 scope:
 - no Slack/Teams bot integration
 - no channel export support yet
 - no UI yet beyond API/config exposure
+- access today is via API routes or the built-in `teams_archive_search` tool
 
 ## Most Recent Session Changes
 
@@ -180,7 +216,7 @@ Reasoning captured there:
 - S3 + Mongo + later OpenSearch is the preferred storage split
 - LibreChat services should remain the processing/orchestration layer, not the durable corpus store
 
-Phase 1 scaffolding implemented:
+Phase 1 scaffolding implemented in repo:
 
 - new persistence schemas/models/methods for:
   - `Document`
@@ -208,6 +244,35 @@ Intent:
 
 - establish durable Cortex-owned document lineage without changing the current chat/file upload contract
 - create the substrate for later extraction workers and retrieval flows
+
+Deployment status:
+
+- Phase 1 is implemented in the repo
+- production/runtime validation of the `Document`, `DocumentVersion`, and `DocumentJob` side effects is still pending unless explicitly deployed and tested after this handoff
+
+### Bedrock oversized upload Phase 0 validation
+
+What was verified:
+
+- the upload route now resolves `endpointType=bedrock` correctly for agent chats
+- oversized Bedrock PDFs are intercepted during `/api/files` upload
+- the fallback warning appears in logs:
+  - `Falling back to text extraction for oversized Bedrock attachment ...`
+
+Important nuance discovered during testing:
+
+- if a conversation already contains an old provider-bound PDF attachment from before the fallback was deployed, later turns in that same conversation can still replay that stale raw PDF into Bedrock
+- this makes the prompt fail even though the new upload path is fixed
+
+Operational guidance:
+
+- validate the fallback in a fresh conversation with a fresh upload
+- do not reuse older conversations when checking whether Phase 0 works
+
+Files most relevant to the Phase 0 fix:
+
+- [api/server/services/Files/process.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Files/process.js)
+- [client/src/components/Chat/Input/Files/AttachFileMenu.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Chat/Input/Files/AttachFileMenu.tsx)
 
 ### Outlook calendar UI
 
@@ -358,6 +423,30 @@ Fix:
 - admin reporting UI files under `client/src/components/Nav/SettingsTabs/Admin/` and workspace routing files
 
 ## Known Open Items
+
+### Document intelligence
+
+- Phase 0 is validated for fresh uploads, but stale historical provider-bound attachments can still contaminate older conversations
+- Phase 1 persistence scaffolding exists, but downstream worker consumption of `DocumentJob` records is not implemented yet
+- no `DocumentChunk` persistence yet
+- no retrieval/indexing over the new document pipeline yet
+
+### Teams archive
+
+- no dedicated UI yet
+- no Teams channel post ingestion yet
+- no vector/hybrid retrieval yet; search is stored-text based
+
+### Outlook
+
+- attachment handling and downloads should continue to be regression-tested after any further Outlook changes
+- no native inline attachment preview for PDFs/images yet
+- mailbox switching across multiple mailboxes is still future work
+
+### Spreadsheet processing
+
+- worker observability is in place, but end-to-end production confidence still depends on continued validation with real finance workbooks
+- the Python-primary vs JS-fallback boundary should be kept explicit to avoid split user experiences until migration is complete
 
 ### Spreadsheet worker
 

@@ -282,6 +282,7 @@ async function createWordDocumentTool({ req, res, files }) {
 
 module.exports = {
   WORD_DOCUMENT_TOOL_NAME,
+  wordDocumentTransformJsonSchema,
   createWordDocumentTool,
   primeFiles,
 };

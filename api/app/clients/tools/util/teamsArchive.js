@@ -113,7 +113,7 @@ function createTeamsArchiveTool({ req }) {
     {
       name: TEAMS_ARCHIVE_TOOL_NAME,
       description:
-        'Searches and retrieves archived Microsoft Teams chats that were previously ingested into Cortex. Use this to query old Teams discussions after Teams becomes read-only.',
+        'Searches and retrieves archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. For a normal query, use action="search_messages". Use this to query old Teams discussions after Teams becomes read-only.',
       schema: teamsArchiveJsonSchema,
     },
   );

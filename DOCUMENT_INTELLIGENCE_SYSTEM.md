@@ -1,6 +1,6 @@
 # Cortex Document Intelligence System
 
-Last updated: 2026-05-13
+Last updated: 2026-05-15
 
 ## Purpose
 
@@ -157,7 +157,7 @@ Expected fields:
 
 ## Phase 0: Reliability Stopgap
 
-Status: implemented
+Status: implemented and validated
 
 Goal:
 
@@ -167,13 +167,24 @@ What was done:
 
 - oversized Bedrock-compatible uploads now fall back to text extraction during upload rather than failing during Converse request assembly
 
+What was validated:
+
+- fresh uploads in Bedrock agent chats now hit the fallback path
+- the upload logs show `resolvedEndpoint=bedrock`
+- the upload logs show the oversize fallback warning for large PDFs
+
+Known caveat:
+
+- conversations that already contain older provider-bound document attachments can still replay those stale raw attachments on later turns and trigger the old 4.5 MB Bedrock error
+- this is a conversation-history problem, not a failure of the new upload fallback itself
+
 Limitation:
 
 - this is a safety net, not the target architecture
 
 ## Phase 1: Canonical Document Registration
 
-Status: being implemented now
+Status: implemented in repo, deployment/runtime validation pending
 
 Goal:
 
@@ -199,6 +210,24 @@ Non-goals:
 - no chunk persistence yet
 - no OpenSearch dependency yet
 - no UI changes yet
+
+Implemented artifacts:
+
+- `Document` schema/model/methods
+- `DocumentVersion` schema/model/methods
+- `DocumentJob` schema/model/methods
+- upload-time registration service
+- upload pipeline hook that registers indexable files into the document pipeline
+
+Current behavior:
+
+- image/audio/video uploads are ignored by the document pipeline
+- provider-bound binary documents start with:
+  - `extractionKind = none`
+  - initial job type `extract`
+- text-backed files created by the Bedrock oversize fallback start with:
+  - `extractionKind = text`
+  - initial job type `chunk`
 
 ## Phase 2: Structured Extraction
 

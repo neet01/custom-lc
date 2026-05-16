@@ -2,7 +2,9 @@ import { memo } from 'react';
 import { InfoHoverCard, ESide } from '@librechat/client';
 import { PermissionTypes, Permissions } from 'librechat-data-provider';
 import { useLocalize, useHasAccess } from '~/hooks';
+import { useGetStartupConfig } from '~/data-provider';
 import ToggleSwitch from '../ToggleSwitch';
+import TeamsArchiveStatus from '../Account/TeamsArchiveStatus';
 import store from '~/store';
 
 const commandSwitchConfigs = [
@@ -24,6 +26,7 @@ const commandSwitchConfigs = [
 
 function Commands() {
   const localize = useLocalize();
+  const { data: startupConfig } = useGetStartupConfig();
 
   const hasAccessToPrompts = useHasAccess({
     permissionType: PermissionTypes.PROMPTS,
@@ -42,23 +45,31 @@ function Commands() {
 
   return (
     <div className="space-y-4 p-1">
-      <div className="flex items-center gap-2">
-        <h3 className="text-lg font-medium text-text-primary">
-          {localize('com_nav_chat_commands')}
-        </h3>
-        <InfoHoverCard side={ESide.Bottom} text={localize('com_nav_chat_commands_info')} />
-      </div>
-      <div className="flex flex-col gap-3 text-sm text-text-primary">
-        {commandSwitchConfigs.map((config) => (
-          <div key={config.key} className="pb-3">
-            <ToggleSwitch
-              stateAtom={config.stateAtom}
-              localizationKey={config.localizationKey}
-              switchId={config.switchId}
-              showSwitch={getShowSwitch(config.permissionType)}
-            />
-          </div>
-        ))}
+      {startupConfig?.teamsArchiveEnabled === true && (
+        <div className="pb-2">
+          <TeamsArchiveStatus />
+        </div>
+      )}
+
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <h3 className="text-lg font-medium text-text-primary">
+            {localize('com_nav_chat_commands')}
+          </h3>
+          <InfoHoverCard side={ESide.Bottom} text={localize('com_nav_chat_commands_info')} />
+        </div>
+        <div className="flex flex-col gap-3 text-sm text-text-primary">
+          {commandSwitchConfigs.map((config) => (
+            <div key={config.key} className="pb-3">
+              <ToggleSwitch
+                stateAtom={config.stateAtom}
+                localizationKey={config.localizationKey}
+                switchId={config.switchId}
+                showSwitch={getShowSwitch(config.permissionType)}
+              />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

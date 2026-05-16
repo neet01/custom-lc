@@ -305,6 +305,29 @@ function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function buildSearchRegex(value) {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+  if (!normalized) {
+    return null;
+  }
+
+  return new RegExp(escapeRegex(normalized).replace(/\\ /g, '\\s+'), 'i');
+}
+
+function summarizeChatTypes(chats = []) {
+  return chats.reduce(
+    (acc, chat) => {
+      const chatType = String(chat?.chatType || 'unknown');
+      acc[chatType] = (acc[chatType] || 0) + 1;
+      return acc;
+    },
+    { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 },
+  );
+}
+
 async function listChatsPage(user, { top = DEFAULT_CHAT_LIMIT, nextLink } = {}) {
   if (nextLink) {
     return graphRequest(user, nextLink);
@@ -317,7 +340,7 @@ async function listChatsPage(user, { top = DEFAULT_CHAT_LIMIT, nextLink } = {}) 
   });
 }
 
-async function listChatMembers(user, chatId) {
+async function listChatMembers(user, chatId, chatType) {
   try {
     const response = await graphRequest(user, `/chats/${encodeURIComponent(chatId)}/members`, {
       query: { $top: 50 },
@@ -332,6 +355,7 @@ async function listChatMembers(user, chatId) {
   } catch (error) {
     logger.warn('[TeamsArchiveService] Failed to list chat members', {
       chatId,
+      chatType: chatType || 'unknown',
       error: error?.message,
     });
     return [];
@@ -437,8 +461,12 @@ async function syncUserArchive(user, options = {}) {
     let nextLink = null;
     let processedChats = 0;
     let persistedMessages = 0;
+    let pageNumber = 0;
+    const graphChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
+    const processedChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
 
     while (processedChats < chatLimit) {
+      pageNumber += 1;
       const response = await listChatsPage(user, {
         top: Math.min(chatLimit - processedChats, 50),
         nextLink,
@@ -452,12 +480,29 @@ async function syncUserArchive(user, options = {}) {
         break;
       }
 
+      const pageChatTypeSummary = summarizeChatTypes(chats);
+      for (const [chatType, count] of Object.entries(pageChatTypeSummary)) {
+        graphChatTypeSummary[chatType] = (graphChatTypeSummary[chatType] || 0) + count;
+      }
+
+      logger.info('[TeamsArchiveService] Sync page loaded', {
+        userId,
+        syncJobId: syncJob._id?.toString?.() || syncJob.id,
+        pageNumber,
+        chatsReturned: chats.length,
+        processedChats,
+        chatLimit,
+        pageChatTypeSummary,
+        hasNextPage: Boolean(response?.['@odata.nextLink']),
+      });
+
       for (const chat of chats) {
         if (processedChats >= chatLimit) {
           break;
         }
 
-        const members = await listChatMembers(user, chat.id);
+        const chatType = String(chat?.chatType || 'unknown');
+        const members = await listChatMembers(user, chat.id, chatType);
         const normalizedConversation = normalizeConversation(chat, members);
         const messages = await listChatMessages(user, chat.id, { top: messagesPerChat });
         const normalizedMessages = messages.map((message) => ({
@@ -490,6 +535,7 @@ async function syncUserArchive(user, options = {}) {
           lastMessageAt: conversationRecord.lastMessageAt,
         });
 
+        processedChatTypeSummary[chatType] = (processedChatTypeSummary[chatType] || 0) + 1;
         processedChats += 1;
       }
 
@@ -500,6 +546,17 @@ async function syncUserArchive(user, options = {}) {
         break;
       }
     }
+
+    logger.info('[TeamsArchiveService] Sync completed', {
+      userId,
+      syncJobId: syncJob._id?.toString?.() || syncJob.id,
+      chatLimit,
+      messagesPerChat,
+      processedChats,
+      persistedMessages,
+      graphChatTypeSummary,
+      processedChatTypeSummary,
+    });
 
     const updatedJob = await db.updateTeamsArchiveSyncJob(syncJob._id?.toString?.() || syncJob.id, {
       status: 'success',
@@ -667,17 +724,32 @@ async function searchMessages(user, options = {}) {
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const chatId = options.chatId ? String(options.chatId) : undefined;
   const resolvedGraphChatId = chatId ? await resolveConversationGraphChatId(userId, chatId) : undefined;
-  const regex = new RegExp(escapeRegex(query), 'i');
+  const regex = buildSearchRegex(query);
+  const matchedConversations = await db.findTeamsArchiveConversations(
+    {
+      user: userId,
+      ...(resolvedGraphChatId ? { graphChatId: resolvedGraphChatId } : {}),
+      topic: regex,
+    },
+    { limit: 500 },
+  );
+  const matchedConversationIds = matchedConversations
+    .map((conversation) => conversation.graphChatId)
+    .filter(Boolean);
   const filter = {
     user: userId,
     ...(resolvedGraphChatId ? { graphChatId: resolvedGraphChatId } : {}),
     $or: [
       { bodyText: regex },
       { bodyPreview: regex },
+      { bodyContent: regex },
       { summary: regex },
       { subject: regex },
       { fromDisplayName: regex },
       { fromEmail: regex },
+      { 'attachments.name': regex },
+      { 'mentions.displayName': regex },
+      ...(matchedConversationIds.length > 0 ? [{ graphChatId: { $in: matchedConversationIds } }] : []),
     ],
   };
 
@@ -712,8 +784,11 @@ async function searchMessages(user, options = {}) {
         chatType: conversation?.chatType || '',
         fromDisplayName: message.fromDisplayName || '',
         fromEmail: message.fromEmail || '',
+        subject: message.subject || '',
+        summary: message.summary || '',
         bodyPreview: message.bodyPreview || '',
         bodyText: message.bodyText || '',
+        attachments: message.attachments || [],
         sentDateTime: message.sentDateTime,
         webUrl: message.webUrl || '',
       };

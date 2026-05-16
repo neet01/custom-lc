@@ -303,7 +303,6 @@ async function listChatsPage(user, { top = DEFAULT_CHAT_LIMIT, nextLink } = {}) 
   return graphRequest(user, '/me/chats', {
     query: {
       $top: top,
-      $orderby: 'lastUpdatedDateTime desc',
     },
   });
 }
@@ -421,7 +420,11 @@ async function syncUserArchive(user, options = {}) {
         top: Math.min(chatLimit - processedChats, 50),
         nextLink,
       });
-      const chats = toArray(response?.value);
+      const chats = toArray(response?.value).sort((a, b) => {
+        const aTime = toDate(a?.lastUpdatedDateTime)?.getTime() ?? 0;
+        const bTime = toDate(b?.lastUpdatedDateTime)?.getTime() ?? 0;
+        return bTime - aTime;
+      });
       if (chats.length === 0) {
         break;
       }

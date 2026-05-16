@@ -1,8 +1,22 @@
 const client = require('openid-client');
 const { logger } = require('@librechat/data-schemas');
 const { CacheKeys } = require('librechat-data-provider');
-const { getOpenIdConfig } = require('~/strategies/openidStrategy');
 const getLogStores = require('~/cache/getLogStores');
+
+function resolveOpenIdConfig() {
+  /** Resolve lazily to avoid brittle module initialization order / partial export issues. */
+  const directStrategyModule = require('~/strategies/openidStrategy');
+  if (typeof directStrategyModule?.getOpenIdConfig === 'function') {
+    return directStrategyModule.getOpenIdConfig();
+  }
+
+  const strategiesModule = require('~/strategies');
+  if (typeof strategiesModule?.getOpenIdConfig === 'function') {
+    return strategiesModule.getOpenIdConfig();
+  }
+
+  throw new Error('OpenID configuration accessor is unavailable');
+}
 
 /**
  * Get Microsoft Graph API token using existing token exchange mechanism
@@ -26,7 +40,7 @@ async function getGraphApiToken(user, accessToken, scopes, fromCache = true) {
       throw new Error('Graph API scopes are required for token exchange');
     }
 
-    const config = getOpenIdConfig();
+    const config = resolveOpenIdConfig();
     if (!config) {
       throw new Error('OpenID configuration not available');
     }

@@ -568,6 +568,13 @@ function summarizeConversationText({
   return segments.join(' ');
 }
 
+function isRecoverableChatMessageError(error) {
+  return (
+    error?.name === 'TeamsArchiveServiceError' &&
+    (error?.status === 403 || error?.status === 404)
+  );
+}
+
 async function listChatsPage(user, { top = DEFAULT_CHAT_LIMIT, nextLink } = {}) {
   if (nextLink) {
     return graphRequest(user, nextLink);
@@ -701,6 +708,7 @@ async function syncUserArchive(user, options = {}) {
     let nextLink = null;
     let processedChats = 0;
     let persistedMessages = 0;
+    let skippedMessageChats = 0;
     let pageNumber = 0;
     const graphChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
     const processedChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
@@ -744,7 +752,26 @@ async function syncUserArchive(user, options = {}) {
         const chatType = String(chat?.chatType || 'unknown');
         const members = await listChatMembers(user, chat.id, chatType);
         const normalizedConversation = normalizeConversation(chat, members);
-        const messages = await listChatMessages(user, chat.id, { top: messagesPerChat });
+        let messages = [];
+
+        try {
+          messages = await listChatMessages(user, chat.id, { top: messagesPerChat });
+        } catch (error) {
+          if (!isRecoverableChatMessageError(error)) {
+            throw error;
+          }
+
+          skippedMessageChats += 1;
+          logger.warn('[TeamsArchiveService] Failed to list chat messages; continuing sync', {
+            userId,
+            syncJobId: syncJob._id?.toString?.() || syncJob.id,
+            chatId: chat.id,
+            chatType,
+            status: error?.status,
+            details: error?.details,
+          });
+        }
+
         const normalizedMessages = messages.map((message) => ({
           user: userId,
           ...normalizeMessage(chat.id, message),
@@ -794,6 +821,7 @@ async function syncUserArchive(user, options = {}) {
       messagesPerChat,
       processedChats,
       persistedMessages,
+      skippedMessageChats,
       graphChatTypeSummary,
       processedChatTypeSummary,
     });
@@ -838,6 +866,7 @@ async function syncUserArchive(user, options = {}) {
       mode,
       conversationCount: syncedConversations.length,
       messageCount: persistedMessages,
+      skippedMessageChats,
       conversations: syncedConversations,
       memoryProjection,
     };

@@ -185,7 +185,7 @@ New backend foundation implemented for Teams archive ingestion and search:
   - `GET /api/teams-archive/search?q=...`
 - built-in Cortex tool:
   - `teams_archive_search`
-  - actions: `status`, `sync_archive`, `search_messages`, `list_conversations`, `get_messages`
+  - actions: `status`, `sync_archive`, `search_messages`, `advanced_search_messages`, `recent_messages`, `list_conversations`, `get_messages`
 - startup config now exposes `teamsArchiveEnabled`
 - `.env.example` now includes `TEAMS_ARCHIVE_*` variables
 
@@ -196,7 +196,7 @@ Current v1 scope:
 - chat conversation listing and search over archived messages
 - no Slack/Teams bot integration
 - no channel export support yet
-- no UI yet beyond API/config exposure
+- Teams sync/status panel now lives in the MCP builder side-panel surface
 - access today is via API routes or the built-in `teams_archive_search` tool
 
 Enterprise memory projection status:
@@ -213,6 +213,16 @@ Enterprise memory projection status:
   - conversation-to-participant edges are stored as relationships
   - Teams messages become retrieval chunks with provenance metadata
 - projection failure is recorded separately and does not discard the underlying Teams archive sync result
+
+Enterprise retrieval status:
+
+- Phase 2 has started for Teams retrieval
+- new retrieval service:
+  - [api/server/services/EnterpriseMemory/retrieval.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/EnterpriseMemory/retrieval.js)
+- current Phase 2 behavior:
+  - `advanced_search_messages` and `recent_messages` attempt `EnterpriseMemoryChunk` retrieval first
+  - if enterprise-memory retrieval is unavailable or errors, the service falls back to source-archive retrieval
+  - this retrieval path is still lexical/structured, not semantic/vector-based
 
 ## Most Recent Session Changes
 
@@ -481,12 +491,12 @@ Fix:
 
 ### Teams archive
 
-- no dedicated UI yet
 - no Teams channel post ingestion yet
 - no vector/hybrid retrieval yet; search is stored-text based
 - enterprise memory projection exists for Teams, but only as a first source adapter
 - no tenant-wide/shared visibility model yet; current projection remains user-scoped
 - no OpenSearch or hybrid retrieval over enterprise memory chunks yet
+- current Phase 2 chunk retrieval exists for Teams, but semantic ranking, neighbor-window expansion, and cross-source retrieval are not implemented yet
 
 ### Outlook
 

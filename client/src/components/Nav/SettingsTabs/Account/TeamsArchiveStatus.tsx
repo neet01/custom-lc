@@ -114,22 +114,7 @@ export default function TeamsArchiveStatus() {
       <div className="pointer-events-none absolute inset-x-8 top-0 h-20 rounded-full bg-[#f5d000]/15 blur-3xl" />
       <div className="relative flex flex-col gap-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex items-center gap-2">
-            <div className="text-sm font-semibold text-text-primary">Teams Archive</div>
-            <div className="group relative">
-              <button
-                type="button"
-                aria-label="What is memory projection?"
-                className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/40 bg-white/70 text-[11px] font-semibold text-text-secondary backdrop-blur transition-colors hover:bg-white/90 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
-              >
-                ?
-              </button>
-              <div className="pointer-events-none absolute left-1/2 top-[calc(100%+0.5rem)] z-20 w-64 -translate-x-1/2 rounded-2xl border border-white/40 bg-white/90 p-3 text-left text-xs leading-5 text-text-secondary opacity-0 shadow-xl backdrop-blur transition-opacity duration-150 group-hover:opacity-100 dark:border-white/10 dark:bg-zinc-900/95">
-                Memory projection transforms synced Teams chats into Cortex’s canonical enterprise
-                memory layer so they can be retrieved and linked with data from other systems later.
-              </div>
-            </div>
-          </div>
+          <div className="text-sm font-semibold text-text-primary">Teams Archive</div>
           <button
             type="button"
             className="inline-flex items-center justify-center rounded-2xl border border-white/50 bg-white/70 px-4 py-2 text-sm font-medium text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"

@@ -269,7 +269,42 @@ Current behavior:
   - `extractionKind = text`
   - initial job type `chunk`
 
-## Phase 2: Structured Extraction
+## Phase 2: Enterprise Retrieval Over Memory Chunks
+
+Status: started for Teams
+
+Goal:
+
+- move retrieval away from raw source transcript dumps and toward Cortex-owned chunk retrieval
+
+Current implementation:
+
+- Teams archive sync already projects messages into `EnterpriseMemoryChunk`
+- new retrieval service:
+  - `api/server/services/EnterpriseMemory/retrieval.js`
+- Teams tool actions `advanced_search_messages` and `recent_messages` now attempt enterprise-memory chunk retrieval first
+- if Phase 2 retrieval is unavailable or errors, the system falls back to source-archive retrieval
+
+What this solves:
+
+- starts separating archival storage from retrieval behavior
+- reduces dependence on replaying full raw Teams threads into model context
+- creates a stable path for later chunk summarization, neighbor-window retrieval, and source fusion
+
+What it does not solve yet:
+
+- no semantic/vector search yet
+- no OpenSearch dependency yet
+- no neighbor-window expansion yet
+- no cross-source ranking yet
+
+Infrastructure impact:
+
+- no new infrastructure is required for this first Phase 2 slice
+- Mongo-backed enterprise memory collections are enough for the initial rollout
+- OpenSearch becomes relevant in later phases when hybrid retrieval and scale requirements justify it
+
+## Phase 3: Structured Extraction
 
 Goal:
 
@@ -296,7 +331,7 @@ Reasoning:
 
 - flat text is too lossy for enterprise engineering and finance docs
 
-## Phase 3: Chunk Graph
+## Phase 4: Chunk Graph
 
 Goal:
 
@@ -313,7 +348,7 @@ Reasoning:
 
 - this is what allows large documents to be queried without handing the whole file to a model
 
-## Phase 4: Retrieval Layer
+## Phase 5: Retrieval Layer
 
 Goal:
 
@@ -332,7 +367,7 @@ Routing logic should decide between:
 - Cortex-managed chunk retrieval
 - spreadsheet-specific analysis flow
 
-## Phase 5: Hierarchical Synthesis
+## Phase 6: Hierarchical Synthesis
 
 Goal:
 

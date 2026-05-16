@@ -41,12 +41,6 @@ export default function MCPBuilderPanel() {
   return (
     <div className="flex h-auto w-full flex-col px-3 pb-3" data-tour="mcp-builder-panel">
       <div role="region" aria-label={localize('com_ui_mcp_servers')} className="space-y-2">
-        {startupConfig?.teamsArchiveEnabled === true && (
-          <div className="pb-2">
-            <TeamsArchiveStatus />
-          </div>
-        )}
-
         {/* Toolbar: Search + Add Button */}
         <div className="flex items-center gap-2">
           <FilterInput
@@ -96,6 +90,12 @@ export default function MCPBuilderPanel() {
             getServerStatusIconProps={getServerStatusIconProps}
             isFiltered={searchQuery.trim().length > 0}
           />
+        )}
+
+        {startupConfig?.teamsArchiveEnabled === true && (
+          <div className="pt-2">
+            <TeamsArchiveStatus />
+          </div>
         )}
 
         {/* Config Dialog for custom user vars */}

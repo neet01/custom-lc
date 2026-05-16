@@ -4,9 +4,18 @@ const { getGraphApiToken } = require('~/server/services/GraphTokenService');
 const db = require('~/models');
 
 let projectTeamsArchiveSyncToMemory = null;
+let searchTeamsMemoryChunks = null;
 
 try {
   ({ projectTeamsArchiveSyncToMemory } = require('~/server/services/EnterpriseMemory/teamsProjection'));
+} catch (error) {
+  if (error?.code !== 'MODULE_NOT_FOUND') {
+    throw error;
+  }
+}
+
+try {
+  ({ searchTeamsMemoryChunks } = require('~/server/services/EnterpriseMemory/retrieval'));
 } catch (error) {
   if (error?.code !== 'MODULE_NOT_FOUND') {
     throw error;
@@ -918,6 +927,27 @@ async function searchMessages(user, options = {}) {
 
 async function recentMessages(user, options = {}) {
   assertEnabled();
+  if (typeof searchTeamsMemoryChunks === 'function') {
+    try {
+      const memoryResults = await searchTeamsMemoryChunks(user, {
+        query: options.query,
+        limit: options.limit,
+        daysBack: options.daysBack,
+        senderScope: 'me',
+        sortBy: 'recent',
+      });
+
+      if (memoryResults) {
+        return memoryResults;
+      }
+    } catch (error) {
+      logger.warn('[TeamsArchiveService] Enterprise memory recent retrieval failed, falling back', {
+        userId: user?.id || user?._id?.toString?.(),
+        error: error?.message || error,
+      });
+    }
+  }
+
   const userId = user?.id || user?._id?.toString();
   const limit = clampInteger(options.limit, 20, { max: 100 });
   const daysBack = clampInteger(options.daysBack, 14, { min: 1, max: 3650 });
@@ -991,6 +1021,20 @@ async function recentMessages(user, options = {}) {
 
 async function advancedSearchMessages(user, options = {}) {
   assertEnabled();
+  if (typeof searchTeamsMemoryChunks === 'function') {
+    try {
+      const memoryResults = await searchTeamsMemoryChunks(user, options);
+      if (memoryResults) {
+        return memoryResults;
+      }
+    } catch (error) {
+      logger.warn('[TeamsArchiveService] Enterprise memory advanced retrieval failed, falling back', {
+        userId: user?.id || user?._id?.toString?.(),
+        error: error?.message || error,
+      });
+    }
+  }
+
   const userId = user?.id || user?._id?.toString();
   const topic = String(options.topic || options.query || '').trim();
   const senderScope = String(options.senderScope || 'any').trim();

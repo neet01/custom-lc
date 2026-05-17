@@ -28,6 +28,10 @@ const {
   createToolEndCallback,
   agentLogHandlerObj,
 } = require('~/server/controllers/agents/callbacks');
+const {
+  isPromptOverflowError,
+  prepareCompactedRunInputs,
+} = require('~/server/controllers/agents/compaction');
 const { loadAgentTools, loadToolsForExecution } = require('~/server/services/ToolService');
 const { findAccessibleResources } = require('~/server/services/PermissionService');
 const db = require('~/models');
@@ -291,11 +295,16 @@ const OpenAIChatCompletionController = async (req, res) => {
     const openaiMessages = convertMessages(request.messages);
 
     const toolSet = buildToolSet(primaryConfig);
-    const {
-      messages: formattedMessages,
-      indexTokenCountMap,
-      summary: initialSummary,
-    } = formatAgentMessages(openaiMessages, {}, toolSet);
+    const formatRunMessages = (runPayload, activeToolSet) =>
+      formatAgentMessages(runPayload, {}, activeToolSet);
+    let preparedInputs = prepareCompactedRunInputs({
+      payload: openaiMessages,
+      maxContextTokens: primaryConfig.maxContextTokens,
+      encoding: primaryConfig.model_parameters?.model || primaryConfig.model,
+      toolSet,
+      formatMessages: formatRunMessages,
+      logPrefix: 'OpenAI API',
+    });
 
     /**
      * Create a simple handler that processes data
@@ -470,26 +479,6 @@ const OpenAIChatCompletionController = async (req, res) => {
     // Extract userMCPAuthMap from primaryConfig (needed for MCP tool connections)
     const userMCPAuthMap = primaryConfig.userMCPAuthMap;
 
-    const run = await createRun({
-      agents: [primaryConfig],
-      messages: formattedMessages,
-      indexTokenCountMap,
-      initialSummary,
-      runId: responseId,
-      summarizationConfig,
-      signal: abortController.signal,
-      customHandlers: handlers,
-      requestBody: {
-        messageId: responseId,
-        conversationId,
-      },
-      user: { id: userId },
-    });
-
-    if (!run) {
-      throw new Error('Failed to create agent run');
-    }
-
     const config = {
       runName: 'AgentRun',
       configurable: {
@@ -508,13 +497,67 @@ const OpenAIChatCompletionController = async (req, res) => {
       version: 'v2',
     };
 
-    await run.processStream({ messages: formattedMessages }, config, {
-      callbacks: {
-        [Callback.TOOL_ERROR]: (graph, error, toolId) => {
-          logger.error(`[OpenAI API] Tool Error "${toolId}"`, error);
+    const runAgent = async (prepared) => {
+      const run = await createRun({
+        agents: [primaryConfig],
+        messages: prepared.messages,
+        indexTokenCountMap: prepared.indexTokenCountMap,
+        initialSummary: prepared.summary,
+        runId: responseId,
+        summarizationConfig,
+        signal: abortController.signal,
+        customHandlers: handlers,
+        requestBody: {
+          messageId: responseId,
+          conversationId,
         },
-      },
-    });
+        user: { id: userId },
+      });
+
+      if (!run) {
+        throw new Error('Failed to create agent run');
+      }
+
+      await run.processStream({ messages: prepared.messages }, config, {
+        callbacks: {
+          [Callback.TOOL_ERROR]: (graph, error, toolId) => {
+            logger.error(`[OpenAI API] Tool Error "${toolId}"`, error);
+          },
+        },
+      });
+    };
+
+    try {
+      await runAgent(preparedInputs);
+    } catch (error) {
+      if (!isPromptOverflowError(error)) {
+        throw error;
+      }
+
+      logger.warn(
+        '[OpenAI API] Provider rejected prompt as too long; retrying with forced overflow compaction',
+      );
+
+      const overflowInputs = prepareCompactedRunInputs({
+        payload: openaiMessages,
+        maxContextTokens: primaryConfig.maxContextTokens,
+        encoding: primaryConfig.model_parameters?.model || primaryConfig.model,
+        toolSet,
+        formatMessages: formatRunMessages,
+        logPrefix: 'OpenAI API',
+        mode: 'overflow',
+      });
+
+      if (
+        overflowInputs.compactionApplied !== true ||
+        overflowInputs.compactionSignature === preparedInputs.compactionSignature
+      ) {
+        throw error;
+      }
+
+      preparedInputs = overflowInputs;
+      await runAgent(preparedInputs);
+    }
 
     // Record token usage against balance
     const balanceConfig = getBalanceConfig(appConfig);

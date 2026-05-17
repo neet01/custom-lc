@@ -297,6 +297,393 @@ describe('TeamsArchiveService', () => {
     });
   });
 
+  it('lists scoped conversations with participant, topic, chat type, and daysBack filters', async () => {
+    db.findTeamsArchiveConversations.mockResolvedValue([
+      {
+        _id: 'conv-1',
+        graphChatId: 'chat-10',
+        chatType: 'oneOnOne',
+        topic: 'Quarterly review',
+        participants: [{ displayName: 'Manager', email: 'manager@example.com' }],
+        lastMessageAt: new Date('2026-05-01T12:00:00.000Z'),
+        updatedAt: new Date('2026-05-01T12:00:00.000Z'),
+        messageCount: 24,
+      },
+    ]);
+
+    const result = await TeamsArchiveService.listConversations(user, {
+      participants: ['Manager'],
+      topic: 'review',
+      chatType: 'oneOnOne',
+      daysBack: 90,
+      limit: 10,
+    });
+
+    expect(db.findTeamsArchiveConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: 'user-1',
+        chatType: 'oneOnOne',
+        lastMessageAt: expect.any(Object),
+        $and: expect.any(Array),
+      }),
+      expect.objectContaining({
+        limit: 5,
+        offset: 0,
+      }),
+    );
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_list',
+      chatType: 'oneOnOne',
+      topic: 'review',
+      daysBack: 90,
+      participants: ['Manager'],
+    });
+    expect(result.conversations).toHaveLength(1);
+    expect(result.conversations[0]).toMatchObject({
+      graphChatId: 'chat-10',
+      chatType: 'oneOnOne',
+      topic: 'Quarterly review',
+    });
+  });
+
+  it('returns disambiguation candidates for conversation dossiers when multiple chats match', async () => {
+    db.findTeamsArchiveConversations.mockResolvedValue([
+      {
+        _id: 'conv-a',
+        graphChatId: 'chat-a',
+        chatType: 'oneOnOne',
+        topic: 'Rachel weekly sync',
+        participants: [{ displayName: 'Rachel', email: 'rachel@example.com' }],
+        firstMessageAt: new Date('2026-01-01T00:00:00.000Z'),
+        lastMessageAt: new Date('2026-05-01T00:00:00.000Z'),
+        messageCount: 40,
+        syncStatus: 'complete',
+      },
+      {
+        _id: 'conv-b',
+        graphChatId: 'chat-b',
+        chatType: 'oneOnOne',
+        topic: 'Rachel project thread',
+        participants: [{ displayName: 'Rachel', email: 'rachel@example.com' }],
+        firstMessageAt: new Date('2025-11-01T00:00:00.000Z'),
+        lastMessageAt: new Date('2026-04-15T00:00:00.000Z'),
+        messageCount: 22,
+        syncStatus: 'complete',
+      },
+    ]);
+
+    const result = await TeamsArchiveService.getConversationDossier(user, {
+      participants: ['Rachel'],
+      chatType: 'oneOnOne',
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_dossier',
+      resolved: false,
+      candidateCount: 2,
+      chatType: 'oneOnOne',
+      participants: ['Rachel'],
+    });
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates[0]).toMatchObject({
+      graphChatId: 'chat-a',
+      topic: 'Rachel weekly sync',
+    });
+  });
+
+  it('uses sender fallback when participant metadata is missing from conversations', async () => {
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          _id: 'conv-fallback',
+          graphChatId: 'chat-fallback',
+          chatType: 'oneOnOne',
+          topic: 'Legacy 1:1',
+          participants: [],
+          firstMessageAt: new Date('2026-01-10T00:00:00.000Z'),
+          lastMessageAt: new Date('2026-04-10T00:00:00.000Z'),
+          messageCount: 3,
+          syncStatus: 'complete',
+        },
+      ]);
+    db.findTeamsArchiveMessages
+      .mockResolvedValueOnce([
+        {
+          _id: 'm-fallback-1',
+          graphMessageId: 'gm-fallback-1',
+          graphChatId: 'chat-fallback',
+          fromDisplayName: 'Rachel Steele',
+          fromEmail: 'rachel@example.com',
+          bodyPreview: 'Following up on staffing',
+          bodyText: 'Following up on staffing',
+          sentDateTime: new Date('2026-04-10T00:00:00.000Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          _id: 'm-fallback-1',
+          graphMessageId: 'gm-fallback-1',
+          graphChatId: 'chat-fallback',
+          fromDisplayName: 'Rachel Steele',
+          fromEmail: 'rachel@example.com',
+          bodyPreview: 'Following up on staffing',
+          bodyText: 'Following up on staffing',
+          sentDateTime: new Date('2026-04-10T00:00:00.000Z'),
+        },
+        {
+          _id: 'm-fallback-2',
+          graphMessageId: 'gm-fallback-2',
+          graphChatId: 'chat-fallback',
+          fromDisplayName: 'Test User',
+          fromEmail: 'user@example.com',
+          bodyPreview: 'Here is the update',
+          bodyText: 'Here is the update',
+          sentDateTime: new Date('2026-04-11T00:00:00.000Z'),
+        },
+      ]);
+    db.countTeamsArchiveMessages.mockResolvedValue(2);
+
+    const result = await TeamsArchiveService.getConversationDossier(user, {
+      participants: ['Rachel Steele'],
+      chatType: 'oneOnOne',
+    });
+
+    expect(db.findTeamsArchiveMessages).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        user: 'user-1',
+        $or: expect.any(Array),
+      }),
+      expect.objectContaining({
+        limit: 2000,
+      }),
+    );
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_dossier',
+      resolved: true,
+      archiveBacked: true,
+      chat: {
+        graphChatId: 'chat-fallback',
+      },
+      completeness: {
+        loadedAllMessages: true,
+        totalMessagesInScope: 2,
+      },
+    });
+  });
+
+  it('returns completeness metadata for resolved conversation dossiers', async () => {
+    db.findTeamsArchiveConversations.mockResolvedValue([
+      {
+        _id: 'conv-dossier',
+        graphChatId: 'chat-dossier',
+        chatType: 'group',
+        topic: 'Design review',
+        participants: [{ displayName: 'Lead', email: 'lead@example.com' }],
+        firstMessageAt: new Date('2026-02-01T00:00:00.000Z'),
+        lastMessageAt: new Date('2026-02-03T00:00:00.000Z'),
+        messageCount: 3,
+        syncStatus: 'complete',
+      },
+    ]);
+    db.countTeamsArchiveMessages.mockResolvedValue(3);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'msg-a',
+        graphMessageId: 'g-a',
+        graphChatId: 'chat-dossier',
+        fromDisplayName: 'Lead',
+        fromEmail: 'lead@example.com',
+        bodyPreview: 'Kickoff agenda',
+        bodyText: 'Kickoff agenda',
+        sentDateTime: new Date('2026-02-01T10:00:00.000Z'),
+      },
+      {
+        _id: 'msg-b',
+        graphMessageId: 'g-b',
+        graphChatId: 'chat-dossier',
+        fromDisplayName: 'Test User',
+        fromEmail: 'user@example.com',
+        bodyPreview: 'Design review topic',
+        bodyText: 'Design review topic',
+        sentDateTime: new Date('2026-02-02T10:00:00.000Z'),
+      },
+      {
+        _id: 'msg-c',
+        graphMessageId: 'g-c',
+        graphChatId: 'chat-dossier',
+        fromDisplayName: 'Lead',
+        fromEmail: 'lead@example.com',
+        bodyPreview: 'Action items',
+        bodyText: 'Action items',
+        sentDateTime: new Date('2026-02-03T10:00:00.000Z'),
+      },
+    ]);
+
+    const result = await TeamsArchiveService.getConversationDossier(user, {
+      chatId: 'chat-dossier',
+      topic: 'design',
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_dossier',
+      resolved: true,
+      archiveBacked: true,
+      completeness: {
+        loadedAllMessages: true,
+        loadedMessages: 3,
+        totalMessagesInScope: 3,
+        truncated: false,
+      },
+      matchedMessages: 1,
+    });
+    expect(result.highlights.length).toBeGreaterThan(0);
+  });
+
+  it('returns a bounded message window around the anchor message', async () => {
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([{ graphChatId: 'chat-window' }])
+      .mockResolvedValueOnce([
+        {
+          graphChatId: 'chat-window',
+          topic: 'Window test',
+          chatType: 'group',
+          participants: [{ displayName: 'Lead', email: 'lead@example.com' }],
+        },
+      ]);
+    db.findTeamsArchiveMessages
+      .mockResolvedValueOnce([
+        {
+          _id: 'anchor',
+          graphMessageId: 'anchor-g',
+          graphChatId: 'chat-window',
+          fromDisplayName: 'Lead',
+          fromEmail: 'lead@example.com',
+          bodyPreview: 'Anchor text',
+          bodyText: 'Anchor text',
+          sentDateTime: new Date('2026-03-02T12:00:00.000Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          _id: 'before-1',
+          graphMessageId: 'before-g',
+          graphChatId: 'chat-window',
+          fromDisplayName: 'Lead',
+          fromEmail: 'lead@example.com',
+          bodyPreview: 'Before text',
+          bodyText: 'Before text',
+          sentDateTime: new Date('2026-03-02T11:00:00.000Z'),
+        },
+        {
+          _id: 'anchor',
+          graphMessageId: 'anchor-g',
+          graphChatId: 'chat-window',
+          fromDisplayName: 'Lead',
+          fromEmail: 'lead@example.com',
+          bodyPreview: 'Anchor text',
+          bodyText: 'Anchor text',
+          sentDateTime: new Date('2026-03-02T12:00:00.000Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          _id: 'anchor',
+          graphMessageId: 'anchor-g',
+          graphChatId: 'chat-window',
+          fromDisplayName: 'Lead',
+          fromEmail: 'lead@example.com',
+          bodyPreview: 'Anchor text',
+          bodyText: 'Anchor text',
+          sentDateTime: new Date('2026-03-02T12:00:00.000Z'),
+        },
+        {
+          _id: 'after-1',
+          graphMessageId: 'after-g',
+          graphChatId: 'chat-window',
+          fromDisplayName: 'Test User',
+          fromEmail: 'user@example.com',
+          bodyPreview: 'After text',
+          bodyText: 'After text',
+          sentDateTime: new Date('2026-03-02T13:00:00.000Z'),
+        },
+      ]);
+
+    const result = await TeamsArchiveService.getMessagesWindow(user, {
+      chatId: 'chat-window',
+      aroundMessageId: 'anchor-g',
+      before: 1,
+      after: 1,
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'message_window',
+      chatId: 'chat-window',
+      graphChatId: 'chat-window',
+      anchorGraphMessageId: 'anchor-g',
+    });
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages.map((message) => message.graphMessageId)).toEqual([
+      'before-g',
+      'anchor-g',
+      'after-g',
+    ]);
+  });
+
+  it('summarizes a conversation with matched message counts and highlights', async () => {
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([{ graphChatId: 'chat-summary' }])
+      .mockResolvedValueOnce([
+        {
+          graphChatId: 'chat-summary',
+          topic: 'Kubernetes troubleshooting',
+          chatType: 'oneOnOne',
+          participants: [{ displayName: 'Manager', email: 'manager@example.com' }],
+        },
+      ]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'sum-1',
+        graphMessageId: 'sum-g-1',
+        graphChatId: 'chat-summary',
+        fromDisplayName: 'Manager',
+        fromEmail: 'manager@example.com',
+        bodyPreview: 'Need cluster help',
+        bodyText: 'Need cluster help',
+        sentDateTime: new Date('2026-01-01T10:00:00.000Z'),
+      },
+      {
+        _id: 'sum-2',
+        graphMessageId: 'sum-g-2',
+        graphChatId: 'chat-summary',
+        fromDisplayName: 'Test User',
+        fromEmail: 'user@example.com',
+        bodyPreview: 'kubectl get pods -A',
+        bodyText: 'kubectl get pods -A',
+        sentDateTime: new Date('2026-01-02T10:00:00.000Z'),
+      },
+    ]);
+
+    const result = await TeamsArchiveService.summarizeConversation(user, {
+      chatId: 'chat-summary',
+      topic: 'kubectl',
+      limit: 2,
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_summary',
+      chatId: 'chat-summary',
+      query: 'kubectl',
+      totalMessages: 2,
+      matchedMessages: 1,
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.highlights[0]).toMatchObject({
+      graphMessageId: 'sum-g-2',
+    });
+  });
+
   it('returns the full archived message body when a preview was truncated', async () => {
     db.findTeamsArchiveMessages.mockImplementation((filter) => {
       if (filter?.graphMessageId === 'graph-msg-3') {

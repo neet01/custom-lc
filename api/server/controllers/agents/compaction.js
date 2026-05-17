@@ -398,9 +398,117 @@ function isPromptOverflowError(error) {
   );
 }
 
+function sumFormattedTokens(indexTokenCountMap = {}, messages = [], encoding) {
+  if (!indexTokenCountMap || typeof indexTokenCountMap !== 'object') {
+    return 0;
+  }
+
+  return Object.entries(indexTokenCountMap).reduce((total, [index, count]) => {
+    if (typeof count === 'number' && Number.isFinite(count)) {
+      return total + count;
+    }
+
+    const message = messages[Number(index)];
+    if (!message) {
+      return total;
+    }
+
+    return total + countFormattedMessageTokens(message, encoding);
+  }, 0);
+}
+
+function getCompactionSequence(mode) {
+  if (mode === 'overflow') {
+    return ['overflow', 'emergency'];
+  }
+
+  return ['preflight', 'overflow', 'emergency'];
+}
+
+function prepareCompactedRunInputs({
+  payload,
+  maxContextTokens,
+  encoding,
+  toolSet,
+  formatMessages,
+  seedSummary = null,
+  mode = 'preflight',
+  logPrefix = 'AgentCompaction',
+}) {
+  let currentPayload = payload;
+  let currentSummary = seedSummary;
+  let finalPrepared = null;
+  const attemptedModes = [];
+
+  for (const currentMode of getCompactionSequence(mode)) {
+    const compaction = compactPayloadToTarget({
+      payload: currentPayload,
+      maxContextTokens,
+      encoding,
+      initialSummary: currentSummary,
+      mode: currentMode,
+    });
+
+    attemptedModes.push(compaction.signature);
+
+    if (compaction.compacted) {
+      currentPayload = compaction.payload;
+      currentSummary = compaction.initialSummary;
+      logger.debug(
+        `[${logPrefix}] ${currentMode} compaction applied (${compaction.estimatedTokens} estimated tokens, signature=${compaction.signature})`,
+      );
+    }
+
+    const {
+      messages,
+      indexTokenCountMap,
+      summary: formattedSummary,
+    } = formatMessages(currentPayload, toolSet);
+    const formattedTokenTotal = sumFormattedTokens(indexTokenCountMap, messages, encoding);
+    const modeBudget = COMPACTION_MODES[currentMode] || {};
+
+    finalPrepared = {
+      payload: currentPayload,
+      messages,
+      indexTokenCountMap,
+      summary: currentSummary ?? formattedSummary,
+      compactionSignature: compaction.signature,
+      compactionApplied: compaction.compacted,
+      compactionMode: currentMode,
+      formattedTokenTotal,
+      messageCount: messages.length,
+      attemptedModes,
+    };
+
+    logger.debug(`[${logPrefix}] Prompt budget snapshot`, {
+      mode: currentMode,
+      formattedMessages: messages.length,
+      formattedTokenTotal,
+      maxFormattedTokens: modeBudget.maxFormattedTokens || null,
+    });
+
+    if (
+      typeof modeBudget.maxFormattedTokens === 'number' &&
+      formattedTokenTotal > modeBudget.maxFormattedTokens &&
+      currentMode !== 'emergency'
+    ) {
+      continue;
+    }
+
+    if (messages.length > 18 && currentMode !== 'emergency') {
+      continue;
+    }
+
+    break;
+  }
+
+  return finalPrepared;
+}
+
 module.exports = {
   COMPACTION_MODES,
   compactPayloadToTarget,
   isPromptOverflowError,
+  prepareCompactedRunInputs,
   sumPayloadTokens,
 };

@@ -892,7 +892,9 @@ function buildConversationLookupFilter(userId, options = {}) {
 }
 
 async function findConversationCandidates(userId, options = {}) {
-  const limit = clampInteger(options.limit, 10, { min: 1, max: 25 });
+  const requestedLimit =
+    options.candidateLimit ?? options.limit ?? 10;
+  const limit = clampInteger(requestedLimit, 10, { min: 1, max: 1000 });
   const lookup = buildConversationLookupFilter(userId, options);
   let conversations = await db.findTeamsArchiveConversations(lookup.filter, {
     limit,
@@ -2004,17 +2006,11 @@ async function syncUserArchive(user, options = {}) {
           nextMessageCursor = page.nextLink || null;
           remainingMessageBudget -= Math.max(normalizedMessages.length, 1);
 
-          const messageCountForConversation = await db.countTeamsArchiveMessages({
-            user: userId,
-            graphChatId: conversation.graphChatId,
-          });
-
           await db.updateTeamsArchiveConversation(conversationId, {
             syncCursor: incrementalRefresh ? undefined : nextMessageCursor || undefined,
             lastMessageSyncAt: new Date(),
             lastSyncedAt: new Date(),
             lastMessageAt: latestMessageAt || conversation?.lastMessageAt,
-            messageCount: messageCountForConversation,
           });
 
           if (!nextMessageCursor || reachedIncrementalCutoff) {
@@ -2915,24 +2911,17 @@ async function advancedSearchMessages(user, options = {}) {
 
   const { phraseRegex, termRegexes, clauses: topicClauses } = buildTopicSearchClauses(topic);
   const participantClauses = buildParticipantConversationClauses(options.participants);
-  const conversationFilter = {
-    user: userId,
-    ...(normalizedChatType !== 'any' ? { chatType: normalizedChatType } : {}),
-    ...((phraseRegex || termRegexes.length > 0 || participantClauses.length > 0)
-      ? {
-          $and: [
-            ...(topic ? [buildFieldOrClause(['topic'], phraseRegex || termRegexes[0])] : []),
-            ...participantClauses,
-          ],
-        }
-      : {}),
-  };
-
   let matchedConversationIds = [];
+  let matchedConversations = [];
   if (normalizedChatType !== 'any' || topic || participantClauses.length > 0) {
-    const matchedConversations = await db.findTeamsArchiveConversations(conversationFilter, {
-      limit: 1000,
+    const lookup = await findConversationCandidates(userId, {
+      ...options,
+      topic,
+      query: topic,
+      chatType: normalizedChatType,
+      candidateLimit: 1000,
     });
+    matchedConversations = lookup.conversations;
     matchedConversationIds = matchedConversations
       .map((conversation) => conversation.graphChatId)
       .filter(Boolean);
@@ -2988,6 +2977,8 @@ async function advancedSearchMessages(user, options = {}) {
   const conversationMap = new Map(
     conversations.map((conversation) => [conversation.graphChatId, conversation]),
   );
+  const resolvedConversation =
+    matchedConversations.length === 1 ? mapConversationCandidate(matchedConversations[0]) : undefined;
 
   return {
     retrievalMode: 'advanced_message_previews',
@@ -2997,7 +2988,10 @@ async function advancedSearchMessages(user, options = {}) {
     daysBack,
     participants: toArray(options.participants).filter(Boolean),
     guidance:
-      'These are compact previews optimized for topic discovery. If a single conversation stands out, use summarize_conversation before expanding with get_messages_window.',
+      resolvedConversation
+        ? 'These previews are scoped to one resolved conversation. If completeness matters, use conversation_dossier or summarize_conversation before expanding with get_messages_window.'
+        : 'These are compact previews optimized for topic discovery. If a single conversation stands out, use summarize_conversation before expanding with get_messages_window.',
+    ...(resolvedConversation ? { resolvedConversation } : {}),
     resultCount: messages.length,
     results: messages.map((message) =>
       mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {

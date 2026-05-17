@@ -297,6 +297,82 @@ describe('TeamsArchiveService', () => {
     });
   });
 
+  it('uses sender fallback for advanced search when participant metadata is missing', async () => {
+    searchTeamsMemoryChunks.mockResolvedValue({
+      retrievalMode: 'enterprise_memory',
+      results: [],
+    });
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          _id: 'conv-adv-fallback',
+          graphChatId: 'chat-adv-fallback',
+          chatType: 'oneOnOne',
+          topic: 'Rachel infrastructure',
+          participants: [],
+          firstMessageAt: new Date('2026-02-01T00:00:00.000Z'),
+          lastMessageAt: new Date('2026-03-01T00:00:00.000Z'),
+          messageCount: 8,
+          syncStatus: 'complete',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          graphChatId: 'chat-adv-fallback',
+          chatType: 'oneOnOne',
+          topic: 'Rachel infrastructure',
+          participants: [],
+        },
+      ]);
+    db.findTeamsArchiveMessages
+      .mockResolvedValueOnce([
+        {
+          _id: 'sender-hit',
+          graphMessageId: 'sender-hit-g',
+          graphChatId: 'chat-adv-fallback',
+          fromDisplayName: 'Rachel Steele',
+          fromEmail: 'rachel@example.com',
+          bodyPreview: 'Discussing infrastructure updates',
+          bodyText: 'Discussing infrastructure updates',
+          sentDateTime: new Date('2026-03-01T00:00:00.000Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          _id: 'adv-hit',
+          graphMessageId: 'adv-hit-g',
+          graphChatId: 'chat-adv-fallback',
+          fromDisplayName: 'Test User',
+          fromEmail: 'user@example.com',
+          bodyPreview: 'Infrastructure review with Rachel',
+          bodyText: 'Infrastructure review with Rachel',
+          sentDateTime: new Date('2026-03-02T00:00:00.000Z'),
+        },
+      ]);
+
+    const result = await TeamsArchiveService.advancedSearchMessages(user, {
+      topic: 'infrastructure',
+      participants: ['Rachel Steele'],
+      chatType: 'oneOnOne',
+      limit: 4,
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'advanced_message_previews',
+      resultCount: 1,
+      chatType: 'oneOnOne',
+      topic: 'infrastructure',
+      resolvedConversation: {
+        graphChatId: 'chat-adv-fallback',
+      },
+    });
+    expect(result.results[0]).toMatchObject({
+      graphChatId: 'chat-adv-fallback',
+      graphMessageId: 'adv-hit-g',
+    });
+  });
+
   it('lists scoped conversations with participant, topic, chat type, and daysBack filters', async () => {
     db.findTeamsArchiveConversations.mockResolvedValue([
       {

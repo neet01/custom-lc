@@ -31,6 +31,9 @@ const DEFAULT_SEARCH_LIMIT = 25;
 const DEFAULT_SYNC_STALE_MINUTES = 45;
 const DEFAULT_MAX_CONCURRENT_SYNCS = 3;
 const DEFAULT_DISCOVERY_REFRESH_HOURS = 12;
+const DEFAULT_DISCOVERY_CONCURRENCY = 4;
+const DEFAULT_MEMBER_ENRICHMENT_MODE = 'adaptive';
+const DEFAULT_MEMBER_ENRICHMENT_FAILURE_THRESHOLD = 8;
 const HEARTBEAT_MIN_INTERVAL_MS = 30 * 1000;
 const HEARTBEAT_CHAT_INTERVAL = 5;
 
@@ -67,6 +70,15 @@ function normalizeGraphBaseUrl(baseUrl = DEFAULT_GRAPH_BASE_URL) {
 function getTeamsArchiveConfig() {
   const parsedMaxConcurrentSyncs = Number(process.env.TEAMS_ARCHIVE_MAX_CONCURRENT_SYNCS);
   const parsedDiscoveryRefreshHours = Number(process.env.TEAMS_ARCHIVE_DISCOVERY_REFRESH_HOURS);
+  const parsedDiscoveryConcurrency = Number(process.env.TEAMS_ARCHIVE_DISCOVERY_CONCURRENCY);
+  const parsedMemberLookupFailureThreshold = Number(
+    process.env.TEAMS_ARCHIVE_MEMBER_ENRICHMENT_FAILURE_THRESHOLD,
+  );
+  const memberEnrichmentMode = String(
+    process.env.TEAMS_ARCHIVE_MEMBER_ENRICHMENT_MODE || DEFAULT_MEMBER_ENRICHMENT_MODE,
+  )
+    .trim()
+    .toLowerCase();
 
   return {
     enabled: isTeamsArchiveEnabled(),
@@ -84,6 +96,19 @@ function getTeamsArchiveConfig() {
       Number.isFinite(parsedDiscoveryRefreshHours) && parsedDiscoveryRefreshHours > 0
         ? parsedDiscoveryRefreshHours
         : DEFAULT_DISCOVERY_REFRESH_HOURS,
+    discoveryConcurrency:
+      Number.isFinite(parsedDiscoveryConcurrency) && parsedDiscoveryConcurrency > 0
+        ? Math.min(Math.floor(parsedDiscoveryConcurrency), 16)
+        : DEFAULT_DISCOVERY_CONCURRENCY,
+    memberEnrichmentMode: ['all', 'non_meeting', 'disabled', 'adaptive'].includes(
+      memberEnrichmentMode,
+    )
+      ? memberEnrichmentMode
+      : DEFAULT_MEMBER_ENRICHMENT_MODE,
+    memberEnrichmentFailureThreshold:
+      Number.isFinite(parsedMemberLookupFailureThreshold) && parsedMemberLookupFailureThreshold > 0
+        ? Math.floor(parsedMemberLookupFailureThreshold)
+        : DEFAULT_MEMBER_ENRICHMENT_FAILURE_THRESHOLD,
     maxConcurrentSyncs:
       Number.isFinite(parsedMaxConcurrentSyncs) && parsedMaxConcurrentSyncs >= 0
         ? Math.floor(parsedMaxConcurrentSyncs)
@@ -390,6 +415,82 @@ function summarizeChatTypes(chats = []) {
     },
     { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 },
   );
+}
+
+function createMemberLookupController(config = getTeamsArchiveConfig()) {
+  return {
+    mode: config.memberEnrichmentMode,
+    failureThreshold: config.memberEnrichmentFailureThreshold,
+    disabledChatTypes: new Set(),
+    stats: {
+      skippedByMode: 0,
+      skippedByCircuitBreaker: 0,
+      successCount: 0,
+      failureCount: 0,
+      failureByChatType: {},
+    },
+  };
+}
+
+function shouldAttemptMemberLookup(chatType, controller) {
+  if (!controller) {
+    return true;
+  }
+
+  if (controller.mode === 'disabled') {
+    controller.stats.skippedByMode += 1;
+    return false;
+  }
+
+  if (controller.mode === 'non_meeting' && chatType === 'meeting') {
+    controller.stats.skippedByMode += 1;
+    return false;
+  }
+
+  if (controller.disabledChatTypes.has(chatType)) {
+    controller.stats.skippedByCircuitBreaker += 1;
+    return false;
+  }
+
+  return true;
+}
+
+function recordMemberLookupFailure(chatType, controller) {
+  if (!controller) {
+    return false;
+  }
+
+  controller.stats.failureCount += 1;
+  controller.stats.failureByChatType[chatType] =
+    (controller.stats.failureByChatType[chatType] || 0) + 1;
+
+  if (
+    controller.mode === 'adaptive' &&
+    controller.stats.failureByChatType[chatType] >= controller.failureThreshold &&
+    !controller.disabledChatTypes.has(chatType)
+  ) {
+    controller.disabledChatTypes.add(chatType);
+    return true;
+  }
+
+  return false;
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }
 
 function getUserSenderClauses(user) {
@@ -867,12 +968,21 @@ function isDiscoveryRefreshDue(backfillState) {
   return Date.now() - reference.getTime() >= refreshMs;
 }
 
-async function listChatMembers(user, chatId, chatType) {
+async function listChatMembers(user, chatId, chatType, controller) {
+  const normalizedChatType = String(chatType || 'unknown');
+  if (!shouldAttemptMemberLookup(normalizedChatType, controller)) {
+    return [];
+  }
+
   try {
     const response = await graphRequest(user, `/chats/${encodeURIComponent(chatId)}/members`, {
       query: { $top: 50 },
       suppressErrorLog: true,
     });
+
+    if (controller) {
+      controller.stats.successCount += 1;
+    }
 
     return toArray(response?.value).map((member) => ({
       displayName: member?.displayName || member?.email || '',
@@ -880,11 +990,20 @@ async function listChatMembers(user, chatId, chatType) {
       userId: member?.userId || member?.id || '',
     }));
   } catch (error) {
+    const disabledByCircuitBreaker = recordMemberLookupFailure(normalizedChatType, controller);
     logger.warn('[TeamsArchiveService] Failed to list chat members', {
       chatId,
-      chatType: chatType || 'unknown',
+      chatType: normalizedChatType,
       error: error?.message,
     });
+
+    if (disabledByCircuitBreaker) {
+      logger.info('[TeamsArchiveService] Disabling member enrichment for chat type during this sync', {
+        chatType: normalizedChatType,
+        failureThreshold: controller?.failureThreshold,
+      });
+    }
+
     return [];
   }
 }
@@ -1320,6 +1439,7 @@ async function syncUserArchive(user, options = {}) {
     const graphChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
     const processedChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
     const completedGraphChatIds = new Set();
+    const memberLookupController = createMemberLookupController(config);
 
     while (!discoveryComplete && discoveredThisRun < chatLimit) {
       await ensureSyncJobActive(syncJob._id?.toString?.() || syncJob.id);
@@ -1365,12 +1485,14 @@ async function syncUserArchive(user, options = {}) {
         hasNextPage: Boolean(response?.['@odata.nextLink']),
       });
 
-      for (const chat of chats) {
+      await mapWithConcurrency(chats, config.discoveryConcurrency, async (chat) => {
+        await ensureSyncJobActive(syncJob._id?.toString?.() || syncJob.id);
         const chatType = String(chat?.chatType || 'unknown');
-        const members = await listChatMembers(user, chat.id, chatType);
+        const members = await listChatMembers(user, chat.id, chatType, memberLookupController);
         const normalizedConversation = normalizeConversation(chat, members);
         const existingConversation = existingConversationMap.get(chat.id);
-        const sourceUpdatedAt = normalizedConversation.sourceUpdatedAt || existingConversation?.sourceUpdatedAt;
+        const sourceUpdatedAt =
+          normalizedConversation.sourceUpdatedAt || existingConversation?.sourceUpdatedAt;
         const lastMessageSyncAt = existingConversation?.lastMessageSyncAt || null;
         const sourceUpdatedMs = sourceUpdatedAt?.getTime?.() ?? 0;
         const lastMessageSyncMs = lastMessageSyncAt ? new Date(lastMessageSyncAt).getTime() : 0;
@@ -1395,9 +1517,9 @@ async function syncUserArchive(user, options = {}) {
           lastSyncedAt: existingConversation?.lastSyncedAt,
           messageCount: existingConversation?.messageCount || 0,
         });
+      });
 
-        discoveredThisRun += 1;
-      }
+      discoveredThisRun += chats.length;
 
       nextChatPageLink =
         response?.['@odata.nextLink'] && discoveredThisRun < chatLimit
@@ -1422,6 +1544,7 @@ async function syncUserArchive(user, options = {}) {
           stats: {
             graphChatTypeSummary,
             processedChatTypeSummary,
+            memberLookup: memberLookupController.stats,
           },
         },
         { userLeaseKey, slotLeaseKey, ownerToken },
@@ -1653,6 +1776,7 @@ async function syncUserArchive(user, options = {}) {
       nextChatPageLinkPresent: Boolean(nextChatPageLink),
       graphChatTypeSummary,
       processedChatTypeSummary,
+      memberLookup: memberLookupController.stats,
     });
 
     const updatedJob = await db.updateTeamsArchiveSyncJob(syncJob._id?.toString?.() || syncJob.id, {
@@ -1670,6 +1794,7 @@ async function syncUserArchive(user, options = {}) {
       stats: {
         graphChatTypeSummary,
         processedChatTypeSummary,
+        memberLookup: memberLookupController.stats,
         backfillState: {
           discoveredChatCount: backfillSnapshot?.discoveredChatCount || 0,
           completedChatCount: backfillSnapshot?.completedChatCount || 0,

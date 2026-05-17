@@ -1,13 +1,16 @@
 import React from 'react';
+import * as Ariakit from '@ariakit/react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Spinner, useToastContext } from '@librechat/client';
+import { DropdownPopup, Spinner, useToastContext } from '@librechat/client';
 import { QueryKeys } from 'librechat-data-provider';
+import { Ellipsis, Trash2, XCircle, ShieldAlert } from 'lucide-react';
 import {
   useCancelTeamsArchiveSyncMutation,
   useResetTeamsArchiveMutation,
   useSyncTeamsArchiveMutation,
   useTeamsArchiveStatusQuery,
 } from '~/data-provider';
+import type * as t from '~/common';
 
 function formatTimestamp(value?: string) {
   if (!value) {
@@ -167,6 +170,7 @@ export default function TeamsArchiveStatus() {
   const cancelMutation = useCancelTeamsArchiveSyncMutation();
   const resetMutation = useResetTeamsArchiveMutation();
   const [confirmReset, setConfirmReset] = React.useState(false);
+  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
 
   const syncStatus = data?.latestSync?.status ?? null;
   const backfillState = data?.backfillState;
@@ -198,7 +202,7 @@ export default function TeamsArchiveStatus() {
   const statusLabel = isSyncing ? 'Syncing' : getStatusLabel(syncStatus);
   const statusDetail =
     isSyncing
-      ? `${activePhase}. ${completedChats.toLocaleString()} complete, ${runningChats.toLocaleString()} running, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
+      ? `${activePhase}. ${completedChats.toLocaleString()} complete, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
       : hasBackfillBacklog
         ? `Latest run completed. ${pendingChats.toLocaleString()} chats remain pending for the next sync run${failedChats > 0 ? `, and ${failedChats.toLocaleString()} failed` : ''}.`
       : backfillState?.errorMessage ||
@@ -210,6 +214,12 @@ export default function TeamsArchiveStatus() {
       setConfirmReset(false);
     }
   }, [confirmReset, isSyncing]);
+
+  React.useEffect(() => {
+    if (!isMenuOpen && confirmReset) {
+      setConfirmReset(false);
+    }
+  }, [confirmReset, isMenuOpen]);
 
   const handleSync = async () => {
     try {
@@ -254,6 +264,7 @@ export default function TeamsArchiveStatus() {
     try {
       const result = await resetMutation.mutateAsync();
       setConfirmReset(false);
+      setIsMenuOpen(false);
       await queryClient.invalidateQueries([QueryKeys.teamsArchiveStatus]);
       showToast({
         message: result.message,
@@ -268,6 +279,57 @@ export default function TeamsArchiveStatus() {
       });
     }
   };
+
+  const actionMenuItems = React.useMemo<t.MenuItemProps[]>(() => {
+    const items: t.MenuItemProps[] = [];
+
+    if (syncStatus === 'running') {
+      items.push({
+        id: 'cancel-sync',
+        label: cancelMutation.isLoading ? 'Cancelling…' : 'Cancel sync',
+        icon: cancelMutation.isLoading ? <Spinner className="size-4" /> : <XCircle className="size-4" />,
+        disabled: cancelMutation.isLoading || resetMutation.isLoading,
+        onClick: () => {
+          void handleCancel();
+        },
+      });
+    }
+
+    items.push({
+      id: 'delete-archive',
+      label: confirmReset ? 'Confirm delete archive' : 'Delete archived Teams data',
+      icon: confirmReset ? <ShieldAlert className="size-4" /> : <Trash2 className="size-4" />,
+      disabled: isSyncing || isMutating,
+      hideOnClick: false,
+      separate: syncStatus === 'running',
+      onClick: () => {
+        void handleReset();
+      },
+    });
+
+    if (confirmReset) {
+      items.push({
+        id: 'keep-archive',
+        label: 'Keep archive data',
+        icon: <XCircle className="size-4" />,
+        hideOnClick: false,
+        disabled: resetMutation.isLoading,
+        onClick: () => {
+          setConfirmReset(false);
+          setIsMenuOpen(false);
+        },
+      });
+    }
+
+    return items;
+  }, [
+    cancelMutation.isLoading,
+    confirmReset,
+    isMutating,
+    isSyncing,
+    resetMutation.isLoading,
+    syncStatus,
+  ]);
 
   return (
     <div className="relative overflow-hidden rounded-[1.75rem] border border-white/40 bg-gradient-to-br from-white/85 via-white/70 to-white/45 p-4 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.35)] backdrop-blur-xl dark:border-white/10 dark:from-zinc-900/85 dark:via-zinc-900/70 dark:to-neutral-950/55">
@@ -293,50 +355,26 @@ export default function TeamsArchiveStatus() {
                 'Sync now'
               )}
             </button>
-            {syncStatus === 'running' ? (
-              <button
-                type="button"
-                className="inline-flex min-w-[7.5rem] items-center justify-center whitespace-nowrap rounded-2xl border border-rose-300/60 bg-rose-50/80 px-3 py-1.5 text-xs font-medium text-rose-700 shadow-sm backdrop-blur transition-colors hover:bg-rose-100/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-500/20 dark:bg-rose-950/40 dark:text-rose-200 dark:hover:bg-rose-950/55"
-                onClick={handleCancel}
-                disabled={cancelMutation.isLoading}
-              >
-                {cancelMutation.isLoading ? (
-                  <>
-                    <Spinner className="mr-1.5 h-3.5 w-3.5" />
-                    Cancelling…
-                  </>
-                ) : (
-                  'Cancel sync'
-                )}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="inline-flex min-w-[10rem] items-center justify-center whitespace-nowrap rounded-2xl border border-rose-300/60 bg-rose-50/80 px-3 py-1.5 text-xs font-medium text-rose-700 shadow-sm backdrop-blur transition-colors hover:bg-rose-100/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-500/20 dark:bg-rose-950/40 dark:text-rose-200 dark:hover:bg-rose-950/55"
-              onClick={handleReset}
-              disabled={isSyncing || isMutating}
-            >
-              {resetMutation.isLoading ? (
-                <>
-                  <Spinner className="mr-1.5 h-3.5 w-3.5" />
-                  Clearing…
-                </>
-              ) : confirmReset ? (
-                'Are you sure?'
-              ) : (
-                'Delete archived Teams data'
-              )}
-            </button>
-            {confirmReset ? (
-              <button
-                type="button"
-                className="inline-flex min-w-[6rem] items-center justify-center whitespace-nowrap rounded-2xl border border-white/50 bg-white/70 px-3 py-1.5 text-xs font-medium text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
-                onClick={() => setConfirmReset(false)}
-                disabled={resetMutation.isLoading}
-              >
-                Keep data
-              </button>
-            ) : null}
+            <DropdownPopup
+              portal={true}
+              menuId="teams-archive-actions"
+              focusLoop={true}
+              isOpen={isMenuOpen}
+              setIsOpen={setIsMenuOpen}
+              unmountOnHide={true}
+              className="z-[125]"
+              trigger={
+                <Ariakit.MenuButton
+                  aria-label="Teams archive actions"
+                  aria-expanded={isMenuOpen}
+                  disabled={isMutating}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/50 bg-white/70 text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
+                >
+                  <Ellipsis className="size-4" aria-hidden="true" />
+                </Ariakit.MenuButton>
+              }
+              items={actionMenuItems}
+            />
           </div>
         </div>
 
@@ -347,7 +385,7 @@ export default function TeamsArchiveStatus() {
                 <div className="text-sm font-semibold text-text-primary">Indexing archive</div>
                 <div className="mt-1 text-xs text-text-secondary">
                   {activePhase}. {completedChats.toLocaleString()} complete,{' '}
-                  {runningChats.toLocaleString()} running, {pendingChats.toLocaleString()} pending
+                  {pendingChats.toLocaleString()} pending
                   {failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.
                 </div>
               </div>
@@ -409,7 +447,7 @@ export default function TeamsArchiveStatus() {
               </div>
             <div className="mt-1 text-xs text-text-secondary">
               {isSyncing
-                ? `${runningChats.toLocaleString()} running, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}`
+                ? `${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}`
                 : hasBackfillBacklog
                   ? `Start another sync run to continue the backfill${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
                   : failedChats > 0

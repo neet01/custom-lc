@@ -1,9 +1,13 @@
-jest.mock('@librechat/data-schemas', () => ({
-  logger: {
-    error: jest.fn(),
-    info: jest.fn(),
-  },
-}));
+jest.mock(
+  '@librechat/data-schemas',
+  () => ({
+    logger: {
+      error: jest.fn(),
+      info: jest.fn(),
+    },
+  }),
+  { virtual: true },
+);
 
 jest.mock('~/server/middleware/requireJwtAuth', () => (req, _res, next) => next());
 jest.mock('~/server/middleware', () => ({

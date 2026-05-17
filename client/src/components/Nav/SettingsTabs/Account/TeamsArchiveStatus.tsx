@@ -503,9 +503,13 @@ export default function TeamsArchiveStatus() {
               {projectionCoverage ? (
                 <div className="mt-1 text-xs text-text-secondary">
                   {projectionCoverage.indexedConversationCount.toLocaleString()} /{' '}
-                  {projectionCoverage.totalConversationCount.toLocaleString()} chats indexed
+                  {projectionCoverage.totalConversationCount.toLocaleString()} chats projected
                   {projectionCoverage.totalConversationCount > 0
                     ? ` (${projectionCoverage.coveragePercent.toFixed(1)}%)`
+                    : ''}
+                  {projectionCoverage.searchableConversationCount <
+                  projectionCoverage.indexedConversationCount
+                    ? ` • ${projectionCoverage.searchableConversationCount.toLocaleString()} with searchable text chunks`
                     : ''}
                 </div>
               ) : null}

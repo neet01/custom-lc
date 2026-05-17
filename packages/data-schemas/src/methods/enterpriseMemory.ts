@@ -188,6 +188,19 @@ export function createEnterpriseMemoryMethods(mongoose: typeof import('mongoose'
     }
   }
 
+  async function countEnterpriseMemoryEntities(
+    filter: FilterQuery<IEnterpriseMemoryEntity> = {},
+  ): Promise<number> {
+    try {
+      const EnterpriseMemoryEntity = mongoose.models
+        .EnterpriseMemoryEntity as Model<IEnterpriseMemoryEntity>;
+      return await EnterpriseMemoryEntity.countDocuments(filter);
+    } catch (error) {
+      logger.error('[countEnterpriseMemoryEntities] Error counting enterprise memory entities', error);
+      throw new Error('Error counting enterprise memory entities');
+    }
+  }
+
   async function countEnterpriseMemoryChunks(
     filter: FilterQuery<IEnterpriseMemoryChunk> = {},
   ): Promise<number> {
@@ -299,6 +312,7 @@ export function createEnterpriseMemoryMethods(mongoose: typeof import('mongoose'
     updateEnterpriseMemoryJob,
     findEnterpriseMemoryEntities,
     findEnterpriseMemoryChunks,
+    countEnterpriseMemoryEntities,
     countEnterpriseMemoryChunks,
     countDistinctEnterpriseMemoryChunkField,
     findLatestEnterpriseMemoryJob,

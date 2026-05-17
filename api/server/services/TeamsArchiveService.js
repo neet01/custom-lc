@@ -1351,6 +1351,7 @@ async function getStatus(user) {
     activeSyncs,
     backfillState,
     projectionChunkCount,
+    projectionEntityConversationCount,
     projectionConversationCount,
   ] = await Promise.all([
     userId ? db.countTeamsArchiveConversations({ user: userId }) : 0,
@@ -1368,6 +1369,14 @@ async function getStatus(user) {
           user: userId,
           source: 'teams',
           sourceRecordType: 'teams_message',
+        })
+      : 0,
+    userId && typeof db.countEnterpriseMemoryEntities === 'function'
+      ? db.countEnterpriseMemoryEntities({
+          user: userId,
+          source: 'teams',
+          entityType: 'conversation',
+          sourceRecordType: 'teams_chat',
         })
       : 0,
     userId && typeof db.countDistinctEnterpriseMemoryChunkField === 'function'
@@ -1453,15 +1462,21 @@ async function getStatus(user) {
         }
       : null,
     projectionCoverage: {
-      indexedConversationCount: projectionConversationCount || 0,
+      indexedConversationCount: projectionEntityConversationCount || 0,
       totalConversationCount: conversationCount || 0,
       indexedChunkCount: projectionChunkCount || 0,
-      pendingConversationCount: Math.max(0, (conversationCount || 0) - (projectionConversationCount || 0)),
+      searchableConversationCount: projectionConversationCount || 0,
+      pendingConversationCount:
+        Math.max(0, (conversationCount || 0) - (projectionEntityConversationCount || 0)),
       fullyIndexed:
-        conversationCount > 0 ? (projectionConversationCount || 0) >= conversationCount : false,
+        conversationCount > 0
+          ? (projectionEntityConversationCount || 0) >= conversationCount
+          : false,
       coveragePercent:
         conversationCount > 0
-          ? Number((((projectionConversationCount || 0) / conversationCount) * 100).toFixed(1))
+          ? Number(
+              ((((projectionEntityConversationCount || 0) / conversationCount) * 100).toFixed(1)),
+            )
           : 0,
     },
   };

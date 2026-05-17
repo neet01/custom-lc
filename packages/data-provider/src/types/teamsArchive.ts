@@ -51,6 +51,7 @@ export type TeamsArchiveProjectionCoverage = {
   indexedConversationCount: number;
   totalConversationCount: number;
   indexedChunkCount: number;
+  searchableConversationCount: number;
   pendingConversationCount: number;
   fullyIndexed: boolean;
   coveragePercent: number;

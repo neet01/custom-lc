@@ -1,6 +1,6 @@
 # Cortex Document Intelligence System
 
-Last updated: 2026-05-15
+Last updated: 2026-05-17
 
 ## Purpose
 
@@ -9,6 +9,96 @@ This document captures the plan for turning Cortex from a chat application with 
 The immediate trigger was Bedrock Converse file upload limits. That issue exposed a broader architectural constraint: provider-native file handling is not a stable foundation for enterprise-scale document reasoning.
 
 The correct long-term design is a Cortex-owned document pipeline.
+
+## Strategic Context
+
+Document intelligence is not an isolated feature area.
+
+It exists inside the broader Cortex objective: building an enterprise memory and operational intelligence platform that can reason across fragmented organizational systems over time.
+
+That means uploaded files should be treated as one source feed into a larger canonical memory layer alongside:
+
+- Teams
+- Outlook
+- SharePoint
+- Jira
+- Confluence
+- GitLab
+- operational telemetry
+- and future enterprise systems
+
+The long-term value is not just semantic file retrieval. It is the ability to connect documents to:
+
+- people
+- teams
+- systems
+- projects
+- incidents
+- decisions
+- operational events
+- ownership relationships
+- and temporal change
+
+This has two design consequences:
+
+1. document ingestion must preserve provenance and source truth
+2. document retrieval must evolve toward canonical entity/event alignment, not remain a standalone vector silo
+
+In other words, file upload and RAG work should be implemented as feeds into organizational memory, not as a one-off document chatbot subsystem.
+
+## Near-Term Execution Order
+
+Document intelligence work should follow the execution order below so the platform does not outrun its operational reliability.
+
+### 1. Stabilize runtime compaction and prompt-budget behavior
+
+Before more document context is introduced, Cortex needs reliable context compaction and overflow recovery.
+
+Why:
+
+- broader retrieval is counterproductive if turns fail before tools run
+
+### 2. Finish retrieval correctness on existing sources
+
+Current retrieval paths must support:
+
+- full-body recovery for truncated source content
+- deterministic fallback when memory-layer retrieval is empty
+- explicit completeness/truncation signaling
+
+Why:
+
+- users need trustworthy evidence retrieval before broader memory abstractions are added
+
+### 3. Build a real test/eval loop
+
+Why:
+
+- document and memory features cannot be validated by ad hoc prompting alone
+
+Required:
+
+- service/API tests
+- tool-call telemetry
+- fixed retrieval eval sets
+
+### 4. Productize reusable uploaded-file access
+
+Why:
+
+- persisted uploads already exist, but users need a first-class way to reference them again in later chats
+
+### 5. Complete the document pipeline
+
+Why:
+
+- user-scoped RAG should sit on top of durable ingestion, versioning, jobs, and chunk provenance
+
+### 6. Add user-scoped uploaded-document retrieval
+
+Why:
+
+- this is the correct first durable document-memory feature, and it should be implemented before broader cross-source graph ambitions
 
 ## Why This Needs To Exist
 
@@ -127,6 +217,22 @@ The correct pattern is:
 2. project them into canonical memory records
 3. retrieve across memory chunks
 4. later enrich and link across sources
+
+This is the bridge between today's upload/RAG work and the longer-term operational intelligence layer.
+
+The target state is not:
+
+- files in one silo
+- chats in another silo
+- tickets in another silo
+
+The target state is a shared canonical memory model where those records can be correlated for:
+
+- evidence-backed reasoning
+- timeline analysis
+- ownership inference
+- cross-system relationship discovery
+- and operational insight generation
 
 ## Core Entities
 

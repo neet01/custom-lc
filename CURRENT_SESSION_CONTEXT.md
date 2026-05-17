@@ -1,6 +1,6 @@
 # Current Session Context
 
-Last updated: 2026-05-15
+Last updated: 2026-05-17
 
 This file is the current working handoff for the LibreChat customization effort. Use this as the primary reference for future turns instead of relying on prior chat history.
 
@@ -14,6 +14,158 @@ This LibreChat fork is being turned into an internal enterprise AI platform for 
 - document and spreadsheet transformation workflows
 - future MCP/Jira/Confluence/AWS Bedrock integration
 - future Teams archive ingestion and retrieval
+
+## Strategic North Star
+
+Cortex is not intended to become just another enterprise chatbot or a thin RAG wrapper.
+
+The long-term goal is to evolve Cortex into an enterprise memory and operational intelligence platform that continuously synthesizes fragmented organizational data into evidence-backed operational insight.
+
+The core problem is that modern enterprises operate across disconnected systems:
+
+- Jira
+- Confluence
+- GitLab
+- Slack
+- Teams
+- AWS infrastructure
+- CI/CD pipelines
+- documents
+- meetings
+- operational telemetry
+- and later ERP / EDW systems
+
+Humans currently perform the cross-system reasoning manually. Important knowledge is tribal, fragmented, temporal, and difficult to retrieve.
+
+Cortex exists to continuously build and maintain an evolving understanding of how the organization operates.
+
+Architectural direction:
+
+Raw Enterprise Systems
+-> Normalization Layer
+-> Canonical Entity / Event Model
+-> Enterprise Knowledge Graph / Event Graph
+-> Reasoning & Insight Engine
+-> Chat / Agents / Dashboards / Automation
+
+The intended canonical model should eventually represent:
+
+- people
+- teams
+- systems
+- repositories
+- deployments
+- incidents
+- projects
+- risks
+- discussions
+- decisions
+- documents
+- operational events
+- ownership relationships
+- and temporal change over time
+
+Platform priorities:
+
+- evidence-backed reasoning
+- source attribution
+- temporal awareness
+- cross-system relationships
+- delegated-user permissions
+- organizational memory
+- operational awareness
+- explainability
+- secure enterprise deployment
+
+Important principle:
+
+- the moat is not the chat UI or the LLM itself
+- the moat is the continuously evolving operational memory and reasoning layer built from real enterprise workflows, relationships, and historical context
+
+Engineering implications for future work:
+
+- every integration should be treated as a feed into organizational memory, not as an isolated point feature
+- preserve raw source records for auditability
+- normalize only enough structure to support reasoning and relationships
+- do not overfit the architecture to vector-only retrieval
+- prioritize entity resolution, relationship mapping, event correlation, ownership tracking, and timeline analysis
+- prioritize incremental operational value over platform sprawl
+
+## Current Execution Priorities
+
+Before expanding the broader enterprise memory layer, Cortex should prioritize the current execution order below.
+
+### Priority 1: Stabilize agent/runtime context handling
+
+- fix `input too long` failures before tool execution
+- make summarization/compaction engage earlier and more reliably
+- add overflow recovery with a compaction + retry path
+- keep tool outputs aggressively bounded and observable
+
+Reason:
+
+- if turns fail before tools run, every additional memory source increases fragility instead of value
+
+### Priority 2: Finish retrieval correctness for current sources
+
+- support full-body retrieval for truncated source records
+- guarantee archive/source fallback when memory-layer retrieval returns sparse or empty results
+- expose completeness and truncation metadata clearly
+- prefer exact source resolution over broad preview search
+
+Reason:
+
+- Cortex cannot become an enterprise memory layer if retrieval is fragmentary or ambiguous
+
+### Priority 3: Build a repeatable testing/eval loop
+
+- service/API integration tests for retrieval and sync flows
+- tool-call telemetry to confirm actual action selection
+- a fixed eval set of known facts across Teams and uploaded files
+- regression checks for fallback, long-body recovery, and participant filters
+
+Reason:
+
+- ad hoc prompting is not a sufficient validation strategy for a memory platform
+
+### Priority 4: Productize reusable uploaded-file workflows
+
+- first-class “use existing file” flow in the chat composer
+- multi-select from the user file library
+- clear distinction between attach-for-this-run and search-across-my-library
+
+Reason:
+
+- the repo already partially supports reuse of persisted uploads, but the UX is not yet a deliberate product feature
+
+### Priority 5: Complete the document pipeline
+
+- durable `Document` / `DocumentVersion` / `DocumentJob` processing
+- async extraction/chunking/indexing workers
+- provenance-preserving chunk storage
+- processing status / retry visibility
+
+Reason:
+
+- retrieval should not be expanded on top of unstable or incomplete ingestion
+
+### Priority 6: Add user-scoped uploaded-document retrieval
+
+- search/retrieve across the user’s uploaded document corpus
+- return file/version/chunk provenance
+- expose a dedicated uploaded-documents retrieval tool for agents
+
+Reason:
+
+- this is the first real document memory feed and should be durable before broader cross-source expansion
+
+### Priority 7: Expand the shared enterprise memory layer
+
+- only after the above is stable should additional sources be pulled deeper into the canonical entity/event model
+
+Reason:
+
+- cross-source reasoning is only valuable if the underlying retrieval and ingestion layers are trustworthy
 
 ## Current Product State
 

@@ -56,6 +56,10 @@ const { resolveConfigServers } = require('~/server/services/MCP');
 const { getMCPServerTools } = require('~/server/services/Config');
 const BaseClient = require('~/app/clients/BaseClient');
 const { getMCPManager } = require('~/config');
+const {
+  compactPayloadToTarget,
+  isPromptOverflowError,
+} = require('~/server/controllers/agents/compaction');
 const db = require('~/models');
 
 const loadAgent = (params) => loadAgentFn(params, { getAgent: db.getAgent, getMCPServerTools });
@@ -751,38 +755,70 @@ class AgentClient extends BaseClient {
 
       const toolSet = buildToolSet(this.options.agent);
       const tokenCounter = createTokenCounter(this.getEncoding());
-      let {
-        messages: initialMessages,
-        indexTokenCountMap,
-        summary: initialSummary,
-        boundaryTokenAdjustment,
-      } = formatAgentMessages(payload, this.indexTokenCountMap, toolSet);
-      if (boundaryTokenAdjustment) {
-        logger.debug(
-          `[AgentClient] Boundary token adjustment: ${boundaryTokenAdjustment.original} → ${boundaryTokenAdjustment.adjusted} (${boundaryTokenAdjustment.remainingChars}/${boundaryTokenAdjustment.totalChars} chars)`,
-        );
-      }
-      if (indexTokenCountMap && isEnabled(process.env.AGENT_DEBUG_LOGGING)) {
-        const entries = Object.entries(indexTokenCountMap);
-        const perMsg = entries.map(([idx, count]) => {
-          const msg = initialMessages[Number(idx)];
-          const type = msg ? msg._getType() : '?';
-          return `${idx}:${type}=${count}`;
+      const materializeRunInputs = (runPayload, seedSummary, mode = 'preflight') => {
+        let currentPayload = runPayload;
+        let currentSummary = seedSummary;
+
+        const compaction = compactPayloadToTarget({
+          payload: currentPayload,
+          maxContextTokens: this.maxContextTokens,
+          encoding: this.getEncoding(),
+          initialSummary: currentSummary,
+          mode,
         });
-        logger.debug(
-          `[AgentClient] Token map after format: [${perMsg.join(', ')}] (payload=${payload.length}, formatted=${initialMessages.length})`,
-        );
-      }
-      indexTokenCountMap = hydrateMissingIndexTokenCounts({
-        messages: initialMessages,
-        indexTokenCountMap,
-        tokenCounter,
-      });
+
+        if (compaction.compacted) {
+          currentPayload = compaction.payload;
+          currentSummary = compaction.initialSummary;
+          logger.debug(
+            `[AgentClient] ${mode} compaction applied (${compaction.estimatedTokens} estimated tokens, signature=${compaction.signature})`,
+          );
+        }
+
+        let {
+          messages,
+          indexTokenCountMap,
+          summary: formattedSummary,
+          boundaryTokenAdjustment,
+        } = formatAgentMessages(currentPayload, this.indexTokenCountMap, toolSet);
+        if (boundaryTokenAdjustment) {
+          logger.debug(
+            `[AgentClient] Boundary token adjustment: ${boundaryTokenAdjustment.original} → ${boundaryTokenAdjustment.adjusted} (${boundaryTokenAdjustment.remainingChars}/${boundaryTokenAdjustment.totalChars} chars)`,
+          );
+        }
+        if (indexTokenCountMap && isEnabled(process.env.AGENT_DEBUG_LOGGING)) {
+          const entries = Object.entries(indexTokenCountMap);
+          const perMsg = entries.map(([idx, count]) => {
+            const msg = messages[Number(idx)];
+            const type = msg ? msg._getType() : '?';
+            return `${idx}:${type}=${count}`;
+          });
+          logger.debug(
+            `[AgentClient] Token map after format: [${perMsg.join(', ')}] (payload=${currentPayload.length}, formatted=${messages.length})`,
+          );
+        }
+        indexTokenCountMap = hydrateMissingIndexTokenCounts({
+          messages,
+          indexTokenCountMap,
+          tokenCounter,
+        });
+
+        return {
+          payload: currentPayload,
+          messages,
+          indexTokenCountMap,
+          summary: currentSummary ?? formattedSummary,
+          compactionSignature: compaction.signature,
+          compactionApplied: compaction.compacted,
+        };
+      };
+
+      let preparedInputs = materializeRunInputs(payload, null, 'preflight');
 
       /**
        * @param {BaseMessage[]} messages
        */
-      const runAgents = async (messages) => {
+      const runAgents = async (prepared) => {
         const agents = [this.options.agent];
         // Include additional agents when:
         // - agentConfigs has agents (from addedConvo parallel execution or agent handoffs)
@@ -818,7 +854,7 @@ class AgentClient extends BaseClient {
         //   messages = addCacheControl(messages);
         // }
 
-        memoryPromise = this.runMemory(messages);
+        memoryPromise = this.runMemory(prepared.messages);
 
         /** Seed calibration state from previous run if encoding matches */
         const currentEncoding = this.getEncoding();
@@ -835,9 +871,9 @@ class AgentClient extends BaseClient {
 
         run = await createRun({
           agents,
-          messages,
-          indexTokenCountMap,
-          initialSummary,
+          messages: prepared.messages,
+          indexTokenCountMap: prepared.indexTokenCountMap,
+          initialSummary: prepared.summary,
           calibrationRatio,
           runId: this.responseMessageId,
           signal: abortController.signal,
@@ -865,7 +901,7 @@ class AgentClient extends BaseClient {
 
         /** @deprecated Agent Chain */
         config.configurable.last_agent_id = agents[agents.length - 1].id;
-        await run.processStream({ messages }, config, {
+        await run.processStream({ messages: prepared.messages }, config, {
           callbacks: {
             [Callback.TOOL_ERROR]: logToolError,
           },
@@ -875,7 +911,28 @@ class AgentClient extends BaseClient {
       };
 
       const hideSequentialOutputs = config.configurable.hide_sequential_outputs;
-      await runAgents(initialMessages);
+      try {
+        await runAgents(preparedInputs);
+      } catch (error) {
+        if (!isPromptOverflowError(error)) {
+          throw error;
+        }
+
+        logger.warn(
+          '[AgentClient] Provider rejected prompt as too long; retrying with forced overflow compaction',
+        );
+
+        const overflowInputs = materializeRunInputs(payload, null, 'overflow');
+        if (
+          overflowInputs.compactionApplied !== true ||
+          overflowInputs.compactionSignature === preparedInputs.compactionSignature
+        ) {
+          throw error;
+        }
+
+        preparedInputs = overflowInputs;
+        await runAgents(preparedInputs);
+      }
 
       /** @deprecated Agent Chain */
       if (hideSequentialOutputs) {

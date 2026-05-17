@@ -81,6 +81,22 @@ function getStatusLabel(status?: string | null) {
   return 'Not synced';
 }
 
+function getPhaseTone(value?: string | null) {
+  if (value === 'complete' || value === 'success') {
+    return 'text-emerald-700 dark:text-emerald-300';
+  }
+
+  if (value === 'failed' || value === 'failure' || value === 'cancelled') {
+    return 'text-rose-700 dark:text-rose-300';
+  }
+
+  if (value === 'discovering' || value === 'discovering_chats' || value === 'syncing' || value === 'syncing_messages') {
+    return 'text-amber-700 dark:text-amber-300';
+  }
+
+  return 'text-text-primary';
+}
+
 function getProjectionTone(status?: string | null) {
   if (status === 'success') {
     return 'bg-emerald-500';
@@ -95,6 +111,10 @@ function getProjectionTone(status?: string | null) {
   }
 
   return 'bg-zinc-400 dark:bg-zinc-500';
+}
+
+function isProjectionActive(status?: string | null) {
+  return status === 'running' || status === 'pending';
 }
 
 function getProjectionLabel(status?: string | null) {
@@ -146,6 +166,13 @@ export default function TeamsArchiveStatus() {
       ? Math.max(2, Math.min(100, Math.round((processedChats / discoveredChats) * 100)))
       : null;
   const phaseLabel = formatPhase(data?.latestSync?.phase || backfillState?.status);
+  const statusLabel = isSyncing ? 'Syncing' : getStatusLabel(syncStatus);
+  const statusDetail =
+    isSyncing
+      ? `${phaseLabel}. ${completedChats.toLocaleString()} complete, ${runningChats.toLocaleString()} running, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
+      : backfillState?.errorMessage ||
+        data?.latestSync?.errorMessage ||
+        'Background sync status for Teams chat history.';
 
   const handleSync = async () => {
     try {
@@ -262,12 +289,10 @@ export default function TeamsArchiveStatus() {
               Status
             </div>
             <div className={`mt-2 text-sm font-semibold ${getStatusTone(syncStatus)}`}>
-              {isLoading ? 'Loading…' : backfillState?.status ? formatPhase(backfillState.status) : getStatusLabel(syncStatus)}
+              {isLoading ? 'Loading…' : statusLabel}
             </div>
             <div className="mt-1 text-xs text-text-secondary">
-              {backfillState?.errorMessage ||
-                data?.latestSync?.errorMessage ||
-                'Background sync status for Teams chat history.'}
+              {statusDetail}
             </div>
           </div>
 
@@ -311,7 +336,9 @@ export default function TeamsArchiveStatus() {
               <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
                 Latest Phase
               </div>
-              <div className="mt-1 text-sm font-semibold text-text-primary">{phaseLabel}</div>
+              <div className={`mt-1 text-sm font-semibold ${getPhaseTone(data?.latestSync?.phase || backfillState?.status)}`}>
+                {phaseLabel}
+              </div>
             </div>
           </div>
         </div>
@@ -323,7 +350,15 @@ export default function TeamsArchiveStatus() {
                 Memory Projection
               </span>
               <span className="inline-flex items-center gap-2">
-                <span className={`h-2.5 w-2.5 rounded-full ${getProjectionTone(data?.latestProjection?.status)}`} />
+                {isProjectionActive(data?.latestProjection?.status) ? (
+                  <Spinner className="h-3.5 w-3.5 text-amber-500" />
+                ) : (
+                  <span
+                    className={`h-2.5 w-2.5 rounded-full ${getProjectionTone(
+                      data?.latestProjection?.status,
+                    )}`}
+                  />
+                )}
                 <span className="font-medium text-text-primary">
                   {getProjectionLabel(data?.latestProjection?.status)}
                 </span>

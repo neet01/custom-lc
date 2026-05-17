@@ -47,6 +47,15 @@ export type TeamsArchiveLatestProjection = {
   stats?: Record<string, unknown>;
 };
 
+export type TeamsArchiveProjectionCoverage = {
+  indexedConversationCount: number;
+  totalConversationCount: number;
+  indexedChunkCount: number;
+  pendingConversationCount: number;
+  fullyIndexed: boolean;
+  coveragePercent: number;
+};
+
 export type TeamsArchiveStatusResponse = {
   enabled: boolean;
   graphBaseUrl: string;
@@ -60,6 +69,7 @@ export type TeamsArchiveStatusResponse = {
   backfillState: TeamsArchiveBackfillState | null;
   latestSync: TeamsArchiveLatestSync | null;
   latestProjection: TeamsArchiveLatestProjection | null;
+  projectionCoverage: TeamsArchiveProjectionCoverage | null;
 };
 
 export type TeamsArchiveSyncRequest = {
@@ -142,5 +152,20 @@ export type TeamsArchiveCancelResponse = {
     completedAt?: string;
     errorMessage?: string;
   } | null;
+  message: string;
+};
+
+export type TeamsArchiveResetResponse = {
+  deleted: {
+    conversations: number;
+    messages: number;
+    syncJobs: number;
+    syncLeases: number;
+    backfillStates: number;
+    projectionJobs: number;
+    chunks: number;
+    entities: number;
+    relationships: number;
+  };
   message: string;
 };

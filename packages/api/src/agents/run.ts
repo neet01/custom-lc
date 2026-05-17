@@ -139,6 +139,16 @@ const customProviders = new Set([
   KnownEndpoints.ollama,
 ]);
 
+const DEFAULT_AGENT_SUMMARIZATION_RESERVE_RATIO = 0.2;
+const DEFAULT_AGENT_SUMMARIZATION_MAX_TOKENS = 2048;
+const DEFAULT_CONTEXT_PRUNING = {
+  enabled: true,
+  keepLastAssistants: 4,
+  softTrimRatio: 0.75,
+  hardClearRatio: 0.9,
+  minPrunableToolChars: 1200,
+} satisfies ContextPruningConfig;
+
 export function getReasoningKey(
   provider: Providers,
   llmConfig: t.RunLLMConfig,
@@ -199,8 +209,11 @@ function shapeSummarizationConfig(
       ? { type: config.trigger.type, value: config.trigger.value }
       : undefined;
 
+  const resolvedEnabled =
+    config?.enabled !== false && isNonEmptyString(provider) && isNonEmptyString(model);
+
   return {
-    enabled: config?.enabled !== false && isNonEmptyString(provider) && isNonEmptyString(model),
+    enabled: resolvedEnabled,
     config: {
       trigger,
       provider,
@@ -208,11 +221,13 @@ function shapeSummarizationConfig(
       parameters: config?.parameters,
       prompt: config?.prompt,
       updatePrompt: config?.updatePrompt,
-      reserveRatio: config?.reserveRatio,
-      maxSummaryTokens: config?.maxSummaryTokens,
+      reserveRatio: config?.reserveRatio ?? DEFAULT_AGENT_SUMMARIZATION_RESERVE_RATIO,
+      maxSummaryTokens: config?.maxSummaryTokens ?? DEFAULT_AGENT_SUMMARIZATION_MAX_TOKENS,
     } satisfies AgentSummarizationConfig,
-    contextPruning: config?.contextPruning as ContextPruningConfig | undefined,
-    reserveRatio: config?.reserveRatio,
+    contextPruning:
+      (config?.contextPruning as ContextPruningConfig | undefined) ??
+      (resolvedEnabled ? DEFAULT_CONTEXT_PRUNING : undefined),
+    reserveRatio: config?.reserveRatio ?? DEFAULT_AGENT_SUMMARIZATION_RESERVE_RATIO,
   };
 }
 

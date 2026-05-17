@@ -217,6 +217,73 @@ export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
     }
   }
 
+  async function deleteTeamsArchiveBackfillStates(
+    filter: FilterQuery<ITeamsArchiveBackfillState> = {},
+  ): Promise<number> {
+    try {
+      const TeamsArchiveBackfillState = mongoose.models
+        .TeamsArchiveBackfillState as Model<ITeamsArchiveBackfillState>;
+      const result = await TeamsArchiveBackfillState.deleteMany(filter);
+      return result?.deletedCount || 0;
+    } catch (error) {
+      logger.error('[deleteTeamsArchiveBackfillStates] Error deleting Teams archive backfill states', error);
+      throw new Error('Error deleting Teams archive backfill states');
+    }
+  }
+
+  async function deleteTeamsArchiveConversations(
+    filter: FilterQuery<ITeamsArchiveConversation> = {},
+  ): Promise<number> {
+    try {
+      const TeamsArchiveConversation = mongoose.models
+        .TeamsArchiveConversation as Model<ITeamsArchiveConversation>;
+      const result = await TeamsArchiveConversation.deleteMany(filter);
+      return result?.deletedCount || 0;
+    } catch (error) {
+      logger.error('[deleteTeamsArchiveConversations] Error deleting Teams archive conversations', error);
+      throw new Error('Error deleting Teams archive conversations');
+    }
+  }
+
+  async function deleteTeamsArchiveMessages(
+    filter: FilterQuery<ITeamsArchiveMessage> = {},
+  ): Promise<number> {
+    try {
+      const TeamsArchiveMessage = mongoose.models.TeamsArchiveMessage as Model<ITeamsArchiveMessage>;
+      const result = await TeamsArchiveMessage.deleteMany(filter);
+      return result?.deletedCount || 0;
+    } catch (error) {
+      logger.error('[deleteTeamsArchiveMessages] Error deleting Teams archive messages', error);
+      throw new Error('Error deleting Teams archive messages');
+    }
+  }
+
+  async function deleteTeamsArchiveSyncJobs(
+    filter: FilterQuery<ITeamsArchiveSyncJob> = {},
+  ): Promise<number> {
+    try {
+      const TeamsArchiveSyncJob = mongoose.models.TeamsArchiveSyncJob as Model<ITeamsArchiveSyncJob>;
+      const result = await TeamsArchiveSyncJob.deleteMany(filter);
+      return result?.deletedCount || 0;
+    } catch (error) {
+      logger.error('[deleteTeamsArchiveSyncJobs] Error deleting Teams archive sync jobs', error);
+      throw new Error('Error deleting Teams archive sync jobs');
+    }
+  }
+
+  async function deleteTeamsArchiveSyncLeases(
+    filter: FilterQuery<ITeamsArchiveSyncLease> = {},
+  ): Promise<number> {
+    try {
+      const TeamsArchiveSyncLease = mongoose.models.TeamsArchiveSyncLease as Model<ITeamsArchiveSyncLease>;
+      const result = await TeamsArchiveSyncLease.deleteMany(filter);
+      return result?.deletedCount || 0;
+    } catch (error) {
+      logger.error('[deleteTeamsArchiveSyncLeases] Error deleting Teams archive sync leases', error);
+      throw new Error('Error deleting Teams archive sync leases');
+    }
+  }
+
   async function updateTeamsArchiveConversation(
     id: string,
     updates: Partial<TeamsArchiveConversationData>,
@@ -335,6 +402,11 @@ export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
     findTeamsArchiveSyncJobById,
     countTeamsArchiveConversations,
     countTeamsArchiveMessages,
+    deleteTeamsArchiveBackfillStates,
+    deleteTeamsArchiveConversations,
+    deleteTeamsArchiveMessages,
+    deleteTeamsArchiveSyncJobs,
+    deleteTeamsArchiveSyncLeases,
     updateTeamsArchiveConversation,
     acquireTeamsArchiveSyncLease,
     refreshTeamsArchiveSyncLease,

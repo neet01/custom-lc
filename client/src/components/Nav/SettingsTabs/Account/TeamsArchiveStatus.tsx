@@ -4,6 +4,7 @@ import { Spinner, useToastContext } from '@librechat/client';
 import { QueryKeys } from 'librechat-data-provider';
 import {
   useCancelTeamsArchiveSyncMutation,
+  useResetTeamsArchiveMutation,
   useSyncTeamsArchiveMutation,
   useTeamsArchiveStatusQuery,
 } from '~/data-provider';
@@ -164,18 +165,23 @@ export default function TeamsArchiveStatus() {
   });
   const syncMutation = useSyncTeamsArchiveMutation();
   const cancelMutation = useCancelTeamsArchiveSyncMutation();
+  const resetMutation = useResetTeamsArchiveMutation();
+  const [confirmReset, setConfirmReset] = React.useState(false);
 
   const syncStatus = data?.latestSync?.status ?? null;
   const backfillState = data?.backfillState;
   const isBackfillActive =
     backfillState?.status === 'discovering' || backfillState?.status === 'syncing';
-  const isSyncing = syncMutation.isLoading || cancelMutation.isLoading || syncStatus === 'running' || isBackfillActive;
+  const isSyncing =
+    syncMutation.isLoading || cancelMutation.isLoading || syncStatus === 'running' || isBackfillActive;
+  const isMutating = syncMutation.isLoading || cancelMutation.isLoading || resetMutation.isLoading;
   const discoveredChats = backfillState?.discoveredChatCount ?? data?.conversationCount ?? 0;
   const completedChats = backfillState?.completedChatCount ?? 0;
   const runningChats = backfillState?.runningChatCount ?? 0;
   const pendingChats = backfillState?.pendingChatCount ?? 0;
   const failedChats = backfillState?.failedChatCount ?? 0;
   const totalMessages = backfillState?.totalMessageCount ?? data?.messageCount ?? 0;
+  const projectionCoverage = data?.projectionCoverage;
   const processedChats = completedChats + failedChats;
   const hasBackfillBacklog = backfillState?.status === 'paused' && pendingChats > 0;
   const determinateProgress =
@@ -198,6 +204,12 @@ export default function TeamsArchiveStatus() {
       : backfillState?.errorMessage ||
         data?.latestSync?.errorMessage ||
         'Background sync status for Teams chat history.';
+
+  React.useEffect(() => {
+    if (isSyncing && confirmReset) {
+      setConfirmReset(false);
+    }
+  }, [confirmReset, isSyncing]);
 
   const handleSync = async () => {
     try {
@@ -233,6 +245,30 @@ export default function TeamsArchiveStatus() {
     }
   };
 
+  const handleReset = async () => {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      return;
+    }
+
+    try {
+      const result = await resetMutation.mutateAsync();
+      setConfirmReset(false);
+      await queryClient.invalidateQueries([QueryKeys.teamsArchiveStatus]);
+      showToast({
+        message: result.message,
+        status: 'success',
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to clear archived Teams data.';
+      showToast({
+        message,
+        status: 'error',
+      });
+    }
+  };
+
   return (
     <div className="relative overflow-hidden rounded-[1.75rem] border border-white/40 bg-gradient-to-br from-white/85 via-white/70 to-white/45 p-4 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.35)] backdrop-blur-xl dark:border-white/10 dark:from-zinc-900/85 dark:via-zinc-900/70 dark:to-neutral-950/55">
       <div className="pointer-events-none absolute inset-x-8 top-0 h-20 rounded-full bg-[#f5d000]/15 blur-3xl" />
@@ -244,7 +280,7 @@ export default function TeamsArchiveStatus() {
               type="button"
               className="inline-flex items-center justify-center rounded-2xl border border-white/50 bg-white/70 px-4 py-2 text-sm font-medium text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
               onClick={handleSync}
-              disabled={isSyncing}
+              disabled={isSyncing || resetMutation.isLoading}
             >
               {syncMutation.isLoading ? (
                 <>
@@ -272,6 +308,33 @@ export default function TeamsArchiveStatus() {
                 ) : (
                   'Cancel sync'
                 )}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="inline-flex min-w-[10rem] items-center justify-center whitespace-nowrap rounded-2xl border border-rose-300/60 bg-rose-50/80 px-3 py-1.5 text-xs font-medium text-rose-700 shadow-sm backdrop-blur transition-colors hover:bg-rose-100/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-500/20 dark:bg-rose-950/40 dark:text-rose-200 dark:hover:bg-rose-950/55"
+              onClick={handleReset}
+              disabled={isSyncing || isMutating}
+            >
+              {resetMutation.isLoading ? (
+                <>
+                  <Spinner className="mr-1.5 h-3.5 w-3.5" />
+                  Clearing…
+                </>
+              ) : confirmReset ? (
+                'Are you sure?'
+              ) : (
+                'Delete archived Teams data'
+              )}
+            </button>
+            {confirmReset ? (
+              <button
+                type="button"
+                className="inline-flex min-w-[6rem] items-center justify-center whitespace-nowrap rounded-2xl border border-white/50 bg-white/70 px-3 py-1.5 text-xs font-medium text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
+                onClick={() => setConfirmReset(false)}
+                disabled={resetMutation.isLoading}
+              >
+                Keep data
               </button>
             ) : null}
           </div>
@@ -379,24 +442,35 @@ export default function TeamsArchiveStatus() {
 
         <div className="rounded-2xl border border-white/35 bg-white/45 px-4 py-3 text-xs text-text-secondary backdrop-blur dark:border-white/10 dark:bg-zinc-950/35">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-                Memory Projection
-              </span>
-              <span className="inline-flex items-center gap-2">
-                {isProjectionActive(data?.latestProjection?.status) ? (
-                  <Spinner className="h-3.5 w-3.5 text-amber-500" />
-                ) : (
-                  <span
-                    className={`h-2.5 w-2.5 rounded-full ${getProjectionTone(
-                      data?.latestProjection?.status,
-                    )}`}
-                  />
-                )}
-                <span className="font-medium text-text-primary">
-                  {getProjectionLabel(data?.latestProjection?.status)}
+            <div>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
+                  Memory Projection
                 </span>
-              </span>
+                <span className="inline-flex items-center gap-2">
+                  {isProjectionActive(data?.latestProjection?.status) ? (
+                    <Spinner className="h-3.5 w-3.5 text-amber-500" />
+                  ) : (
+                    <span
+                      className={`h-2.5 w-2.5 rounded-full ${getProjectionTone(
+                        data?.latestProjection?.status,
+                      )}`}
+                    />
+                  )}
+                  <span className="font-medium text-text-primary">
+                    {getProjectionLabel(data?.latestProjection?.status)}
+                  </span>
+                </span>
+              </div>
+              {projectionCoverage ? (
+                <div className="mt-1 text-xs text-text-secondary">
+                  {projectionCoverage.indexedConversationCount.toLocaleString()} /{' '}
+                  {projectionCoverage.totalConversationCount.toLocaleString()} chats indexed
+                  {projectionCoverage.totalConversationCount > 0
+                    ? ` (${projectionCoverage.coveragePercent.toFixed(1)}%)`
+                    : ''}
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               {data?.latestProjection?.errorMessage ? (

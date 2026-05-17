@@ -188,6 +188,37 @@ export function createEnterpriseMemoryMethods(mongoose: typeof import('mongoose'
     }
   }
 
+  async function countEnterpriseMemoryChunks(
+    filter: FilterQuery<IEnterpriseMemoryChunk> = {},
+  ): Promise<number> {
+    try {
+      const EnterpriseMemoryChunk = mongoose.models
+        .EnterpriseMemoryChunk as Model<IEnterpriseMemoryChunk>;
+      return await EnterpriseMemoryChunk.countDocuments(filter);
+    } catch (error) {
+      logger.error('[countEnterpriseMemoryChunks] Error counting enterprise memory chunks', error);
+      throw new Error('Error counting enterprise memory chunks');
+    }
+  }
+
+  async function countDistinctEnterpriseMemoryChunkField(
+    field: string,
+    filter: FilterQuery<IEnterpriseMemoryChunk> = {},
+  ): Promise<number> {
+    try {
+      const EnterpriseMemoryChunk = mongoose.models
+        .EnterpriseMemoryChunk as Model<IEnterpriseMemoryChunk>;
+      const values = await EnterpriseMemoryChunk.distinct(field, filter);
+      return values.filter((value) => value !== undefined && value !== null && value !== '').length;
+    } catch (error) {
+      logger.error(
+        '[countDistinctEnterpriseMemoryChunkField] Error counting distinct enterprise memory chunk field values',
+        error,
+      );
+      throw new Error('Error counting distinct enterprise memory chunk field values');
+    }
+  }
+
   async function findLatestEnterpriseMemoryJob(
     filter: FilterQuery<IEnterpriseMemoryJob> = {},
   ): Promise<IEnterpriseMemoryJob | null> {
@@ -202,6 +233,64 @@ export function createEnterpriseMemoryMethods(mongoose: typeof import('mongoose'
     }
   }
 
+  async function deleteEnterpriseMemoryEntities(
+    filter: FilterQuery<IEnterpriseMemoryEntity> = {},
+  ): Promise<number> {
+    try {
+      const EnterpriseMemoryEntity = mongoose.models
+        .EnterpriseMemoryEntity as Model<IEnterpriseMemoryEntity>;
+      const result = await EnterpriseMemoryEntity.deleteMany(filter);
+      return result?.deletedCount || 0;
+    } catch (error) {
+      logger.error('[deleteEnterpriseMemoryEntities] Error deleting enterprise memory entities', error);
+      throw new Error('Error deleting enterprise memory entities');
+    }
+  }
+
+  async function deleteEnterpriseMemoryRelationships(
+    filter: FilterQuery<IEnterpriseMemoryRelationship> = {},
+  ): Promise<number> {
+    try {
+      const EnterpriseMemoryRelationship = mongoose.models
+        .EnterpriseMemoryRelationship as Model<IEnterpriseMemoryRelationship>;
+      const result = await EnterpriseMemoryRelationship.deleteMany(filter);
+      return result?.deletedCount || 0;
+    } catch (error) {
+      logger.error(
+        '[deleteEnterpriseMemoryRelationships] Error deleting enterprise memory relationships',
+        error,
+      );
+      throw new Error('Error deleting enterprise memory relationships');
+    }
+  }
+
+  async function deleteEnterpriseMemoryChunks(
+    filter: FilterQuery<IEnterpriseMemoryChunk> = {},
+  ): Promise<number> {
+    try {
+      const EnterpriseMemoryChunk = mongoose.models
+        .EnterpriseMemoryChunk as Model<IEnterpriseMemoryChunk>;
+      const result = await EnterpriseMemoryChunk.deleteMany(filter);
+      return result?.deletedCount || 0;
+    } catch (error) {
+      logger.error('[deleteEnterpriseMemoryChunks] Error deleting enterprise memory chunks', error);
+      throw new Error('Error deleting enterprise memory chunks');
+    }
+  }
+
+  async function deleteEnterpriseMemoryJobs(
+    filter: FilterQuery<IEnterpriseMemoryJob> = {},
+  ): Promise<number> {
+    try {
+      const EnterpriseMemoryJob = mongoose.models.EnterpriseMemoryJob as Model<IEnterpriseMemoryJob>;
+      const result = await EnterpriseMemoryJob.deleteMany(filter);
+      return result?.deletedCount || 0;
+    } catch (error) {
+      logger.error('[deleteEnterpriseMemoryJobs] Error deleting enterprise memory jobs', error);
+      throw new Error('Error deleting enterprise memory jobs');
+    }
+  }
+
   return {
     upsertEnterpriseMemoryEntity,
     bulkUpsertEnterpriseMemoryRelationships,
@@ -210,7 +299,13 @@ export function createEnterpriseMemoryMethods(mongoose: typeof import('mongoose'
     updateEnterpriseMemoryJob,
     findEnterpriseMemoryEntities,
     findEnterpriseMemoryChunks,
+    countEnterpriseMemoryChunks,
+    countDistinctEnterpriseMemoryChunkField,
     findLatestEnterpriseMemoryJob,
+    deleteEnterpriseMemoryEntities,
+    deleteEnterpriseMemoryRelationships,
+    deleteEnterpriseMemoryChunks,
+    deleteEnterpriseMemoryJobs,
   };
 }
 

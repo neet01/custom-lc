@@ -645,6 +645,10 @@ function messageMatchesRegex(message, regex) {
   });
 }
 
+function hasNonEmptyMemoryResults(result) {
+  return Boolean(result && Array.isArray(result.results) && result.results.length > 0);
+}
+
 function mapMessageResult(message, conversation) {
   return {
     id: message._id?.toString?.() || message.id,
@@ -1339,7 +1343,16 @@ async function getStatus(user) {
   const config = getTeamsArchiveConfig();
   const userId = user?.id || user?._id?.toString();
   await reconcileRunningSyncJob(userId);
-  const [conversationCount, messageCount, latestSync, latestProjection, activeSyncs, backfillState] = await Promise.all([
+  const [
+    conversationCount,
+    messageCount,
+    latestSync,
+    latestProjection,
+    activeSyncs,
+    backfillState,
+    projectionChunkCount,
+    projectionConversationCount,
+  ] = await Promise.all([
     userId ? db.countTeamsArchiveConversations({ user: userId }) : 0,
     userId ? db.countTeamsArchiveMessages({ user: userId }) : 0,
     userId ? db.findLatestTeamsArchiveSyncJob({ user: userId }) : null,
@@ -1350,6 +1363,20 @@ async function getStatus(user) {
     userId && typeof db.getTeamsArchiveBackfillState === 'function'
       ? db.getTeamsArchiveBackfillState(userId)
       : null,
+    userId && typeof db.countEnterpriseMemoryChunks === 'function'
+      ? db.countEnterpriseMemoryChunks({
+          user: userId,
+          source: 'teams',
+          sourceRecordType: 'teams_message',
+        })
+      : 0,
+    userId && typeof db.countDistinctEnterpriseMemoryChunkField === 'function'
+      ? db.countDistinctEnterpriseMemoryChunkField('sourceParentRecordId', {
+          user: userId,
+          source: 'teams',
+          sourceRecordType: 'teams_message',
+        })
+      : 0,
   ]);
 
   const normalizedBackfillStatus = backfillState
@@ -1425,6 +1452,103 @@ async function getStatus(user) {
           stats: latestProjection.stats || {},
         }
       : null,
+    projectionCoverage: {
+      indexedConversationCount: projectionConversationCount || 0,
+      totalConversationCount: conversationCount || 0,
+      indexedChunkCount: projectionChunkCount || 0,
+      pendingConversationCount: Math.max(0, (conversationCount || 0) - (projectionConversationCount || 0)),
+      fullyIndexed:
+        conversationCount > 0 ? (projectionConversationCount || 0) >= conversationCount : false,
+      coveragePercent:
+        conversationCount > 0
+          ? Number((((projectionConversationCount || 0) / conversationCount) * 100).toFixed(1))
+          : 0,
+    },
+  };
+}
+
+async function deleteUserArchive(user) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+
+  if (!userId) {
+    throw new TeamsArchiveServiceError('User id is required for Teams archive reset', 400);
+  }
+
+  const latestRunningJob = await reconcileRunningSyncJob(userId);
+  if (latestRunningJob?.status === 'running') {
+    throw new TeamsArchiveServiceError(
+      'Cannot delete Teams archive data while a sync is running',
+      409,
+      {
+        reason: 'sync_running',
+        syncJobId: latestRunningJob._id?.toString?.() || latestRunningJob.id,
+      },
+    );
+  }
+
+  const deleted = await runAsSystem(async () => {
+    const [
+      conversations,
+      messages,
+      syncJobs,
+      syncLeases,
+      backfillStates,
+      projectionJobs,
+      chunks,
+      entities,
+      relationships,
+    ] = await Promise.all([
+      typeof db.deleteTeamsArchiveConversations === 'function'
+        ? db.deleteTeamsArchiveConversations({ user: userId })
+        : 0,
+      typeof db.deleteTeamsArchiveMessages === 'function'
+        ? db.deleteTeamsArchiveMessages({ user: userId })
+        : 0,
+      typeof db.deleteTeamsArchiveSyncJobs === 'function'
+        ? db.deleteTeamsArchiveSyncJobs({ user: userId })
+        : 0,
+      typeof db.deleteTeamsArchiveSyncLeases === 'function'
+        ? db.deleteTeamsArchiveSyncLeases({ user: userId })
+        : 0,
+      typeof db.deleteTeamsArchiveBackfillStates === 'function'
+        ? db.deleteTeamsArchiveBackfillStates({ user: userId })
+        : 0,
+      typeof db.deleteEnterpriseMemoryJobs === 'function'
+        ? db.deleteEnterpriseMemoryJobs({ user: userId, source: 'teams' })
+        : 0,
+      typeof db.deleteEnterpriseMemoryChunks === 'function'
+        ? db.deleteEnterpriseMemoryChunks({ user: userId, source: 'teams' })
+        : 0,
+      typeof db.deleteEnterpriseMemoryEntities === 'function'
+        ? db.deleteEnterpriseMemoryEntities({ user: userId, source: 'teams' })
+        : 0,
+      typeof db.deleteEnterpriseMemoryRelationships === 'function'
+        ? db.deleteEnterpriseMemoryRelationships({ user: userId, source: 'teams' })
+        : 0,
+    ]);
+
+    return {
+      conversations,
+      messages,
+      syncJobs,
+      syncLeases,
+      backfillStates,
+      projectionJobs,
+      chunks,
+      entities,
+      relationships,
+    };
+  });
+
+  logger.info('[TeamsArchiveService] Deleted archived Teams data for user', {
+    userId,
+    deleted,
+  });
+
+  return {
+    deleted,
+    message: 'Archived Teams data cleared. A fresh sync will start from scratch.',
   };
 }
 
@@ -2372,6 +2496,90 @@ async function listConversationMessages(user, chatId, options = {}) {
   };
 }
 
+async function getMessageBody(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const messageId = String(options.messageId || options.aroundMessageId || '').trim();
+  const chatId = String(options.chatId || '').trim();
+
+  if (!messageId) {
+    throw new TeamsArchiveServiceError('Message id is required', 400);
+  }
+
+  const message = await resolveMessageRecord(userId, messageId);
+
+  if (!message) {
+    return {
+      retrievalMode: 'message_body',
+      resolved: false,
+      messageId,
+      graphMessageId: null,
+      guidance: 'No archived message was found for the requested message id.',
+    };
+  }
+
+  if (chatId) {
+    const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+    if (resolvedGraphChatId && message.graphChatId !== resolvedGraphChatId) {
+      return {
+        retrievalMode: 'message_body',
+        resolved: false,
+        messageId,
+        graphMessageId: message.graphMessageId,
+        graphChatId: message.graphChatId,
+        guidance:
+          'The archived message was found, but it does not belong to the requested chat id scope.',
+      };
+    }
+  }
+
+  const conversations = await db.findTeamsArchiveConversations(
+    { user: userId, graphChatId: message.graphChatId },
+    { limit: 1 },
+  );
+  const conversation = conversations[0] || null;
+  const fullText = String(message.bodyText || '');
+  const previewText = String(message.bodyPreview || '');
+
+  return {
+    retrievalMode: 'message_body',
+    resolved: true,
+    guidance:
+      'This returns the full archived message text for one specific message. Use it when a preview was truncated and exact wording matters.',
+    message: {
+      id: message._id?.toString?.() || message.id,
+      graphMessageId: message.graphMessageId,
+      graphChatId: message.graphChatId,
+      topic: conversation?.topic || '',
+      chatType: conversation?.chatType || '',
+      participants: mapCompactParticipants(conversation?.participants || []),
+      fromDisplayName: message.fromDisplayName || '',
+      fromEmail: message.fromEmail || '',
+      subject: message.subject || '',
+      summary: message.summary || '',
+      bodyContentType: message.bodyContentType || '',
+      bodyPreview: previewText,
+      bodyText: fullText,
+      previewLength: previewText.length,
+      bodyTextLength: fullText.length,
+      previewWasTruncated: Boolean(fullText && previewText && fullText !== previewText),
+      attachments: toArray(message.attachments).map((attachment) => ({
+        id: attachment?.id || '',
+        name: attachment?.name || '',
+        contentType: attachment?.contentType || '',
+        contentUrl: attachment?.contentUrl || '',
+      })),
+      mentions: toArray(message.mentions).map((mention) => ({
+        id: mention?.id || '',
+        displayName: mention?.displayName || '',
+        mentionedUserId: mention?.mentionedUserId || '',
+      })),
+      sentDateTime: message.sentDateTime,
+      webUrl: message.webUrl || '',
+    },
+  };
+}
+
 async function getMessagesWindow(user, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
@@ -2583,7 +2791,7 @@ async function recentMessages(user, options = {}) {
         sortBy: 'recent',
       });
 
-      if (memoryResults) {
+      if (hasNonEmptyMemoryResults(memoryResults)) {
         return memoryResults;
       }
     } catch (error) {
@@ -2661,7 +2869,7 @@ async function advancedSearchMessages(user, options = {}) {
   if (typeof searchTeamsMemoryChunks === 'function') {
     try {
       const memoryResults = await searchTeamsMemoryChunks(user, options);
-      if (memoryResults) {
+      if (hasNonEmptyMemoryResults(memoryResults)) {
         return memoryResults;
       }
     } catch (error) {
@@ -2871,12 +3079,14 @@ module.exports = {
   TeamsArchiveServiceError,
   TeamsArchiveSyncCancelledError,
   getStatus,
+  deleteUserArchive,
   cancelRunningSync,
   getSyncStartAvailability,
   syncUserArchive,
   listConversations,
   getConversationDossier,
   listConversationMessages,
+  getMessageBody,
   getMessagesWindow,
   searchMessages,
   recentMessages,

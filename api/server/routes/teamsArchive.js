@@ -86,6 +86,21 @@ router.post('/cancel', async (req, res) => {
   }
 });
 
+router.post('/reset', async (req, res) => {
+  try {
+    if (req.body?.confirm !== true) {
+      return res.status(400).json({
+        message: 'Teams archive reset requires confirm=true.',
+      });
+    }
+
+    const result = await TeamsArchiveService.deleteUserArchive(req.user);
+    res.json(result);
+  } catch (error) {
+    handleTeamsArchiveError(res, error);
+  }
+});
+
 router.get('/conversations', async (req, res) => {
   try {
     const result = await TeamsArchiveService.listConversations(req.user, {

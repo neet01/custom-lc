@@ -231,11 +231,12 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
         'list_conversations',
         'conversation_dossier',
         'get_messages',
+        'get_message_body',
         'get_messages_window',
         'summarize_conversation',
       ],
       description:
-        'Teams archive action. Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages for quick preview retrieval, advanced_search_messages for structured topic discovery across sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, conversation_dossier for exhaustive archive-backed retrieval of one resolved chat, get_messages for compact thread previews, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
+        'Teams archive action. Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages for quick preview retrieval, advanced_search_messages for structured topic discovery across sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, conversation_dossier for exhaustive archive-backed retrieval of one resolved chat, get_messages for compact thread previews, get_message_body to retrieve the full archived text for one exact message, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
     },
     query: {
       type: 'string',
@@ -251,6 +252,11 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
       type: 'string',
       description:
         'For conversation_dossier, get_messages, get_messages_window, summarize_conversation, or search_messages: the archived Teams chat id to scope the request to.',
+    },
+    messageId: {
+      type: 'string',
+      description:
+        'For get_message_body: the archived message id or Teams graph message id whose full body text should be returned.',
     },
     limit: {
       type: 'integer',

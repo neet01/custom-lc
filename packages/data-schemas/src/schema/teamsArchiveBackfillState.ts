@@ -2,7 +2,7 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export interface ITeamsArchiveBackfillState extends Document {
   user: Types.ObjectId;
-  status: 'idle' | 'discovering' | 'syncing' | 'complete' | 'failed';
+  status: 'idle' | 'discovering' | 'syncing' | 'paused' | 'complete' | 'failed';
   nextChatPageLink?: string;
   discoveryComplete?: boolean;
   discoveredChatCount?: number;
@@ -33,7 +33,7 @@ const teamsArchiveBackfillStateSchema = new Schema<ITeamsArchiveBackfillState>(
     },
     status: {
       type: String,
-      enum: ['idle', 'discovering', 'syncing', 'complete', 'failed'],
+      enum: ['idle', 'discovering', 'syncing', 'paused', 'complete', 'failed'],
       required: true,
       default: 'idle',
       index: true,

@@ -21,7 +21,7 @@ export type TeamsArchiveLatestSync = {
 };
 
 export type TeamsArchiveBackfillState = {
-  status: 'idle' | 'discovering' | 'syncing' | 'complete' | 'failed';
+  status: 'idle' | 'discovering' | 'syncing' | 'paused' | 'complete' | 'failed';
   discoveryComplete: boolean;
   nextChatPageLinkPresent: boolean;
   discoveredChatCount: number;

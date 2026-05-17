@@ -29,6 +29,8 @@ function formatPhase(value?: string | null) {
     case 'syncing':
     case 'syncing_messages':
       return 'Syncing messages';
+    case 'paused':
+      return 'Resume needed';
     case 'complete':
       return 'Complete';
     case 'failed':
@@ -44,6 +46,10 @@ function formatPhase(value?: string | null) {
 function getStatusTone(status?: string | null) {
   if (status === 'running') {
     return 'text-text-primary';
+  }
+
+  if (status === 'paused') {
+    return 'text-amber-700 dark:text-amber-300';
   }
 
   if (status === 'success') {
@@ -62,6 +68,10 @@ function getStatusTone(status?: string | null) {
 }
 
 function getStatusLabel(status?: string | null) {
+  if (status === 'paused') {
+    return 'Resume needed';
+  }
+
   if (status === 'running') {
     return 'Syncing';
   }
@@ -90,7 +100,13 @@ function getPhaseTone(value?: string | null) {
     return 'text-rose-700 dark:text-rose-300';
   }
 
-  if (value === 'discovering' || value === 'discovering_chats' || value === 'syncing' || value === 'syncing_messages') {
+  if (
+    value === 'discovering' ||
+    value === 'discovering_chats' ||
+    value === 'syncing' ||
+    value === 'syncing_messages' ||
+    value === 'paused'
+  ) {
     return 'text-amber-700 dark:text-amber-300';
   }
 
@@ -133,6 +149,22 @@ function getProjectionLabel(status?: string | null) {
   return 'Unavailable';
 }
 
+function getEffectivePhase(backfillStatus?: string | null, syncPhase?: string | null, syncStatus?: string | null) {
+  if (backfillStatus === 'paused') {
+    return 'paused';
+  }
+
+  if (syncStatus === 'running' && syncPhase) {
+    return syncPhase;
+  }
+
+  if (backfillStatus === 'discovering' || backfillStatus === 'syncing') {
+    return backfillStatus;
+  }
+
+  return syncPhase || backfillStatus || 'idle';
+}
+
 export default function TeamsArchiveStatus() {
   const queryClient = useQueryClient();
   const { showToast } = useToastContext();
@@ -165,11 +197,14 @@ export default function TeamsArchiveStatus() {
     backfillState?.discoveryComplete && discoveredChats > 0
       ? Math.max(2, Math.min(100, Math.round((processedChats / discoveredChats) * 100)))
       : null;
-  const phaseLabel = formatPhase(data?.latestSync?.phase || backfillState?.status);
-  const statusLabel = isSyncing ? 'Syncing' : getStatusLabel(syncStatus);
+  const effectivePhase = getEffectivePhase(backfillState?.status, data?.latestSync?.phase, syncStatus);
+  const phaseLabel = formatPhase(effectivePhase);
+  const statusLabel = isSyncing ? 'Syncing' : getStatusLabel(backfillState?.status === 'paused' ? 'paused' : syncStatus);
   const statusDetail =
     isSyncing
       ? `${phaseLabel}. ${completedChats.toLocaleString()} complete, ${runningChats.toLocaleString()} running, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
+      : backfillState?.status === 'paused'
+        ? `${phaseLabel}. ${completedChats.toLocaleString()} complete, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}. Start another sync run to continue the backfill.`
       : backfillState?.errorMessage ||
         data?.latestSync?.errorMessage ||
         'Background sync status for Teams chat history.';
@@ -288,9 +323,9 @@ export default function TeamsArchiveStatus() {
             <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
               Status
             </div>
-            <div className={`mt-2 text-sm font-semibold ${getStatusTone(syncStatus)}`}>
-              {isLoading ? 'Loading…' : statusLabel}
-            </div>
+              <div className={`mt-2 text-sm font-semibold ${getStatusTone(backfillState?.status === 'paused' ? 'paused' : syncStatus)}`}>
+                {isLoading ? 'Loading…' : statusLabel}
+              </div>
             <div className="mt-1 text-xs text-text-secondary">
               {statusDetail}
             </div>
@@ -336,7 +371,7 @@ export default function TeamsArchiveStatus() {
               <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
                 Latest Phase
               </div>
-              <div className={`mt-1 text-sm font-semibold ${getPhaseTone(data?.latestSync?.phase || backfillState?.status)}`}>
+              <div className={`mt-1 text-sm font-semibold ${getPhaseTone(effectivePhase)}`}>
                 {phaseLabel}
               </div>
             </div>

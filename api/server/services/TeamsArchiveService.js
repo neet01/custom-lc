@@ -34,6 +34,7 @@ const DEFAULT_DISCOVERY_REFRESH_HOURS = 12;
 const DEFAULT_DISCOVERY_CONCURRENCY = 4;
 const DEFAULT_MEMBER_ENRICHMENT_MODE = 'adaptive';
 const DEFAULT_MEMBER_ENRICHMENT_FAILURE_THRESHOLD = 8;
+const DEFAULT_CONVERSATION_DOSSIER_MAX_MESSAGES = 20000;
 const HEARTBEAT_MIN_INTERVAL_MS = 30 * 1000;
 const HEARTBEAT_CHAT_INTERVAL = 5;
 
@@ -690,6 +691,22 @@ function mapCompactConversation(conversation) {
   };
 }
 
+function mapConversationCandidate(conversation) {
+  return {
+    id: conversation._id?.toString?.() || conversation.id,
+    graphChatId: conversation.graphChatId,
+    chatType: conversation.chatType || '',
+    topic: conversation.topic || '',
+    participants: mapCompactParticipants(conversation.participants || [], 8),
+    firstMessageAt: conversation.firstMessageAt || null,
+    lastMessageAt: conversation.lastMessageAt || null,
+    lastSyncedAt: conversation.lastSyncedAt || null,
+    messageCount: conversation.messageCount || 0,
+    syncStatus: conversation.syncStatus || '',
+    webUrl: conversation.webUrl || '',
+  };
+}
+
 function mapCompactMessageResult(message, conversation, options = {}) {
   const {
     excerptLimit = 280,
@@ -788,6 +805,172 @@ function summarizeConversationText({
   }
 
   return segments.join(' ');
+}
+
+function summarizeCoverageByMonth(messages = [], regex = null) {
+  const byMonth = new Map();
+
+  for (const message of messages) {
+    const sentDate = toDate(message?.sentDateTime) || toDate(message?.createdAt);
+    if (!sentDate) {
+      continue;
+    }
+
+    const monthKey = sentDate.toISOString().slice(0, 7);
+    const current = byMonth.get(monthKey) || {
+      month: monthKey,
+      totalMessages: 0,
+      matchedMessages: 0,
+      firstMessageAt: sentDate,
+      lastMessageAt: sentDate,
+    };
+
+    current.totalMessages += 1;
+    if (regex && messageMatchesRegex(message, regex)) {
+      current.matchedMessages += 1;
+    }
+
+    if (!current.firstMessageAt || sentDate < current.firstMessageAt) {
+      current.firstMessageAt = sentDate;
+    }
+    if (!current.lastMessageAt || sentDate > current.lastMessageAt) {
+      current.lastMessageAt = sentDate;
+    }
+
+    byMonth.set(monthKey, current);
+  }
+
+  return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
+}
+
+function mapDossierHighlights(messages = [], conversation, limit = 8) {
+  return messages.slice(0, limit).map((message) =>
+    mapCompactMessageResult(message, conversation, {
+      includeReplyToId: true,
+      excerptLimit: 360,
+    }),
+  );
+}
+
+function buildConversationLookupFilter(userId, options = {}) {
+  const chatType = String(options.chatType || 'any').trim();
+  const validChatTypes = new Set(['any', 'oneOnOne', 'group', 'meeting']);
+  const normalizedChatType = validChatTypes.has(chatType) ? chatType : 'any';
+  const participantClauses = buildParticipantConversationClauses(options.participants);
+  const topic = String(options.topic || options.query || '').trim();
+  const topicRegex = topic ? buildSearchRegex(topic) : null;
+  const daysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : undefined;
+
+  return {
+    normalizedChatType,
+    topic,
+    topicRegex,
+    daysBack,
+    participantClauses,
+    filter: {
+      user: userId,
+      ...(normalizedChatType !== 'any' ? { chatType: normalizedChatType } : {}),
+      ...(daysBack
+        ? { lastMessageAt: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } }
+        : {}),
+      ...((participantClauses.length > 0 || topicRegex)
+        ? {
+            $and: [
+              ...(topicRegex ? [buildFieldOrClause(['topic'], topicRegex)] : []),
+              ...participantClauses,
+            ],
+          }
+        : {}),
+    },
+  };
+}
+
+async function findConversationCandidates(userId, options = {}) {
+  const limit = clampInteger(options.limit, 10, { min: 1, max: 25 });
+  const lookup = buildConversationLookupFilter(userId, options);
+  let conversations = await db.findTeamsArchiveConversations(lookup.filter, {
+    limit,
+    offset: 0,
+    sort: { lastMessageAt: -1, updatedAt: -1 },
+  });
+
+  if (conversations.length === 0 && lookup.participantClauses.length > 0) {
+    const participantRegexes = toArray(options.participants)
+      .map((participant) => buildSearchRegex(String(participant || '').trim()))
+      .filter(Boolean);
+
+    if (participantRegexes.length > 0) {
+      const senderFallbackMessages = await db.findTeamsArchiveMessages(
+        {
+          user: userId,
+          ...(lookup.daysBack
+            ? {
+                sentDateTime: {
+                  $gte: new Date(Date.now() - lookup.daysBack * 24 * 60 * 60 * 1000),
+                },
+              }
+            : {}),
+          $or: participantRegexes.flatMap((regex) => [
+            { fromDisplayName: regex },
+            { fromEmail: regex },
+          ]),
+        },
+        {
+          limit: 2000,
+          offset: 0,
+          sort: { sentDateTime: -1, createdAt: -1 },
+        },
+      );
+
+      const derivedConversationIds = [
+        ...new Set(
+          senderFallbackMessages.map((message) => message.graphChatId).filter(Boolean),
+        ),
+      ];
+
+      if (derivedConversationIds.length > 0) {
+        logger.info('[TeamsArchiveService] Resolving conversation candidates via message-sender fallback', {
+          userId,
+          participantCount: participantRegexes.length,
+          derivedConversationCount: derivedConversationIds.length,
+          chatType: lookup.normalizedChatType,
+          daysBack: lookup.daysBack,
+        });
+
+        const fallbackConversationFilter = {
+          user: userId,
+          graphChatId: { $in: derivedConversationIds },
+          ...(lookup.normalizedChatType !== 'any' ? { chatType: lookup.normalizedChatType } : {}),
+          ...(lookup.daysBack
+            ? {
+                lastMessageAt: {
+                  $gte: new Date(Date.now() - lookup.daysBack * 24 * 60 * 60 * 1000),
+                },
+              }
+            : {}),
+          ...(lookup.topicRegex
+            ? { $and: [buildFieldOrClause(['topic'], lookup.topicRegex)] }
+            : {}),
+        };
+
+        conversations = await db.findTeamsArchiveConversations(
+          fallbackConversationFilter,
+          {
+            limit,
+            offset: 0,
+            sort: { lastMessageAt: -1, updatedAt: -1 },
+          },
+        );
+      }
+    }
+  }
+
+  return {
+    ...lookup,
+    conversations,
+  };
 }
 
 function isRecoverableChatMessageError(error) {
@@ -1028,29 +1211,49 @@ async function listChatMessagesPage(user, chatId, { top = DEFAULT_MESSAGES_PER_C
 }
 
 function computeBackfillLifecycleStatus({
+  discoveredChatCount = 0,
+  completedChatCount = 0,
   discoveryComplete,
   nextChatPageLink,
   pendingChatCount = 0,
   runningChatCount = 0,
   failedChatCount = 0,
+  hasActiveSync = false,
 }) {
-  if (!discoveryComplete || nextChatPageLink) {
-    return 'discovering';
+  const hasOutstandingWork =
+    !discoveryComplete || Boolean(nextChatPageLink) || pendingChatCount > 0 || runningChatCount > 0;
+  const hasArchivedProgress =
+    discoveredChatCount > 0 ||
+    completedChatCount > 0 ||
+    failedChatCount > 0 ||
+    pendingChatCount > 0 ||
+    runningChatCount > 0;
+
+  if (hasActiveSync) {
+    if (!discoveryComplete || nextChatPageLink) {
+      return 'discovering';
+    }
+
+    return 'syncing';
   }
 
-  if (pendingChatCount > 0 || runningChatCount > 0) {
-    return 'syncing';
+  if (hasOutstandingWork && hasArchivedProgress) {
+    return 'paused';
   }
 
   if (failedChatCount > 0) {
     return 'failed';
   }
 
-  return 'complete';
+  if (discoveryComplete && discoveredChatCount > 0) {
+    return 'complete';
+  }
+
+  return 'idle';
 }
 
 async function refreshBackfillStateSnapshot(userId, updates = {}, options = {}) {
-  const { includeMessageCount = true } = options;
+  const { includeMessageCount = true, hasActiveSync = false } = options;
   const [discoveredChatCount, completedChatCount, pendingChatCount, runningChatCount, failedChatCount, totalMessageCount] =
     await Promise.all([
       db.countTeamsArchiveConversations({ user: userId }),
@@ -1075,13 +1278,16 @@ async function refreshBackfillStateSnapshot(userId, updates = {}, options = {}) 
     ...updates,
   };
 
-  if (!nextState.status || ['discovering', 'syncing', 'complete'].includes(nextState.status)) {
+  if (!nextState.status || ['discovering', 'syncing', 'complete', 'paused', 'idle'].includes(nextState.status)) {
     nextState.status = computeBackfillLifecycleStatus({
+      discoveredChatCount,
+      completedChatCount,
       discoveryComplete: nextState.discoveryComplete,
       nextChatPageLink: nextState.nextChatPageLink,
       pendingChatCount,
       runningChatCount,
       failedChatCount,
+      hasActiveSync,
     });
   }
 
@@ -1146,6 +1352,19 @@ async function getStatus(user) {
       : null,
   ]);
 
+  const normalizedBackfillStatus = backfillState
+    ? computeBackfillLifecycleStatus({
+        discoveredChatCount: backfillState.discoveredChatCount || 0,
+        completedChatCount: backfillState.completedChatCount || 0,
+        discoveryComplete: Boolean(backfillState.discoveryComplete),
+        nextChatPageLink: backfillState.nextChatPageLink,
+        pendingChatCount: backfillState.pendingChatCount || 0,
+        runningChatCount: backfillState.runningChatCount || 0,
+        failedChatCount: backfillState.failedChatCount || 0,
+        hasActiveSync: latestSync?.status === 'running',
+      })
+    : null;
+
   return {
     enabled: config.enabled,
     graphBaseUrl: config.graphBaseUrl,
@@ -1158,7 +1377,7 @@ async function getStatus(user) {
     messageCount,
     backfillState: backfillState
       ? {
-          status: backfillState.status,
+          status: normalizedBackfillStatus || backfillState.status,
           discoveryComplete: Boolean(backfillState.discoveryComplete),
           nextChatPageLinkPresent: Boolean(backfillState.nextChatPageLink),
           discoveredChatCount: backfillState.discoveredChatCount || 0,
@@ -1234,10 +1453,10 @@ async function cancelRunningSync(user) {
   );
 
   await refreshBackfillStateSnapshot(userId, {
-    status: 'failed',
+    status: 'paused',
     lastSyncJobId: cancelledJob?._id?.toString?.() || latestRunningJob._id?.toString?.() || latestRunningJob.id,
     errorMessage: 'Sync cancelled by user',
-  }, { includeMessageCount: false });
+  }, { includeMessageCount: false, hasActiveSync: false });
 
   return {
     cancelled: true,
@@ -1427,7 +1646,7 @@ async function syncUserArchive(user, options = {}) {
       lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
       errorMessage: '',
       lastDiscoveredAt: shouldRefreshDiscovery ? new Date() : existingBackfillState?.lastDiscoveredAt,
-    }, { includeMessageCount: false });
+    }, { includeMessageCount: false, hasActiveSync: true });
 
     const syncedConversations = [];
     let processedChats = 0;
@@ -1556,7 +1775,7 @@ async function syncUserArchive(user, options = {}) {
         discoveryComplete,
         lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
         lastDiscoveredAt: new Date(),
-      }, { includeMessageCount: false });
+      }, { includeMessageCount: false, hasActiveSync: true });
 
       if (!nextChatPageLink || discoveredThisRun >= chatLimit) {
         break;
@@ -1751,7 +1970,7 @@ async function syncUserArchive(user, options = {}) {
           nextChatPageLink,
           discoveryComplete,
           lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
-        }, { includeMessageCount: false });
+        }, { includeMessageCount: false, hasActiveSync: true });
       }
     }
 
@@ -1761,7 +1980,7 @@ async function syncUserArchive(user, options = {}) {
       lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
       lastCompletedAt: discoveryComplete ? new Date() : undefined,
       errorMessage: '',
-    });
+    }, { hasActiveSync: false });
 
     logger.info('[TeamsArchiveService] Sync completed', {
       userId,
@@ -1895,15 +2114,166 @@ async function listConversations(user, options = {}) {
   const userId = user?.id || user?._id?.toString();
   const limit = clampInteger(options.limit, 20, { max: 50 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
+  const { normalizedChatType, topic, daysBack, participantClauses, filter: conversationFilter } =
+    buildConversationLookupFilter(userId, options);
 
   const conversations = await db.findTeamsArchiveConversations(
-    { user: userId },
+    conversationFilter,
     { limit, offset, sort: { lastMessageAt: -1, updatedAt: -1 } },
   );
 
   return {
     retrievalMode: 'conversation_list',
+    chatType: normalizedChatType,
+    topic: topic || undefined,
+    daysBack,
+    participants: toArray(options.participants).filter(Boolean),
+    guidance:
+      participantClauses.length > 0 || normalizedChatType !== 'any' || topic
+        ? 'These are scoped conversations. For one exact chat, prefer summarize_conversation first, then get_messages or get_messages_window if you need message-level detail.'
+        : 'These are archived conversations. Narrow to one exact chat before expanding messages.',
     conversations: conversations.map((conversation) => mapCompactConversation(conversation)),
+  };
+}
+
+async function getConversationDossier(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const chatId = String(options.chatId || '').trim();
+  const query = String(options.query || options.topic || '').trim();
+  const queryRegex = query ? buildSearchRegex(query) : null;
+  const previewLimit = clampInteger(options.limit, 8, { min: 1, max: 20 });
+  const scopedDaysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : undefined;
+
+  let conversation = null;
+  let candidates = [];
+
+  if (chatId) {
+    const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+    if (!resolvedGraphChatId) {
+      return {
+        retrievalMode: 'conversation_dossier',
+        resolved: false,
+        chatId,
+        graphChatId: null,
+        guidance: 'No archived conversation was found for the requested chat id.',
+        candidates: [],
+      };
+    }
+
+    const matches = await db.findTeamsArchiveConversations(
+      { user: userId, graphChatId: resolvedGraphChatId },
+      { limit: 1 },
+    );
+    conversation = matches[0] || null;
+  } else {
+    const lookup = await findConversationCandidates(userId, {
+      ...options,
+      limit: 10,
+    });
+    candidates = lookup.conversations;
+
+    if (candidates.length === 0) {
+      return {
+        retrievalMode: 'conversation_dossier',
+        resolved: false,
+        chatType: lookup.normalizedChatType,
+        topic: lookup.topic || undefined,
+        daysBack: lookup.daysBack,
+        participants: toArray(options.participants).filter(Boolean),
+        guidance:
+          'No archived conversations matched these constraints. Broaden the participant, topic, or time filters.',
+        candidates: [],
+      };
+    }
+
+    if (candidates.length > 1) {
+      return {
+        retrievalMode: 'conversation_dossier',
+        resolved: false,
+        chatType: lookup.normalizedChatType,
+        topic: lookup.topic || undefined,
+        daysBack: lookup.daysBack,
+        participants: toArray(options.participants).filter(Boolean),
+        candidateCount: candidates.length,
+        guidance:
+          'Multiple archived conversations matched. Pick one chatId from the candidates before asking for exhaustive retrieval.',
+        candidates: candidates.slice(0, 10).map((candidate) => mapConversationCandidate(candidate)),
+      };
+    }
+
+    conversation = candidates[0];
+  }
+
+  if (!conversation?.graphChatId) {
+    return {
+      retrievalMode: 'conversation_dossier',
+      resolved: false,
+      guidance: 'No archived conversation metadata was found for the requested constraints.',
+      candidates: [],
+    };
+  }
+
+  const messageFilter = {
+    user: userId,
+    graphChatId: conversation.graphChatId,
+    ...(scopedDaysBack
+      ? { sentDateTime: { $gte: new Date(Date.now() - scopedDaysBack * 24 * 60 * 60 * 1000) } }
+      : {}),
+  };
+
+  const [totalMessagesInScope, messages] = await Promise.all([
+    db.countTeamsArchiveMessages(messageFilter),
+    db.findTeamsArchiveMessages(messageFilter, {
+      limit: DEFAULT_CONVERSATION_DOSSIER_MAX_MESSAGES,
+      sort: { sentDateTime: 1, createdAt: 1 },
+    }),
+  ]);
+
+  const matchedMessages = queryRegex
+    ? messages.filter((message) => messageMatchesRegex(message, queryRegex))
+    : messages;
+  const matchedPreviewSource = matchedMessages.length > 0 ? matchedMessages : messages;
+  const firstMessageAt = messages[0]?.sentDateTime || null;
+  const lastMessageAt = messages[messages.length - 1]?.sentDateTime || null;
+  const firstMatchedAt = matchedMessages[0]?.sentDateTime || null;
+  const lastMatchedAt = matchedMessages[matchedMessages.length - 1]?.sentDateTime || null;
+  const monthlyCoverage = summarizeCoverageByMonth(messages, queryRegex);
+  const loadedAllMessages = totalMessagesInScope <= messages.length;
+
+  return {
+    retrievalMode: 'conversation_dossier',
+    resolved: true,
+    archiveBacked: true,
+    completeness: {
+      loadedAllMessages,
+      loadedMessages: messages.length,
+      totalMessagesInScope,
+      truncated: !loadedAllMessages,
+      cap: DEFAULT_CONVERSATION_DOSSIER_MAX_MESSAGES,
+    },
+    guidance:
+      'This dossier is built directly from the archived Teams messages for one resolved chat. Use it when completeness matters more than quick previews.',
+    chat: mapConversationCandidate(conversation),
+    query: query || undefined,
+    daysBack: scopedDaysBack,
+    firstMessageAt,
+    lastMessageAt,
+    matchedMessages: matchedMessages.length,
+    firstMatchedAt,
+    lastMatchedAt,
+    topSenders: summarizeSenderCounts(messages),
+    matchedTopSenders: summarizeSenderCounts(matchedMessages),
+    monthlyCoverage,
+    highlights: mapDossierHighlights(matchedPreviewSource.slice(0, previewLimit), conversation, previewLimit),
+    oldestMatches: mapDossierHighlights(matchedMessages.slice(0, previewLimit), conversation, previewLimit),
+    newestMatches: mapDossierHighlights(
+      matchedMessages.slice(Math.max(0, matchedMessages.length - previewLimit)),
+      conversation,
+      previewLimit,
+    ),
   };
 }
 
@@ -2505,6 +2875,7 @@ module.exports = {
   getSyncStartAvailability,
   syncUserArchive,
   listConversations,
+  getConversationDossier,
   listConversationMessages,
   getMessagesWindow,
   searchMessages,

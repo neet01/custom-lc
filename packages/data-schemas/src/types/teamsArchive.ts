@@ -89,7 +89,7 @@ export interface TeamsArchiveSyncJobData {
 
 export interface TeamsArchiveBackfillStateData {
   user: string;
-  status: 'idle' | 'discovering' | 'syncing' | 'complete' | 'failed';
+  status: 'idle' | 'discovering' | 'syncing' | 'paused' | 'complete' | 'failed';
   nextChatPageLink?: string;
   discoveryComplete?: boolean;
   discoveredChatCount?: number;

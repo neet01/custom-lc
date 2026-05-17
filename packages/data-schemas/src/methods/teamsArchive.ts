@@ -1,10 +1,12 @@
 import type { FilterQuery, Model } from 'mongoose';
 import logger from '~/config/winston';
+import type { ITeamsArchiveBackfillState } from '~/schema/teamsArchiveBackfillState';
 import type { ITeamsArchiveConversation } from '~/schema/teamsArchiveConversation';
 import type { ITeamsArchiveMessage } from '~/schema/teamsArchiveMessage';
 import type { ITeamsArchiveSyncLease } from '~/schema/teamsArchiveSyncLease';
 import type { ITeamsArchiveSyncJob } from '~/schema/teamsArchiveSyncJob';
 import type {
+  TeamsArchiveBackfillStateData,
   TeamsArchiveConversationData,
   TeamsArchiveMessageData,
   TeamsArchiveSyncJobData,
@@ -26,6 +28,39 @@ interface TeamsArchiveSyncLeaseData {
 }
 
 export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
+  async function getTeamsArchiveBackfillState(
+    userId: string,
+  ): Promise<ITeamsArchiveBackfillState | null> {
+    try {
+      const TeamsArchiveBackfillState = mongoose.models
+        .TeamsArchiveBackfillState as Model<ITeamsArchiveBackfillState>;
+      return (await TeamsArchiveBackfillState.findOne({ user: userId }).lean()) as
+        | ITeamsArchiveBackfillState
+        | null;
+    } catch (error) {
+      logger.error('[getTeamsArchiveBackfillState] Error finding Teams archive backfill state', error);
+      throw new Error('Error finding Teams archive backfill state');
+    }
+  }
+
+  async function upsertTeamsArchiveBackfillState(
+    record: TeamsArchiveBackfillStateData,
+  ): Promise<ITeamsArchiveBackfillState> {
+    try {
+      const TeamsArchiveBackfillState = mongoose.models
+        .TeamsArchiveBackfillState as Model<ITeamsArchiveBackfillState>;
+
+      return (await TeamsArchiveBackfillState.findOneAndUpdate(
+        { user: record.user },
+        { $set: record },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      )) as ITeamsArchiveBackfillState;
+    } catch (error) {
+      logger.error('[upsertTeamsArchiveBackfillState] Error upserting Teams archive backfill state', error);
+      throw new Error('Error upserting Teams archive backfill state');
+    }
+  }
+
   async function upsertTeamsArchiveConversation(
     record: TeamsArchiveConversationData,
   ): Promise<ITeamsArchiveConversation> {
@@ -182,6 +217,22 @@ export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
     }
   }
 
+  async function updateTeamsArchiveConversation(
+    id: string,
+    updates: Partial<TeamsArchiveConversationData>,
+  ): Promise<ITeamsArchiveConversation | null> {
+    try {
+      const TeamsArchiveConversation = mongoose.models
+        .TeamsArchiveConversation as Model<ITeamsArchiveConversation>;
+      return (await TeamsArchiveConversation.findByIdAndUpdate(id, { $set: updates }, { new: true })) as
+        | ITeamsArchiveConversation
+        | null;
+    } catch (error) {
+      logger.error('[updateTeamsArchiveConversation] Error updating Teams archive conversation', error);
+      throw new Error('Error updating Teams archive conversation');
+    }
+  }
+
   async function acquireTeamsArchiveSyncLease(
     record: TeamsArchiveSyncLeaseData,
   ): Promise<ITeamsArchiveSyncLease | null> {
@@ -272,6 +323,8 @@ export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
   }
 
   return {
+    getTeamsArchiveBackfillState,
+    upsertTeamsArchiveBackfillState,
     upsertTeamsArchiveConversation,
     bulkUpsertTeamsArchiveMessages,
     createTeamsArchiveSyncJob,
@@ -282,6 +335,7 @@ export function createTeamsArchiveMethods(mongoose: typeof import('mongoose')) {
     findTeamsArchiveSyncJobById,
     countTeamsArchiveConversations,
     countTeamsArchiveMessages,
+    updateTeamsArchiveConversation,
     acquireTeamsArchiveSyncLease,
     refreshTeamsArchiveSyncLease,
     releaseTeamsArchiveSyncLease,

@@ -15,6 +15,7 @@ export type { IEnterpriseMemoryChunk } from './schema/enterpriseMemoryChunk';
 export type { IEnterpriseMemoryJob } from './schema/enterpriseMemoryJob';
 export type { IIssueReport } from './schema/issueReport';
 export type { IOutlookAudit } from './schema/outlookAudit';
+export type { ITeamsArchiveBackfillState } from './schema/teamsArchiveBackfillState';
 export type { ITeamsArchiveConversation } from './schema/teamsArchiveConversation';
 export type { ITeamsArchiveMessage } from './schema/teamsArchiveMessage';
 export type { ITeamsArchiveSyncLease } from './schema/teamsArchiveSyncLease';

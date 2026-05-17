@@ -21,6 +21,26 @@ function formatTimestamp(value?: string) {
   return date.toLocaleString();
 }
 
+function formatPhase(value?: string | null) {
+  switch (value) {
+    case 'discovering':
+    case 'discovering_chats':
+      return 'Discovering chats';
+    case 'syncing':
+    case 'syncing_messages':
+      return 'Syncing messages';
+    case 'complete':
+      return 'Complete';
+    case 'failed':
+    case 'failure':
+      return 'Failed';
+    case 'cancelled':
+      return 'Cancelled';
+    default:
+      return 'Idle';
+  }
+}
+
 function getStatusTone(status?: string | null) {
   if (status === 'running') {
     return 'text-text-primary';
@@ -97,13 +117,35 @@ export default function TeamsArchiveStatus() {
   const queryClient = useQueryClient();
   const { showToast } = useToastContext();
   const { data, isLoading, isFetching } = useTeamsArchiveStatusQuery({
-    refetchInterval: (data) => (data?.latestSync?.status === 'running' ? 4000 : false),
+    refetchInterval: (data) =>
+      data?.latestSync?.status === 'running' ||
+      data?.backfillState?.status === 'discovering' ||
+      data?.backfillState?.status === 'syncing' ||
+      data?.latestProjection?.status === 'running' ||
+      data?.latestProjection?.status === 'pending'
+        ? 4000
+        : false,
   });
   const syncMutation = useSyncTeamsArchiveMutation();
   const cancelMutation = useCancelTeamsArchiveSyncMutation();
 
   const syncStatus = data?.latestSync?.status ?? null;
-  const isSyncing = syncMutation.isLoading || cancelMutation.isLoading || syncStatus === 'running';
+  const backfillState = data?.backfillState;
+  const isBackfillActive =
+    backfillState?.status === 'discovering' || backfillState?.status === 'syncing';
+  const isSyncing = syncMutation.isLoading || cancelMutation.isLoading || syncStatus === 'running' || isBackfillActive;
+  const discoveredChats = backfillState?.discoveredChatCount ?? data?.conversationCount ?? 0;
+  const completedChats = backfillState?.completedChatCount ?? 0;
+  const runningChats = backfillState?.runningChatCount ?? 0;
+  const pendingChats = backfillState?.pendingChatCount ?? 0;
+  const failedChats = backfillState?.failedChatCount ?? 0;
+  const totalMessages = backfillState?.totalMessageCount ?? data?.messageCount ?? 0;
+  const processedChats = completedChats + failedChats;
+  const determinateProgress =
+    backfillState?.discoveryComplete && discoveredChats > 0
+      ? Math.max(2, Math.min(100, Math.round((processedChats / discoveredChats) * 100)))
+      : null;
+  const phaseLabel = formatPhase(data?.latestSync?.phase || backfillState?.status);
 
   const handleSync = async () => {
     try {
@@ -189,14 +231,27 @@ export default function TeamsArchiveStatus() {
               <div>
                 <div className="text-sm font-semibold text-text-primary">Indexing archive</div>
                 <div className="mt-1 text-xs text-text-secondary">
-                  Cortex is pulling Teams history in the background. Progress is indeterminate
-                  because the final chat/message count is not known up front.
+                  {phaseLabel}. {completedChats.toLocaleString()} complete,{' '}
+                  {runningChats.toLocaleString()} running, {pendingChats.toLocaleString()} pending
+                  {failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.
                 </div>
               </div>
-              <div className="shrink-0 text-xs font-medium text-text-secondary">Running</div>
+              <div className="shrink-0 text-right text-xs font-medium text-text-secondary">
+                <div>{phaseLabel}</div>
+                <div className="mt-1">
+                  {data?.activeSyncs ?? 0}/{data?.maxConcurrentSyncs ?? 0} active slots
+                </div>
+              </div>
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-black/5 dark:bg-white/10">
-              <div className="relative h-full w-2/5 animate-pulse rounded-full bg-[#f5d000]/70 shadow-[0_0_20px_rgba(245,208,0,0.35)]" />
+              {determinateProgress !== null ? (
+                <div
+                  className="relative h-full rounded-full bg-[#f5d000]/70 shadow-[0_0_20px_rgba(245,208,0,0.35)] transition-[width] duration-500"
+                  style={{ width: `${determinateProgress}%` }}
+                />
+              ) : (
+                <div className="relative h-full w-2/5 animate-pulse rounded-full bg-[#f5d000]/70 shadow-[0_0_20px_rgba(245,208,0,0.35)]" />
+              )}
             </div>
           </div>
         ) : null}
@@ -207,12 +262,12 @@ export default function TeamsArchiveStatus() {
               Status
             </div>
             <div className={`mt-2 text-sm font-semibold ${getStatusTone(syncStatus)}`}>
-              {isLoading ? 'Loading…' : getStatusLabel(syncStatus)}
+              {isLoading ? 'Loading…' : backfillState?.status ? formatPhase(backfillState.status) : getStatusLabel(syncStatus)}
             </div>
             <div className="mt-1 text-xs text-text-secondary">
-              {syncStatus === 'running'
-                ? 'Archive refresh is in progress.'
-                : data?.latestSync?.errorMessage || 'Background sync status for Teams chat history.'}
+              {backfillState?.errorMessage ||
+                data?.latestSync?.errorMessage ||
+                'Background sync status for Teams chat history.'}
             </div>
           </div>
 
@@ -221,22 +276,42 @@ export default function TeamsArchiveStatus() {
               Coverage
             </div>
             <div className="mt-2 text-sm font-semibold text-text-primary">
-              {(data?.conversationCount ?? 0).toLocaleString()} chats
+              {discoveredChats.toLocaleString()} discovered chats
             </div>
             <div className="mt-1 text-xs text-text-secondary">
-              {(data?.messageCount ?? 0).toLocaleString()} archived messages
+              {totalMessages.toLocaleString()} archived messages
             </div>
           </div>
 
           <div className="rounded-2xl border border-white/40 bg-white/55 px-4 py-3 backdrop-blur dark:border-white/10 dark:bg-zinc-900/45">
             <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-              Last Sync
+              Progress
             </div>
             <div className="mt-2 text-sm font-semibold text-text-primary">
-              {formatTimestamp(data?.latestSync?.completedAt || data?.latestSync?.startedAt)}
+              {completedChats.toLocaleString()} complete
             </div>
             <div className="mt-1 text-xs text-text-secondary">
-              {data?.latestSync?.mode ? `Mode: ${data.latestSync.mode}` : 'No completed sync yet'}
+              {runningChats.toLocaleString()} running, {pendingChats.toLocaleString()} pending
+              {failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-white/35 bg-white/45 px-4 py-3 text-xs text-text-secondary backdrop-blur dark:border-white/10 dark:bg-zinc-950/35">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
+                Last Sync
+              </span>
+              <div className="mt-1 text-sm font-semibold text-text-primary">
+                {formatTimestamp(data?.latestSync?.completedAt || data?.latestSync?.startedAt)}
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
+                Latest Phase
+              </div>
+              <div className="mt-1 text-sm font-semibold text-text-primary">{phaseLabel}</div>
             </div>
           </div>
         </div>

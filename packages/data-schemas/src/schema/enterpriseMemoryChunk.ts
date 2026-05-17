@@ -126,6 +126,8 @@ enterpriseMemoryChunkSchema.index(
 );
 enterpriseMemoryChunkSchema.index({ parentEntityId: 1, sourceTimestamp: -1 });
 enterpriseMemoryChunkSchema.index({ source: 1, sourceRecordType: 1, sourceTimestamp: -1 });
+enterpriseMemoryChunkSchema.index({ user: 1, source: 1, sourceRecordType: 1, sourceTimestamp: -1 });
+enterpriseMemoryChunkSchema.index({ user: 1, sourceParentRecordId: 1, sourceTimestamp: -1 });
 enterpriseMemoryChunkSchema.index({
   title: 'text',
   text: 'text',

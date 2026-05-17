@@ -170,6 +170,9 @@ const teamsArchiveMessageSchema = new Schema<ITeamsArchiveMessage>(
 
 teamsArchiveMessageSchema.index({ user: 1, graphMessageId: 1 }, { unique: true });
 teamsArchiveMessageSchema.index({ user: 1, graphChatId: 1, sentDateTime: -1 });
+teamsArchiveMessageSchema.index({ user: 1, fromUserId: 1, sentDateTime: -1 });
+teamsArchiveMessageSchema.index({ user: 1, sentDateTime: -1 });
+teamsArchiveMessageSchema.index({ user: 1, graphChatId: 1, createdAt: -1 });
 teamsArchiveMessageSchema.index({ tenantId: 1, graphChatId: 1, sentDateTime: -1 });
 
 export default teamsArchiveMessageSchema;

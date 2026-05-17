@@ -6,6 +6,15 @@ export interface ITeamsArchiveSyncJob extends Document {
   user: Types.ObjectId;
   status: TeamsArchiveSyncStatus;
   mode?: string;
+  phase?: string;
+  checkpoint?: Record<string, unknown>;
+  stats?: Record<string, unknown>;
+  requestedChatLimit?: number;
+  requestedMessagesPerChat?: number;
+  discoveredChatCount?: number;
+  processedChatCount?: number;
+  skippedChatCount?: number;
+  projectionJobId?: string;
   conversationCount?: number;
   messageCount?: number;
   errorMessage?: string;
@@ -33,6 +42,42 @@ const teamsArchiveSyncJobSchema = new Schema<ITeamsArchiveSyncJob>(
     mode: {
       type: String,
       maxlength: 64,
+    },
+    phase: {
+      type: String,
+      maxlength: 64,
+      index: true,
+    },
+    checkpoint: {
+      type: Schema.Types.Mixed,
+    },
+    stats: {
+      type: Schema.Types.Mixed,
+    },
+    requestedChatLimit: {
+      type: Number,
+      default: 0,
+    },
+    requestedMessagesPerChat: {
+      type: Number,
+      default: 0,
+    },
+    discoveredChatCount: {
+      type: Number,
+      default: 0,
+    },
+    processedChatCount: {
+      type: Number,
+      default: 0,
+    },
+    skippedChatCount: {
+      type: Number,
+      default: 0,
+    },
+    projectionJobId: {
+      type: String,
+      maxlength: 128,
+      index: true,
     },
     conversationCount: {
       type: Number,

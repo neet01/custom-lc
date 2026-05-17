@@ -15,6 +15,14 @@ export interface TeamsArchiveConversationData {
   topic?: string;
   webUrl?: string;
   participants?: TeamsArchiveParticipantData[];
+  syncStatus?: 'pending' | 'running' | 'complete' | 'failed';
+  syncCursor?: string;
+  syncError?: string;
+  sourceDiscoveredAt?: Date;
+  sourceLastMessageAt?: Date;
+  syncStartedAt?: Date;
+  syncCompletedAt?: Date;
+  lastMessageSyncAt?: Date;
   lastMessageAt?: Date;
   lastSyncedAt?: Date;
   sourceUpdatedAt?: Date;
@@ -63,9 +71,38 @@ export interface TeamsArchiveSyncJobData {
   user: string;
   status: TeamsArchiveSyncStatus;
   mode?: string;
+  phase?: string;
+  checkpoint?: Record<string, unknown>;
+  stats?: Record<string, unknown>;
+  requestedChatLimit?: number;
+  requestedMessagesPerChat?: number;
+  discoveredChatCount?: number;
+  processedChatCount?: number;
+  skippedChatCount?: number;
+  projectionJobId?: string;
   conversationCount?: number;
   messageCount?: number;
   errorMessage?: string;
   startedAt?: Date;
   completedAt?: Date;
+}
+
+export interface TeamsArchiveBackfillStateData {
+  user: string;
+  status: 'idle' | 'discovering' | 'syncing' | 'complete' | 'failed';
+  nextChatPageLink?: string;
+  discoveryComplete?: boolean;
+  discoveredChatCount?: number;
+  completedChatCount?: number;
+  pendingChatCount?: number;
+  runningChatCount?: number;
+  failedChatCount?: number;
+  totalMessageCount?: number;
+  lastSyncJobId?: string;
+  lastProjectionJobId?: string;
+  lastDiscoveredAt?: Date;
+  lastCompletedAt?: Date;
+  lastHeartbeatAt?: Date;
+  errorMessage?: string;
+  tenantId?: string;
 }

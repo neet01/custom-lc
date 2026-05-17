@@ -4,11 +4,38 @@ export type TeamsArchiveLatestSync = {
   id: string;
   status: TeamsArchiveSyncStatus;
   mode?: string;
+  phase?: string | null;
+  checkpoint?: Record<string, unknown>;
+  stats?: Record<string, unknown>;
+  requestedChatLimit?: number;
+  requestedMessagesPerChat?: number;
+  discoveredChatCount?: number;
+  processedChatCount?: number;
+  skippedChatCount?: number;
+  projectionJobId?: string | null;
   conversationCount: number;
   messageCount: number;
   startedAt?: string;
   completedAt?: string;
   errorMessage?: string;
+};
+
+export type TeamsArchiveBackfillState = {
+  status: 'idle' | 'discovering' | 'syncing' | 'complete' | 'failed';
+  discoveryComplete: boolean;
+  nextChatPageLinkPresent: boolean;
+  discoveredChatCount: number;
+  completedChatCount: number;
+  pendingChatCount: number;
+  runningChatCount: number;
+  failedChatCount: number;
+  totalMessageCount: number;
+  lastSyncJobId?: string | null;
+  lastProjectionJobId?: string | null;
+  lastDiscoveredAt?: string | null;
+  lastCompletedAt?: string | null;
+  lastHeartbeatAt?: string | null;
+  errorMessage?: string | null;
 };
 
 export type TeamsArchiveLatestProjection = {
@@ -24,10 +51,13 @@ export type TeamsArchiveStatusResponse = {
   enabled: boolean;
   graphBaseUrl: string;
   graphScopes: string;
+  maxConcurrentSyncs: number;
+  activeSyncs: number;
   syncModes: string[];
   channelSyncSupported: boolean;
   conversationCount: number;
   messageCount: number;
+  backfillState: TeamsArchiveBackfillState | null;
   latestSync: TeamsArchiveLatestSync | null;
   latestProjection: TeamsArchiveLatestProjection | null;
 };
@@ -46,6 +76,7 @@ export type TeamsArchiveSyncConversation = {
   chatType: string;
   messageCount: number;
   lastMessageAt?: string;
+  syncStatus?: 'pending' | 'running' | 'complete' | 'failed';
 };
 
 export type TeamsArchiveSyncResponse = {
@@ -63,6 +94,12 @@ export type TeamsArchiveSyncResponse = {
   mode: string;
   conversationCount: number;
   messageCount: number;
+  discovery?: {
+    discoveredThisRun: number;
+    discoveryComplete: boolean;
+    nextChatPageLinkPresent: boolean;
+  };
+  skippedMessageChats?: number;
   conversations: TeamsArchiveSyncConversation[];
   memoryProjection?:
     | {

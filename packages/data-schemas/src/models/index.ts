@@ -32,6 +32,7 @@ import { createPromptGroupModel } from './promptGroup';
 import { createConversationTagModel } from './conversationTag';
 import { createSharedLinkModel } from './sharedLink';
 import { createTeamsArchiveConversationModel } from './teamsArchiveConversation';
+import { createTeamsArchiveBackfillStateModel } from './teamsArchiveBackfillState';
 import { createTeamsArchiveMessageModel } from './teamsArchiveMessage';
 import { createTeamsArchiveSyncLeaseModel } from './teamsArchiveSyncLease';
 import { createTeamsArchiveSyncJobModel } from './teamsArchiveSyncJob';
@@ -81,6 +82,7 @@ export function createModels(mongoose: typeof import('mongoose')) {
     PromptGroup: createPromptGroupModel(mongoose),
     ConversationTag: createConversationTagModel(mongoose),
     SharedLink: createSharedLinkModel(mongoose),
+    TeamsArchiveBackfillState: createTeamsArchiveBackfillStateModel(mongoose),
     TeamsArchiveConversation: createTeamsArchiveConversationModel(mongoose),
     TeamsArchiveMessage: createTeamsArchiveMessageModel(mongoose),
     TeamsArchiveSyncLease: createTeamsArchiveSyncLeaseModel(mongoose),

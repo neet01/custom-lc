@@ -30,6 +30,7 @@ const DEFAULT_MESSAGES_PER_CHAT = 250;
 const DEFAULT_SEARCH_LIMIT = 25;
 const DEFAULT_SYNC_STALE_MINUTES = 45;
 const DEFAULT_MAX_CONCURRENT_SYNCS = 3;
+const DEFAULT_DISCOVERY_REFRESH_HOURS = 12;
 const HEARTBEAT_MIN_INTERVAL_MS = 30 * 1000;
 const HEARTBEAT_CHAT_INTERVAL = 5;
 
@@ -65,6 +66,7 @@ function normalizeGraphBaseUrl(baseUrl = DEFAULT_GRAPH_BASE_URL) {
 
 function getTeamsArchiveConfig() {
   const parsedMaxConcurrentSyncs = Number(process.env.TEAMS_ARCHIVE_MAX_CONCURRENT_SYNCS);
+  const parsedDiscoveryRefreshHours = Number(process.env.TEAMS_ARCHIVE_DISCOVERY_REFRESH_HOURS);
 
   return {
     enabled: isTeamsArchiveEnabled(),
@@ -78,6 +80,10 @@ function getTeamsArchiveConfig() {
     defaultSearchLimit: Number(process.env.TEAMS_ARCHIVE_SEARCH_LIMIT) || DEFAULT_SEARCH_LIMIT,
     syncStaleMinutes:
       Number(process.env.TEAMS_ARCHIVE_SYNC_STALE_MINUTES) || DEFAULT_SYNC_STALE_MINUTES,
+    discoveryRefreshHours:
+      Number.isFinite(parsedDiscoveryRefreshHours) && parsedDiscoveryRefreshHours > 0
+        ? parsedDiscoveryRefreshHours
+        : DEFAULT_DISCOVERY_REFRESH_HOURS,
     maxConcurrentSyncs:
       Number.isFinite(parsedMaxConcurrentSyncs) && parsedMaxConcurrentSyncs >= 0
         ? Math.floor(parsedMaxConcurrentSyncs)
@@ -843,6 +849,24 @@ async function listChatsPage(user, { top = DEFAULT_CHAT_LIMIT, nextLink } = {}) 
   });
 }
 
+function isDiscoveryRefreshDue(backfillState) {
+  if (!backfillState?.discoveryComplete) {
+    return false;
+  }
+
+  const reference =
+    toDate(backfillState?.lastDiscoveredAt) ||
+    toDate(backfillState?.updatedAt) ||
+    toDate(backfillState?.lastCompletedAt);
+
+  if (!reference) {
+    return true;
+  }
+
+  const refreshMs = getTeamsArchiveConfig().discoveryRefreshHours * 60 * 60 * 1000;
+  return Date.now() - reference.getTime() >= refreshMs;
+}
+
 async function listChatMembers(user, chatId, chatType) {
   try {
     const response = await graphRequest(user, `/chats/${encodeURIComponent(chatId)}/members`, {
@@ -865,35 +889,132 @@ async function listChatMembers(user, chatId, chatType) {
   }
 }
 
-async function listChatMessages(user, chatId, { top = DEFAULT_MESSAGES_PER_CHAT } = {}) {
-  const messages = [];
-  let nextLink = null;
-
-  do {
-    const response = await graphRequest(
-      user,
-      nextLink || `/chats/${encodeURIComponent(chatId)}/messages`,
-      nextLink
-        ? {}
-        : {
-            query: {
-              $top: Math.min(top - messages.length, 50),
-            },
+async function listChatMessagesPage(user, chatId, { top = DEFAULT_MESSAGES_PER_CHAT, nextLink } = {}) {
+  const response = await graphRequest(
+    user,
+    nextLink || `/chats/${encodeURIComponent(chatId)}/messages`,
+    nextLink
+      ? {}
+      : {
+          query: {
+            $top: Math.min(top, 50),
           },
-    );
+        },
+  );
 
-    messages.push(...toArray(response?.value));
-    nextLink = response?.['@odata.nextLink'] && messages.length < top ? response['@odata.nextLink'] : null;
-  } while (nextLink && messages.length < top);
+  return {
+    messages: toArray(response?.value),
+    nextLink: response?.['@odata.nextLink'] || null,
+  };
+}
 
-  return messages.slice(0, top);
+function computeBackfillLifecycleStatus({
+  discoveryComplete,
+  nextChatPageLink,
+  pendingChatCount = 0,
+  runningChatCount = 0,
+  failedChatCount = 0,
+}) {
+  if (!discoveryComplete || nextChatPageLink) {
+    return 'discovering';
+  }
+
+  if (pendingChatCount > 0 || runningChatCount > 0) {
+    return 'syncing';
+  }
+
+  if (failedChatCount > 0) {
+    return 'failed';
+  }
+
+  return 'complete';
+}
+
+async function refreshBackfillStateSnapshot(userId, updates = {}, options = {}) {
+  const { includeMessageCount = true } = options;
+  const [discoveredChatCount, completedChatCount, pendingChatCount, runningChatCount, failedChatCount, totalMessageCount] =
+    await Promise.all([
+      db.countTeamsArchiveConversations({ user: userId }),
+      db.countTeamsArchiveConversations({ user: userId, syncStatus: 'complete' }),
+      db.countTeamsArchiveConversations({ user: userId, syncStatus: 'pending' }),
+      db.countTeamsArchiveConversations({ user: userId, syncStatus: 'running' }),
+      db.countTeamsArchiveConversations({ user: userId, syncStatus: 'failed' }),
+      includeMessageCount
+        ? db.countTeamsArchiveMessages({ user: userId })
+        : Promise.resolve(undefined),
+    ]);
+
+  const nextState = {
+    user: userId,
+    discoveredChatCount,
+    completedChatCount,
+    pendingChatCount,
+    runningChatCount,
+    failedChatCount,
+    ...(includeMessageCount && totalMessageCount !== undefined ? { totalMessageCount } : {}),
+    lastHeartbeatAt: new Date(),
+    ...updates,
+  };
+
+  if (!nextState.status || ['discovering', 'syncing', 'complete'].includes(nextState.status)) {
+    nextState.status = computeBackfillLifecycleStatus({
+      discoveryComplete: nextState.discoveryComplete,
+      nextChatPageLink: nextState.nextChatPageLink,
+      pendingChatCount,
+      runningChatCount,
+      failedChatCount,
+    });
+  }
+
+  return db.upsertTeamsArchiveBackfillState(nextState);
+}
+
+function buildSyncJobCheckpoint({
+  phase,
+  nextChatPageLink,
+  discoveryComplete,
+  pageNumber,
+  discoveredThisRun,
+  processedChats,
+  persistedMessages,
+}) {
+  return {
+    phase,
+    nextChatPageLink: nextChatPageLink || null,
+    discoveryComplete: Boolean(discoveryComplete),
+    pageNumber,
+    discoveredThisRun,
+    processedChats,
+    persistedMessages,
+  };
+}
+
+function queueTeamsProjection(params) {
+  if (typeof projectTeamsArchiveSyncToMemory !== 'function') {
+    return null;
+  }
+
+  const queuedAt = new Date();
+  void projectTeamsArchiveSyncToMemory(params).catch((error) => {
+    logger.error('[TeamsArchiveService] Background Teams projection failed', {
+      userId: params?.userId,
+      syncJobId: params?.syncJobId,
+      error: error?.message || error,
+    });
+  });
+
+  return {
+    status: 'queued',
+    queuedAt,
+    requestedConversationCount: Array.isArray(params?.graphChatIds) ? params.graphChatIds.length : 0,
+  };
 }
 
 async function getStatus(user) {
   const config = getTeamsArchiveConfig();
   const userId = user?.id || user?._id?.toString();
   await reconcileRunningSyncJob(userId);
-  const [conversationCount, messageCount, latestSync, latestProjection, activeSyncs] = await Promise.all([
+  const [conversationCount, messageCount, latestSync, latestProjection, activeSyncs, backfillState] = await Promise.all([
     userId ? db.countTeamsArchiveConversations({ user: userId }) : 0,
     userId ? db.countTeamsArchiveMessages({ user: userId }) : 0,
     userId ? db.findLatestTeamsArchiveSyncJob({ user: userId }) : null,
@@ -901,6 +1022,9 @@ async function getStatus(user) {
       ? db.findLatestEnterpriseMemoryJob({ user: userId, source: 'teams', jobType: 'projection' })
       : null,
     countActiveSyncSlots(),
+    userId && typeof db.getTeamsArchiveBackfillState === 'function'
+      ? db.getTeamsArchiveBackfillState(userId)
+      : null,
   ]);
 
   return {
@@ -913,11 +1037,39 @@ async function getStatus(user) {
     channelSyncSupported: false,
     conversationCount,
     messageCount,
+    backfillState: backfillState
+      ? {
+          status: backfillState.status,
+          discoveryComplete: Boolean(backfillState.discoveryComplete),
+          nextChatPageLinkPresent: Boolean(backfillState.nextChatPageLink),
+          discoveredChatCount: backfillState.discoveredChatCount || 0,
+          completedChatCount: backfillState.completedChatCount || 0,
+          pendingChatCount: backfillState.pendingChatCount || 0,
+          runningChatCount: backfillState.runningChatCount || 0,
+          failedChatCount: backfillState.failedChatCount || 0,
+          totalMessageCount: backfillState.totalMessageCount || 0,
+          lastSyncJobId: backfillState.lastSyncJobId || null,
+          lastProjectionJobId: backfillState.lastProjectionJobId || null,
+          lastDiscoveredAt: backfillState.lastDiscoveredAt || null,
+          lastCompletedAt: backfillState.lastCompletedAt || null,
+          lastHeartbeatAt: backfillState.lastHeartbeatAt || null,
+          errorMessage: backfillState.errorMessage || null,
+        }
+      : null,
     latestSync: latestSync
       ? {
           id: latestSync._id?.toString?.() || latestSync.id,
           status: latestSync.status,
           mode: latestSync.mode,
+          phase: latestSync.phase || null,
+          checkpoint: latestSync.checkpoint || {},
+          stats: latestSync.stats || {},
+          requestedChatLimit: latestSync.requestedChatLimit || 0,
+          requestedMessagesPerChat: latestSync.requestedMessagesPerChat || 0,
+          discoveredChatCount: latestSync.discoveredChatCount || 0,
+          processedChatCount: latestSync.processedChatCount || 0,
+          skippedChatCount: latestSync.skippedChatCount || 0,
+          projectionJobId: latestSync.projectionJobId || null,
           conversationCount: latestSync.conversationCount || 0,
           messageCount: latestSync.messageCount || 0,
           startedAt: latestSync.startedAt,
@@ -956,10 +1108,17 @@ async function cancelRunningSync(user) {
     latestRunningJob._id?.toString?.() || latestRunningJob.id,
     {
       status: 'cancelled',
+      phase: 'cancelled',
       errorMessage: 'Sync cancelled by user',
       completedAt: new Date(),
     },
   );
+
+  await refreshBackfillStateSnapshot(userId, {
+    status: 'failed',
+    lastSyncJobId: cancelledJob?._id?.toString?.() || latestRunningJob._id?.toString?.() || latestRunningJob.id,
+    errorMessage: 'Sync cancelled by user',
+  }, { includeMessageCount: false });
 
   return {
     cancelled: true,
@@ -1038,9 +1197,9 @@ async function syncUserArchive(user, options = {}) {
   }
 
   const config = getTeamsArchiveConfig();
-  const chatLimit = clampInteger(options.chatLimit, config.defaultChatLimit, { max: 250 });
+  const chatLimit = clampInteger(options.chatLimit, config.defaultChatLimit, { max: 10000 });
   const messagesPerChat = clampInteger(options.messagesPerChat, config.defaultMessagesPerChat, {
-    max: 1000,
+    max: 5000,
   });
   const mode = options.mode === 'chats' ? 'chats' : 'chats';
   const latestRunningJob = await reconcileRunningSyncJob(userId);
@@ -1109,206 +1268,451 @@ async function syncUserArchive(user, options = {}) {
       );
     }
 
+    const existingBackfillState =
+      typeof db.getTeamsArchiveBackfillState === 'function'
+        ? await db.getTeamsArchiveBackfillState(userId)
+        : null;
+    const shouldRefreshDiscovery = isDiscoveryRefreshDue(existingBackfillState);
+    let nextChatPageLink =
+      shouldRefreshDiscovery || !existingBackfillState?.discoveryComplete
+        ? existingBackfillState?.nextChatPageLink || null
+        : null;
+    let discoveryComplete =
+      shouldRefreshDiscovery ? false : Boolean(existingBackfillState?.discoveryComplete);
+
     syncJob = await db.createTeamsArchiveSyncJob({
       user: userId,
       status: 'running',
       mode,
+      phase: 'discovering_chats',
+      checkpoint: buildSyncJobCheckpoint({
+        phase: 'discovering_chats',
+        nextChatPageLink,
+        discoveryComplete,
+        pageNumber: 0,
+        discoveredThisRun: 0,
+        processedChats: 0,
+        persistedMessages: 0,
+      }),
+      requestedChatLimit: chatLimit,
+      requestedMessagesPerChat: messagesPerChat,
       conversationCount: 0,
       messageCount: 0,
       startedAt: new Date(),
     });
 
+    await refreshBackfillStateSnapshot(userId, {
+      status: 'discovering',
+      nextChatPageLink,
+      discoveryComplete,
+      lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
+      errorMessage: '',
+      lastDiscoveredAt: shouldRefreshDiscovery ? new Date() : existingBackfillState?.lastDiscoveredAt,
+    }, { includeMessageCount: false });
+
     const syncedConversations = [];
-    let nextLink = null;
     let processedChats = 0;
     let persistedMessages = 0;
     let skippedMessageChats = 0;
+    let discoveredThisRun = 0;
     let pageNumber = 0;
     let lastHeartbeatAt = Date.now();
     const graphChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
     const processedChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
+    const completedGraphChatIds = new Set();
 
-    while (processedChats < chatLimit) {
+    while (!discoveryComplete && discoveredThisRun < chatLimit) {
       await ensureSyncJobActive(syncJob._id?.toString?.() || syncJob.id);
       pageNumber += 1;
+
       const response = await listChatsPage(user, {
-        top: Math.min(chatLimit - processedChats, 50),
-        nextLink,
+        top: Math.min(chatLimit - discoveredThisRun, 50),
+        nextLink: nextChatPageLink,
       });
       const chats = toArray(response?.value).sort((a, b) => {
         const aTime = toDate(a?.lastUpdatedDateTime)?.getTime() ?? 0;
         const bTime = toDate(b?.lastUpdatedDateTime)?.getTime() ?? 0;
         return bTime - aTime;
       });
+
       if (chats.length === 0) {
+        discoveryComplete = true;
+        nextChatPageLink = null;
         break;
       }
+
+      const existingConversations = await db.findTeamsArchiveConversations(
+        { user: userId, graphChatId: { $in: chats.map((chat) => chat.id) } },
+        { limit: Math.max(chats.length, 1) },
+      );
+      const existingConversationMap = new Map(
+        existingConversations.map((conversation) => [conversation.graphChatId, conversation]),
+      );
 
       const pageChatTypeSummary = summarizeChatTypes(chats);
       for (const [chatType, count] of Object.entries(pageChatTypeSummary)) {
         graphChatTypeSummary[chatType] = (graphChatTypeSummary[chatType] || 0) + count;
       }
 
-      logger.info('[TeamsArchiveService] Sync page loaded', {
+      logger.info('[TeamsArchiveService] Sync discovery page loaded', {
         userId,
         syncJobId: syncJob._id?.toString?.() || syncJob.id,
         pageNumber,
         chatsReturned: chats.length,
-        processedChats,
+        discoveredThisRun,
         chatLimit,
         pageChatTypeSummary,
         hasNextPage: Boolean(response?.['@odata.nextLink']),
       });
 
+      for (const chat of chats) {
+        const chatType = String(chat?.chatType || 'unknown');
+        const members = await listChatMembers(user, chat.id, chatType);
+        const normalizedConversation = normalizeConversation(chat, members);
+        const existingConversation = existingConversationMap.get(chat.id);
+        const sourceUpdatedAt = normalizedConversation.sourceUpdatedAt || existingConversation?.sourceUpdatedAt;
+        const lastMessageSyncAt = existingConversation?.lastMessageSyncAt || null;
+        const sourceUpdatedMs = sourceUpdatedAt?.getTime?.() ?? 0;
+        const lastMessageSyncMs = lastMessageSyncAt ? new Date(lastMessageSyncAt).getTime() : 0;
+        const needsSync =
+          !existingConversation ||
+          existingConversation.syncStatus !== 'complete' ||
+          Boolean(existingConversation.syncCursor) ||
+          (sourceUpdatedMs > 0 && sourceUpdatedMs > lastMessageSyncMs);
+
+        await db.upsertTeamsArchiveConversation({
+          user: userId,
+          ...normalizedConversation,
+          sourceDiscoveredAt: existingConversation?.sourceDiscoveredAt || new Date(),
+          sourceLastMessageAt: normalizedConversation.sourceUpdatedAt,
+          syncStatus: needsSync ? 'pending' : existingConversation?.syncStatus || 'complete',
+          syncCursor: needsSync ? existingConversation?.syncCursor || undefined : undefined,
+          syncError: needsSync ? '' : existingConversation?.syncError,
+          syncStartedAt: existingConversation?.syncStartedAt,
+          syncCompletedAt: existingConversation?.syncCompletedAt,
+          lastMessageSyncAt: existingConversation?.lastMessageSyncAt,
+          lastMessageAt: existingConversation?.lastMessageAt,
+          lastSyncedAt: existingConversation?.lastSyncedAt,
+          messageCount: existingConversation?.messageCount || 0,
+        });
+
+        discoveredThisRun += 1;
+      }
+
+      nextChatPageLink =
+        response?.['@odata.nextLink'] && discoveredThisRun < chatLimit
+          ? response['@odata.nextLink']
+          : response?.['@odata.nextLink'] || null;
+      discoveryComplete = !nextChatPageLink;
+
       await heartbeatSyncExecution(
         syncJob._id?.toString?.() || syncJob.id,
         {
-          conversationCount: processedChats,
-          messageCount: persistedMessages,
+          phase: 'discovering_chats',
+          discoveredChatCount: discoveredThisRun,
+          checkpoint: buildSyncJobCheckpoint({
+            phase: 'discovering_chats',
+            nextChatPageLink,
+            discoveryComplete,
+            pageNumber,
+            discoveredThisRun,
+            processedChats,
+            persistedMessages,
+          }),
+          stats: {
+            graphChatTypeSummary,
+            processedChatTypeSummary,
+          },
         },
         { userLeaseKey, slotLeaseKey, ownerToken },
       );
       lastHeartbeatAt = Date.now();
 
-      for (const chat of chats) {
-        await ensureSyncJobActive(syncJob._id?.toString?.() || syncJob.id);
-        if (processedChats >= chatLimit) {
-          break;
-        }
+      await refreshBackfillStateSnapshot(userId, {
+        nextChatPageLink,
+        discoveryComplete,
+        lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
+        lastDiscoveredAt: new Date(),
+      }, { includeMessageCount: false });
 
-        const chatType = String(chat?.chatType || 'unknown');
-        const members = await listChatMembers(user, chat.id, chatType);
-        const normalizedConversation = normalizeConversation(chat, members);
-        let messages = [];
-
-        try {
-          messages = await listChatMessages(user, chat.id, { top: messagesPerChat });
-        } catch (error) {
-          if (!isRecoverableChatMessageError(error)) {
-            throw error;
-          }
-
-          skippedMessageChats += 1;
-          logger.warn('[TeamsArchiveService] Failed to list chat messages; continuing sync', {
-            userId,
-            syncJobId: syncJob._id?.toString?.() || syncJob.id,
-            chatId: chat.id,
-            chatType,
-            status: error?.status,
-            details: error?.details,
-          });
-        }
-
-        const normalizedMessages = messages.map((message) => ({
-          user: userId,
-          ...normalizeMessage(chat.id, message),
-        }));
-
-        if (normalizedMessages.length > 0) {
-          persistedMessages += await db.bulkUpsertTeamsArchiveMessages(normalizedMessages);
-        }
-
-        const sortedMessages = [...normalizedMessages]
-          .filter((message) => message.sentDateTime instanceof Date)
-          .sort((a, b) => b.sentDateTime.getTime() - a.sentDateTime.getTime());
-
-        const conversationRecord = await db.upsertTeamsArchiveConversation({
-          user: userId,
-          ...normalizedConversation,
-          lastMessageAt: sortedMessages[0]?.sentDateTime,
-          lastSyncedAt: new Date(),
-          messageCount: normalizedMessages.length,
-        });
-
-        syncedConversations.push({
-          id: conversationRecord._id?.toString?.() || conversationRecord.id,
-          graphChatId: conversationRecord.graphChatId,
-          topic: conversationRecord.topic || '',
-          chatType: conversationRecord.chatType || '',
-          messageCount: conversationRecord.messageCount || 0,
-          lastMessageAt: conversationRecord.lastMessageAt,
-        });
-
-        processedChatTypeSummary[chatType] = (processedChatTypeSummary[chatType] || 0) + 1;
-        processedChats += 1;
-
-        const shouldHeartbeat =
-          processedChats % HEARTBEAT_CHAT_INTERVAL === 0 ||
-          Date.now() - lastHeartbeatAt >= HEARTBEAT_MIN_INTERVAL_MS;
-
-        if (shouldHeartbeat) {
-          await heartbeatSyncExecution(
-            syncJob._id?.toString?.() || syncJob.id,
-            {
-              conversationCount: processedChats,
-              messageCount: persistedMessages,
-            },
-            { userLeaseKey, slotLeaseKey, ownerToken },
-          );
-          lastHeartbeatAt = Date.now();
-        }
-      }
-
-      nextLink =
-        response?.['@odata.nextLink'] && processedChats < chatLimit ? response['@odata.nextLink'] : null;
-
-      if (!nextLink) {
+      if (!nextChatPageLink || discoveredThisRun >= chatLimit) {
         break;
       }
     }
+
+    await heartbeatSyncExecution(
+      syncJob._id?.toString?.() || syncJob.id,
+      {
+        phase: 'syncing_messages',
+        checkpoint: buildSyncJobCheckpoint({
+          phase: 'syncing_messages',
+          nextChatPageLink,
+          discoveryComplete,
+          pageNumber,
+          discoveredThisRun,
+          processedChats,
+          persistedMessages,
+        }),
+      },
+      { userLeaseKey, slotLeaseKey, ownerToken },
+    );
+
+    const conversationsToSync = await db.findTeamsArchiveConversations(
+      {
+        user: userId,
+        syncStatus: { $in: ['pending', 'running', 'failed'] },
+      },
+      {
+        limit: chatLimit,
+        sort: { sourceUpdatedAt: -1, sourceLastMessageAt: -1, updatedAt: -1 },
+      },
+    );
+
+    for (const conversation of conversationsToSync) {
+      await ensureSyncJobActive(syncJob._id?.toString?.() || syncJob.id);
+      const conversationId = conversation._id?.toString?.() || conversation.id;
+      const chatType = String(conversation?.chatType || 'unknown');
+      const incrementalRefresh = Boolean(conversation?.syncCompletedAt && !conversation?.syncCursor);
+      const incrementalCutoff = conversation?.lastMessageSyncAt
+        ? new Date(conversation.lastMessageSyncAt)
+        : null;
+      let remainingMessageBudget = messagesPerChat;
+      let nextMessageCursor = conversation?.syncCursor || null;
+      let latestMessageAt = conversation?.lastMessageAt || null;
+      let conversationFailed = false;
+      let reachedIncrementalCutoff = false;
+
+      await db.updateTeamsArchiveConversation(conversationId, {
+        syncStatus: 'running',
+        syncStartedAt: conversation?.syncStartedAt || new Date(),
+        syncError: '',
+      });
+
+      try {
+        while (remainingMessageBudget > 0) {
+          const page = await listChatMessagesPage(user, conversation.graphChatId, {
+            top: Math.min(remainingMessageBudget, 50),
+            nextLink: nextMessageCursor,
+          });
+
+          const normalizedMessages = page.messages.map((message) => ({
+            user: userId,
+            ...normalizeMessage(conversation.graphChatId, message),
+          }));
+
+          if (normalizedMessages.length > 0) {
+            persistedMessages += await db.bulkUpsertTeamsArchiveMessages(normalizedMessages);
+            const sortedMessages = [...normalizedMessages]
+              .filter((message) => message.sentDateTime instanceof Date)
+              .sort((a, b) => b.sentDateTime.getTime() - a.sentDateTime.getTime());
+            latestMessageAt = sortedMessages[0]?.sentDateTime || latestMessageAt;
+
+            if (incrementalCutoff) {
+              const pageHasNewerMessages = normalizedMessages.some(
+                (message) =>
+                  message.sentDateTime instanceof Date &&
+                  message.sentDateTime.getTime() > incrementalCutoff.getTime(),
+              );
+
+              if (!pageHasNewerMessages) {
+                reachedIncrementalCutoff = true;
+              }
+            }
+          }
+
+          nextMessageCursor = page.nextLink || null;
+          remainingMessageBudget -= Math.max(normalizedMessages.length, 1);
+
+          const messageCountForConversation = await db.countTeamsArchiveMessages({
+            user: userId,
+            graphChatId: conversation.graphChatId,
+          });
+
+          await db.updateTeamsArchiveConversation(conversationId, {
+            syncCursor: incrementalRefresh ? undefined : nextMessageCursor || undefined,
+            lastMessageSyncAt: new Date(),
+            lastSyncedAt: new Date(),
+            lastMessageAt: latestMessageAt || conversation?.lastMessageAt,
+            messageCount: messageCountForConversation,
+          });
+
+          if (!nextMessageCursor || reachedIncrementalCutoff) {
+            break;
+          }
+        }
+      } catch (error) {
+        if (!isRecoverableChatMessageError(error)) {
+          throw error;
+        }
+
+        conversationFailed = true;
+        skippedMessageChats += 1;
+        logger.warn('[TeamsArchiveService] Failed to list chat messages; continuing sync', {
+          userId,
+          syncJobId: syncJob._id?.toString?.() || syncJob.id,
+          chatId: conversation.graphChatId,
+          chatType,
+          status: error?.status,
+          details: error?.details,
+        });
+      }
+
+      const messageCountForConversation = await db.countTeamsArchiveMessages({
+        user: userId,
+        graphChatId: conversation.graphChatId,
+      });
+      const isConversationComplete = !conversationFailed && (incrementalRefresh || !nextMessageCursor);
+
+      const conversationRecord = await db.updateTeamsArchiveConversation(conversationId, {
+        syncStatus: conversationFailed ? 'failed' : isConversationComplete ? 'complete' : 'pending',
+        syncCursor:
+          conversationFailed || incrementalRefresh ? undefined : nextMessageCursor || undefined,
+        syncError: conversationFailed ? 'Message sync skipped due to Graph permissions or missing chat data' : '',
+        syncCompletedAt: isConversationComplete ? new Date() : undefined,
+        lastMessageSyncAt: new Date(),
+        lastSyncedAt: new Date(),
+        lastMessageAt: latestMessageAt || conversation?.lastMessageAt,
+        messageCount: messageCountForConversation,
+      });
+
+      if (isConversationComplete) {
+        completedGraphChatIds.add(conversation.graphChatId);
+      }
+
+      syncedConversations.push({
+        id: conversationRecord?._id?.toString?.() || conversationId,
+        graphChatId: conversation.graphChatId,
+        topic: conversationRecord?.topic || conversation.topic || '',
+        chatType: conversationRecord?.chatType || conversation.chatType || '',
+        messageCount: conversationRecord?.messageCount || messageCountForConversation || 0,
+        lastMessageAt: conversationRecord?.lastMessageAt || latestMessageAt || conversation.lastMessageAt,
+        syncStatus:
+          conversationRecord?.syncStatus ||
+          (conversationFailed ? 'failed' : isConversationComplete ? 'complete' : 'pending'),
+      });
+
+      processedChatTypeSummary[chatType] = (processedChatTypeSummary[chatType] || 0) + 1;
+      processedChats += 1;
+
+      const shouldHeartbeat =
+        processedChats % HEARTBEAT_CHAT_INTERVAL === 0 ||
+        Date.now() - lastHeartbeatAt >= HEARTBEAT_MIN_INTERVAL_MS;
+
+      if (shouldHeartbeat) {
+        await heartbeatSyncExecution(
+          syncJob._id?.toString?.() || syncJob.id,
+          {
+            phase: 'syncing_messages',
+            conversationCount: processedChats,
+            messageCount: persistedMessages,
+            processedChatCount: processedChats,
+            skippedChatCount: skippedMessageChats,
+            checkpoint: buildSyncJobCheckpoint({
+              phase: 'syncing_messages',
+              nextChatPageLink,
+              discoveryComplete,
+              pageNumber,
+              discoveredThisRun,
+              processedChats,
+              persistedMessages,
+            }),
+            stats: {
+              graphChatTypeSummary,
+              processedChatTypeSummary,
+            },
+          },
+          { userLeaseKey, slotLeaseKey, ownerToken },
+        );
+        lastHeartbeatAt = Date.now();
+        await refreshBackfillStateSnapshot(userId, {
+          nextChatPageLink,
+          discoveryComplete,
+          lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
+        }, { includeMessageCount: false });
+      }
+    }
+
+    const backfillSnapshot = await refreshBackfillStateSnapshot(userId, {
+      nextChatPageLink,
+      discoveryComplete,
+      lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
+      lastCompletedAt: discoveryComplete ? new Date() : undefined,
+      errorMessage: '',
+    });
 
     logger.info('[TeamsArchiveService] Sync completed', {
       userId,
       syncJobId: syncJob._id?.toString?.() || syncJob.id,
       chatLimit,
       messagesPerChat,
+      discoveredThisRun,
       processedChats,
       persistedMessages,
       skippedMessageChats,
+      discoveryComplete,
+      nextChatPageLinkPresent: Boolean(nextChatPageLink),
       graphChatTypeSummary,
       processedChatTypeSummary,
     });
 
     const updatedJob = await db.updateTeamsArchiveSyncJob(syncJob._id?.toString?.() || syncJob.id, {
       status: 'success',
+      phase: 'complete',
+      checkpoint: buildSyncJobCheckpoint({
+        phase: 'complete',
+        nextChatPageLink,
+        discoveryComplete,
+        pageNumber,
+        discoveredThisRun,
+        processedChats,
+        persistedMessages,
+      }),
+      stats: {
+        graphChatTypeSummary,
+        processedChatTypeSummary,
+        backfillState: {
+          discoveredChatCount: backfillSnapshot?.discoveredChatCount || 0,
+          completedChatCount: backfillSnapshot?.completedChatCount || 0,
+          pendingChatCount: backfillSnapshot?.pendingChatCount || 0,
+          runningChatCount: backfillSnapshot?.runningChatCount || 0,
+          failedChatCount: backfillSnapshot?.failedChatCount || 0,
+          totalMessageCount: backfillSnapshot?.totalMessageCount || 0,
+        },
+      },
+      discoveredChatCount: discoveredThisRun,
+      processedChatCount: processedChats,
+      skippedChatCount: skippedMessageChats,
       conversationCount: processedChats,
       messageCount: persistedMessages,
       completedAt: new Date(),
     });
 
-    let memoryProjection = null;
-    if (typeof projectTeamsArchiveSyncToMemory === 'function') {
-      try {
-        memoryProjection = await projectTeamsArchiveSyncToMemory({
-          userId,
-          tenantId: user?.tenantId,
-          syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
-          graphChatIds: syncedConversations.map((conversation) => conversation.graphChatId),
-        });
-      } catch (projectionError) {
-        logger.error('[TeamsArchiveService] Teams enterprise memory projection failed', {
-          userId,
-          syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
-          error: projectionError?.message || projectionError,
-        });
-
-        memoryProjection = {
-          status: 'failure',
-          errorMessage: projectionError?.message || 'Teams enterprise memory projection failed',
-        };
-      }
-    } else {
-      memoryProjection = {
-        status: 'skipped',
-        reason: 'enterprise_memory_projection_unavailable',
-      };
-    }
+    const memoryProjection =
+      completedGraphChatIds.size > 0
+        ? queueTeamsProjection({
+            userId,
+            tenantId: user?.tenantId,
+            syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
+            graphChatIds: [...completedGraphChatIds],
+          }) || {
+            status: 'skipped',
+            reason: 'enterprise_memory_projection_unavailable',
+          }
+        : {
+            status: 'skipped',
+            reason: 'no_completed_conversations_in_run',
+          };
 
     return {
       syncJob: updatedJob || syncJob,
       mode,
-      conversationCount: syncedConversations.length,
-      messageCount: persistedMessages,
+      conversationCount: processedChats,
+      messageCount: backfillSnapshot?.totalMessageCount || persistedMessages,
+      discovery: {
+        discoveredThisRun,
+        discoveryComplete,
+        nextChatPageLinkPresent: Boolean(nextChatPageLink),
+      },
       skippedMessageChats,
       conversations: syncedConversations,
       memoryProjection,
@@ -1340,9 +1744,15 @@ async function syncUserArchive(user, options = {}) {
 
     await db.updateTeamsArchiveSyncJob(syncJob._id?.toString?.() || syncJob.id, {
       status: 'failure',
+      phase: 'failed',
       errorMessage: error?.message || 'Teams archive sync failed',
       completedAt: new Date(),
     });
+    await refreshBackfillStateSnapshot(userId, {
+      status: 'failed',
+      lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
+      errorMessage: error?.message || 'Teams archive sync failed',
+    }, { includeMessageCount: false });
     throw error;
   } finally {
     const releaseOperations = [releaseSyncLease(userLeaseKey, ownerToken)];

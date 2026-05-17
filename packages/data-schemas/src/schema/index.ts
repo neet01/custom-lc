@@ -26,6 +26,7 @@ export { default as promptGroupSchema } from './promptGroup';
 export { default as roleSchema } from './role';
 export { default as sessionSchema } from './session';
 export { default as shareSchema } from './share';
+export { default as teamsArchiveBackfillStateSchema } from './teamsArchiveBackfillState';
 export { default as teamsArchiveConversationSchema } from './teamsArchiveConversation';
 export { default as teamsArchiveMessageSchema } from './teamsArchiveMessage';
 export { default as teamsArchiveSyncLeaseSchema } from './teamsArchiveSyncLease';

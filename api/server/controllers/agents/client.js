@@ -58,6 +58,7 @@ const BaseClient = require('~/app/clients/BaseClient');
 const { getMCPManager } = require('~/config');
 const {
   compactPayloadToTarget,
+  COMPACTION_MODES,
   isPromptOverflowError,
 } = require('~/server/controllers/agents/compaction');
 const db = require('~/models');
@@ -755,62 +756,111 @@ class AgentClient extends BaseClient {
 
       const toolSet = buildToolSet(this.options.agent);
       const tokenCounter = createTokenCounter(this.getEncoding());
+      const getCompactionSequence = (mode) => {
+        if (mode === 'overflow') {
+          return ['overflow', 'emergency'];
+        }
+        return ['preflight', 'overflow', 'emergency'];
+      };
+
+      const sumFormattedTokens = (indexTokenCountMap = {}) =>
+        Object.values(indexTokenCountMap).reduce(
+          (total, count) => total + (typeof count === 'number' && Number.isFinite(count) ? count : 0),
+          0,
+        );
+
       const materializeRunInputs = (runPayload, seedSummary, mode = 'preflight') => {
         let currentPayload = runPayload;
         let currentSummary = seedSummary;
+        let finalPrepared = null;
+        const attemptedModes = [];
 
-        const compaction = compactPayloadToTarget({
-          payload: currentPayload,
-          maxContextTokens: this.maxContextTokens,
-          encoding: this.getEncoding(),
-          initialSummary: currentSummary,
-          mode,
-        });
-
-        if (compaction.compacted) {
-          currentPayload = compaction.payload;
-          currentSummary = compaction.initialSummary;
-          logger.debug(
-            `[AgentClient] ${mode} compaction applied (${compaction.estimatedTokens} estimated tokens, signature=${compaction.signature})`,
-          );
-        }
-
-        let {
-          messages,
-          indexTokenCountMap,
-          summary: formattedSummary,
-          boundaryTokenAdjustment,
-        } = formatAgentMessages(currentPayload, this.indexTokenCountMap, toolSet);
-        if (boundaryTokenAdjustment) {
-          logger.debug(
-            `[AgentClient] Boundary token adjustment: ${boundaryTokenAdjustment.original} → ${boundaryTokenAdjustment.adjusted} (${boundaryTokenAdjustment.remainingChars}/${boundaryTokenAdjustment.totalChars} chars)`,
-          );
-        }
-        if (indexTokenCountMap && isEnabled(process.env.AGENT_DEBUG_LOGGING)) {
-          const entries = Object.entries(indexTokenCountMap);
-          const perMsg = entries.map(([idx, count]) => {
-            const msg = messages[Number(idx)];
-            const type = msg ? msg._getType() : '?';
-            return `${idx}:${type}=${count}`;
+        for (const currentMode of getCompactionSequence(mode)) {
+          const compaction = compactPayloadToTarget({
+            payload: currentPayload,
+            maxContextTokens: this.maxContextTokens,
+            encoding: this.getEncoding(),
+            initialSummary: currentSummary,
+            mode: currentMode,
           });
-          logger.debug(
-            `[AgentClient] Token map after format: [${perMsg.join(', ')}] (payload=${currentPayload.length}, formatted=${messages.length})`,
-          );
-        }
-        indexTokenCountMap = hydrateMissingIndexTokenCounts({
-          messages,
-          indexTokenCountMap,
-          tokenCounter,
-        });
 
-        return {
-          payload: currentPayload,
-          messages,
-          indexTokenCountMap,
-          summary: currentSummary ?? formattedSummary,
-          compactionSignature: compaction.signature,
-          compactionApplied: compaction.compacted,
-        };
+          attemptedModes.push(compaction.signature);
+
+          if (compaction.compacted) {
+            currentPayload = compaction.payload;
+            currentSummary = compaction.initialSummary;
+            logger.debug(
+              `[AgentClient] ${currentMode} compaction applied (${compaction.estimatedTokens} estimated tokens, signature=${compaction.signature})`,
+            );
+          }
+
+          let {
+            messages,
+            indexTokenCountMap,
+            summary: formattedSummary,
+            boundaryTokenAdjustment,
+          } = formatAgentMessages(currentPayload, this.indexTokenCountMap, toolSet);
+          if (boundaryTokenAdjustment) {
+            logger.debug(
+              `[AgentClient] Boundary token adjustment: ${boundaryTokenAdjustment.original} → ${boundaryTokenAdjustment.adjusted} (${boundaryTokenAdjustment.remainingChars}/${boundaryTokenAdjustment.totalChars} chars)`,
+            );
+          }
+          if (indexTokenCountMap && isEnabled(process.env.AGENT_DEBUG_LOGGING)) {
+            const entries = Object.entries(indexTokenCountMap);
+            const perMsg = entries.map(([idx, count]) => {
+              const msg = messages[Number(idx)];
+              const type = msg ? msg._getType() : '?';
+              return `${idx}:${type}=${count}`;
+            });
+            logger.debug(
+              `[AgentClient] Token map after format: [${perMsg.join(', ')}] (payload=${currentPayload.length}, formatted=${messages.length})`,
+            );
+          }
+          indexTokenCountMap = hydrateMissingIndexTokenCounts({
+            messages,
+            indexTokenCountMap,
+            tokenCounter,
+          });
+
+          const formattedTokenTotal = sumFormattedTokens(indexTokenCountMap);
+          const modeBudget = COMPACTION_MODES[currentMode] || {};
+
+          finalPrepared = {
+            payload: currentPayload,
+            messages,
+            indexTokenCountMap,
+            summary: currentSummary ?? formattedSummary,
+            compactionSignature: compaction.signature,
+            compactionApplied: compaction.compacted,
+            compactionMode: currentMode,
+            formattedTokenTotal,
+            messageCount: messages.length,
+            attemptedModes,
+          };
+
+          logger.debug('[AgentClient] Prompt budget snapshot', {
+            mode: currentMode,
+            formattedMessages: messages.length,
+            formattedTokenTotal,
+            maxFormattedTokens: modeBudget.maxFormattedTokens || null,
+          });
+
+          if (
+            typeof modeBudget.maxFormattedTokens === 'number' &&
+            formattedTokenTotal > modeBudget.maxFormattedTokens &&
+            currentMode !== 'emergency'
+          ) {
+            continue;
+          }
+
+          if (messages.length > 18 && currentMode !== 'emergency') {
+            continue;
+          }
+
+          break;
+        }
+
+        return finalPrepared;
       };
 
       let preparedInputs = materializeRunInputs(payload, null, 'preflight');

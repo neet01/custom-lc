@@ -7,22 +7,43 @@ const PREVIEW_ENTRY_LIMIT = 20;
 
 const COMPACTION_MODES = {
   preflight: {
-    triggerTokenRatio: 0.55,
-    triggerMessageCount: 120,
-    targetTokenRatio: 0.32,
-    minRecentMessages: 8,
-    maxRecentMessages: 20,
-    maxSummaryChars: 3200,
-    retainedMessageCharLimit: 900,
+    triggerTokenRatio: 0.35,
+    absoluteTriggerTokens: 14000,
+    triggerMessageCount: 80,
+    targetTokenRatio: 0.12,
+    targetTailTokenCap: 4500,
+    maxFormattedTokens: 9000,
+    minRecentMessages: 4,
+    maxRecentMessages: 8,
+    maxSummaryChars: 2200,
+    retainedMessageCharLimit: 260,
+    preserveRecentMessagesVerbatim: 2,
   },
   overflow: {
     triggerTokenRatio: 0,
+    absoluteTriggerTokens: 0,
     triggerMessageCount: 0,
-    targetTokenRatio: 0.22,
-    minRecentMessages: 6,
-    maxRecentMessages: 12,
-    maxSummaryChars: 2200,
-    retainedMessageCharLimit: 500,
+    targetTokenRatio: 0.07,
+    targetTailTokenCap: 2200,
+    maxFormattedTokens: 4500,
+    minRecentMessages: 3,
+    maxRecentMessages: 5,
+    maxSummaryChars: 1400,
+    retainedMessageCharLimit: 120,
+    preserveRecentMessagesVerbatim: 1,
+  },
+  emergency: {
+    triggerTokenRatio: 0,
+    absoluteTriggerTokens: 0,
+    triggerMessageCount: 0,
+    targetTokenRatio: 0.04,
+    targetTailTokenCap: 1200,
+    maxFormattedTokens: 2500,
+    minRecentMessages: 2,
+    maxRecentMessages: 3,
+    maxSummaryChars: 900,
+    retainedMessageCharLimit: 80,
+    preserveRecentMessagesVerbatim: 1,
   },
 };
 
@@ -158,20 +179,23 @@ function trimRetainedMessage(message, charLimit) {
       break;
     }
 
+    if (part?.type === ContentTypes.THINK || part?.type === ContentTypes.ERROR) {
+      continue;
+    }
+
     if (part?.type === ContentTypes.TOOL_CALL && part.tool_call) {
-      const trimmedToolCall = {
-        ...part.tool_call,
-        args:
-          typeof part.tool_call.args === 'string'
-            ? truncateText(part.tool_call.args, Math.min(remaining, 180))
-            : part.tool_call.args,
-        output:
-          typeof part.tool_call.output === 'string'
-            ? truncateText(part.tool_call.output, Math.min(remaining, 240))
-            : part.tool_call.output,
-      };
-      trimmedContent.push({ ...part, tool_call: trimmedToolCall });
-      remaining = Math.max(0, remaining - 240);
+      trimmedContent.push({
+        ...part,
+        tool_call: {
+          ...part.tool_call,
+          args: typeof part.tool_call.args === 'string' ? '[trimmed]' : part.tool_call.args,
+          output:
+            typeof part.tool_call.output === 'string'
+              ? truncateText(part.tool_call.output, Math.min(remaining, 60))
+              : part.tool_call.output,
+        },
+      });
+      remaining = Math.max(0, remaining - 60);
       continue;
     }
 
@@ -278,9 +302,14 @@ function compactPayloadToTarget({
     maxContextTokens != null && maxContextTokens > 0
       ? Math.floor(maxContextTokens * modeConfig.triggerTokenRatio)
       : null;
+  const exceededAbsoluteTrigger =
+    typeof modeConfig.absoluteTriggerTokens === 'number' &&
+    modeConfig.absoluteTriggerTokens > 0 &&
+    totalTokens > modeConfig.absoluteTriggerTokens;
 
   if (
     mode === 'preflight' &&
+    !exceededAbsoluteTrigger &&
     triggerTokens != null &&
     totalTokens <= triggerTokens &&
     payload.length <= modeConfig.triggerMessageCount
@@ -298,7 +327,10 @@ function compactPayloadToTarget({
     maxContextTokens != null && maxContextTokens > 0
       ? Math.max(2048, Math.floor(maxContextTokens * modeConfig.targetTokenRatio))
       : 8192;
-  const configuredMode = { ...modeConfig, targetTailTokens };
+  const configuredMode = {
+    ...modeConfig,
+    targetTailTokens: Math.min(targetTailTokens, modeConfig.targetTailTokenCap || targetTailTokens),
+  };
   const retainFrom = chooseRetainedSlice(payload, encoding, configuredMode);
   const olderMessages = payload.slice(0, retainFrom);
   const retainedMessages = payload.slice(retainFrom);
@@ -326,7 +358,8 @@ function compactPayloadToTarget({
   summaryMessage.tokenCount = countFormattedMessageTokens(summaryMessage, encoding);
 
   const trimmedRetainedMessages = retainedMessages.map((message, index) => {
-    const preserveVerbatim = index >= retainedMessages.length - 4;
+    const preserveVerbatim =
+      index >= retainedMessages.length - (modeConfig.preserveRecentMessagesVerbatim || 0);
     if (preserveVerbatim) {
       return message;
     }
@@ -366,6 +399,8 @@ function isPromptOverflowError(error) {
 }
 
 module.exports = {
+  COMPACTION_MODES,
   compactPayloadToTarget,
   isPromptOverflowError,
+  sumPayloadTokens,
 };

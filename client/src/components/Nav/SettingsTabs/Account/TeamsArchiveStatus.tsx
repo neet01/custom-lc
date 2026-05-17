@@ -149,26 +149,10 @@ function getProjectionLabel(status?: string | null) {
   return 'Unavailable';
 }
 
-function getEffectivePhase(backfillStatus?: string | null, syncPhase?: string | null, syncStatus?: string | null) {
-  if (backfillStatus === 'paused') {
-    return 'paused';
-  }
-
-  if (syncStatus === 'running' && syncPhase) {
-    return syncPhase;
-  }
-
-  if (backfillStatus === 'discovering' || backfillStatus === 'syncing') {
-    return backfillStatus;
-  }
-
-  return syncPhase || backfillStatus || 'idle';
-}
-
 export default function TeamsArchiveStatus() {
   const queryClient = useQueryClient();
   const { showToast } = useToastContext();
-  const { data, isLoading, isFetching } = useTeamsArchiveStatusQuery({
+  const { data, isLoading } = useTeamsArchiveStatusQuery({
     refetchInterval: (data) =>
       data?.latestSync?.status === 'running' ||
       data?.backfillState?.status === 'discovering' ||
@@ -193,18 +177,24 @@ export default function TeamsArchiveStatus() {
   const failedChats = backfillState?.failedChatCount ?? 0;
   const totalMessages = backfillState?.totalMessageCount ?? data?.messageCount ?? 0;
   const processedChats = completedChats + failedChats;
+  const hasBackfillBacklog = backfillState?.status === 'paused' && pendingChats > 0;
   const determinateProgress =
     backfillState?.discoveryComplete && discoveredChats > 0
       ? Math.max(2, Math.min(100, Math.round((processedChats / discoveredChats) * 100)))
       : null;
-  const effectivePhase = getEffectivePhase(backfillState?.status, data?.latestSync?.phase, syncStatus);
-  const phaseLabel = formatPhase(effectivePhase);
-  const statusLabel = isSyncing ? 'Syncing' : getStatusLabel(backfillState?.status === 'paused' ? 'paused' : syncStatus);
+  const activePhase = formatPhase(
+    data?.latestSync?.phase ||
+      (isBackfillActive ? backfillState?.status : undefined) ||
+      'idle',
+  );
+  const latestPhaseValue = data?.latestSync?.phase || backfillState?.status;
+  const phaseLabel = formatPhase(latestPhaseValue);
+  const statusLabel = isSyncing ? 'Syncing' : getStatusLabel(syncStatus);
   const statusDetail =
     isSyncing
-      ? `${phaseLabel}. ${completedChats.toLocaleString()} complete, ${runningChats.toLocaleString()} running, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
-      : backfillState?.status === 'paused'
-        ? `${phaseLabel}. ${completedChats.toLocaleString()} complete, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}. Start another sync run to continue the backfill.`
+      ? `${activePhase}. ${completedChats.toLocaleString()} complete, ${runningChats.toLocaleString()} running, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
+      : hasBackfillBacklog
+        ? `Latest run completed. ${pendingChats.toLocaleString()} chats remain pending for the next sync run${failedChats > 0 ? `, and ${failedChats.toLocaleString()} failed` : ''}.`
       : backfillState?.errorMessage ||
         data?.latestSync?.errorMessage ||
         'Background sync status for Teams chat history.';
@@ -293,13 +283,13 @@ export default function TeamsArchiveStatus() {
               <div>
                 <div className="text-sm font-semibold text-text-primary">Indexing archive</div>
                 <div className="mt-1 text-xs text-text-secondary">
-                  {phaseLabel}. {completedChats.toLocaleString()} complete,{' '}
+                  {activePhase}. {completedChats.toLocaleString()} complete,{' '}
                   {runningChats.toLocaleString()} running, {pendingChats.toLocaleString()} pending
                   {failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.
                 </div>
               </div>
               <div className="shrink-0 text-right text-xs font-medium text-text-secondary">
-                <div>{phaseLabel}</div>
+                <div>{activePhase}</div>
                 <div className="mt-1">
                   {data?.activeSyncs ?? 0}/{data?.maxConcurrentSyncs ?? 0} active slots
                 </div>
@@ -347,12 +337,21 @@ export default function TeamsArchiveStatus() {
             <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
               Progress
             </div>
-            <div className="mt-2 text-sm font-semibold text-text-primary">
-              {completedChats.toLocaleString()} complete
-            </div>
+              <div className="mt-2 text-sm font-semibold text-text-primary">
+              {isSyncing
+                ? `${completedChats.toLocaleString()} complete`
+                : hasBackfillBacklog
+                  ? `${pendingChats.toLocaleString()} remaining`
+                  : 'No pending chats'}
+              </div>
             <div className="mt-1 text-xs text-text-secondary">
-              {runningChats.toLocaleString()} running, {pendingChats.toLocaleString()} pending
-              {failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}
+              {isSyncing
+                ? `${runningChats.toLocaleString()} running, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}`
+                : hasBackfillBacklog
+                  ? `Start another sync run to continue the backfill${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
+                  : failedChats > 0
+                    ? `${failedChats.toLocaleString()} failed chats need review`
+                    : 'Archive backlog is clear.'}
             </div>
           </div>
         </div>
@@ -371,7 +370,7 @@ export default function TeamsArchiveStatus() {
               <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
                 Latest Phase
               </div>
-              <div className={`mt-1 text-sm font-semibold ${getPhaseTone(effectivePhase)}`}>
+              <div className={`mt-1 text-sm font-semibold ${getPhaseTone(latestPhaseValue)}`}>
                 {phaseLabel}
               </div>
             </div>
@@ -403,12 +402,6 @@ export default function TeamsArchiveStatus() {
               {data?.latestProjection?.errorMessage ? (
                 <span className="text-rose-700 dark:text-rose-300">
                   {data.latestProjection.errorMessage}
-                </span>
-              ) : null}
-              {isFetching && !isLoading ? (
-                <span className="inline-flex items-center text-text-secondary">
-                  <Spinner className="mr-1 h-3.5 w-3.5" />
-                  Refreshing status
                 </span>
               ) : null}
             </div>

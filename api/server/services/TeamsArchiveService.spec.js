@@ -1,15 +1,23 @@
-jest.mock('@librechat/api', () => ({
-  isEnabled: (value) => value === true || value === 'true' || value === '1',
-}));
+jest.mock(
+  '@librechat/api',
+  () => ({
+    isEnabled: (value) => value === true || value === 'true' || value === '1',
+  }),
+  { virtual: true },
+);
 
-jest.mock('@librechat/data-schemas', () => ({
-  logger: {
-    warn: jest.fn(),
-    info: jest.fn(),
-    error: jest.fn(),
-  },
-  runAsSystem: async (fn) => fn(),
-}));
+jest.mock(
+  '@librechat/data-schemas',
+  () => ({
+    logger: {
+      warn: jest.fn(),
+      info: jest.fn(),
+      error: jest.fn(),
+    },
+    runAsSystem: async (fn) => fn(),
+  }),
+  { virtual: true },
+);
 
 jest.mock('~/server/services/GraphTokenService', () => ({
   getGraphApiToken: jest.fn(),

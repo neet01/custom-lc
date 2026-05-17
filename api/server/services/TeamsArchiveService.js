@@ -2112,7 +2112,7 @@ async function syncUserArchive(user, options = {}) {
 async function listConversations(user, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
-  const limit = clampInteger(options.limit, 20, { max: 50 });
+  const limit = clampInteger(options.limit, 3, { max: 5 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const { normalizedChatType, topic, daysBack, participantClauses, filter: conversationFilter } =
     buildConversationLookupFilter(userId, options);
@@ -2142,7 +2142,7 @@ async function getConversationDossier(user, options = {}) {
   const chatId = String(options.chatId || '').trim();
   const query = String(options.query || options.topic || '').trim();
   const queryRegex = query ? buildSearchRegex(query) : null;
-  const previewLimit = clampInteger(options.limit, 8, { min: 1, max: 20 });
+  const previewLimit = clampInteger(options.limit, 4, { min: 1, max: 6 });
   const scopedDaysBack = options.daysBack
     ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
     : undefined;
@@ -2330,7 +2330,7 @@ async function listConversationMessages(user, chatId, options = {}) {
     throw new TeamsArchiveServiceError('Chat id is required', 400);
   }
 
-  const limit = clampInteger(options.limit, 20, { max: 50 });
+  const limit = clampInteger(options.limit, 6, { max: 8 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
 
@@ -2390,8 +2390,8 @@ async function getMessagesWindow(user, options = {}) {
     };
   }
 
-  const before = clampInteger(options.before, 5, { min: 0, max: 50 });
-  const after = clampInteger(options.after, 5, { min: 0, max: 50 });
+  const before = clampInteger(options.before, 3, { min: 0, max: 10 });
+  const after = clampInteger(options.after, 3, { min: 0, max: 10 });
   const fallbackLimit = clampInteger(options.limit, before + after + 1, { min: 1, max: 100 });
   const query = String(options.query || '').trim();
   const queryRegex = query ? buildSearchRegex(query) : null;
@@ -2503,8 +2503,8 @@ async function searchMessages(user, options = {}) {
     throw new TeamsArchiveServiceError('Search query is required', 400);
   }
 
-  const limit = clampInteger(options.limit, Math.min(getTeamsArchiveConfig().defaultSearchLimit, 8), {
-    max: 12,
+  const limit = clampInteger(options.limit, Math.min(getTeamsArchiveConfig().defaultSearchLimit, 4), {
+    max: 6,
   });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const chatId = options.chatId ? String(options.chatId) : undefined;
@@ -2595,7 +2595,7 @@ async function recentMessages(user, options = {}) {
   }
 
   const userId = user?.id || user?._id?.toString();
-  const limit = clampInteger(options.limit, 8, { max: 12 });
+  const limit = clampInteger(options.limit, 4, { max: 6 });
   const daysBack = clampInteger(options.daysBack, 14, { min: 1, max: 3650 });
   const query = String(options.query || '').trim();
   const sentAfter = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
@@ -2677,8 +2677,8 @@ async function advancedSearchMessages(user, options = {}) {
   const senderScope = String(options.senderScope || 'any').trim();
   const chatType = String(options.chatType || 'any').trim();
   const sortBy = String(options.sortBy || 'recent').trim();
-  const limit = clampInteger(options.limit, Math.min(getTeamsArchiveConfig().defaultSearchLimit, 8), {
-    max: 12,
+  const limit = clampInteger(options.limit, Math.min(getTeamsArchiveConfig().defaultSearchLimit, 4), {
+    max: 6,
   });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const daysBack = options.daysBack
@@ -2807,7 +2807,7 @@ async function summarizeConversation(user, options = {}) {
   const daysBack = options.daysBack
     ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
     : undefined;
-  const highlightLimit = clampInteger(options.limit, 6, { min: 1, max: 12 });
+  const highlightLimit = clampInteger(options.limit, 4, { min: 1, max: 6 });
 
   const [conversations, messages] = await Promise.all([
     db.findTeamsArchiveConversations({ user: userId, graphChatId: resolvedGraphChatId }, { limit: 1 }),

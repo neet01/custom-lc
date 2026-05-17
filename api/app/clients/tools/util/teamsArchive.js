@@ -122,10 +122,74 @@ const teamsArchiveJsonSchema = {
 };
 
 function formatJsonResult(result) {
-  return JSON.stringify(result, null, 2);
+  return JSON.stringify(result);
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
+      .join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function buildActionSignature(action, payload) {
+  return `${action}:${stableStringify(payload)}`;
+}
+
+function clampActionLimit(action, limit) {
+  const parsed = Number(limit);
+  if (!Number.isFinite(parsed)) {
+    switch (action) {
+      case 'list_conversations':
+        return 3;
+      case 'conversation_dossier':
+        return 4;
+      case 'get_messages':
+      case 'get_messages_window':
+      case 'summarize_conversation':
+        return 6;
+      case 'search_messages':
+      case 'advanced_search_messages':
+      case 'recent_messages':
+        return 4;
+      default:
+        return undefined;
+    }
+  }
+
+  const normalized = Math.max(1, Math.trunc(parsed));
+  switch (action) {
+    case 'list_conversations':
+      return Math.min(normalized, 5);
+    case 'conversation_dossier':
+      return Math.min(normalized, 6);
+    case 'get_messages':
+    case 'get_messages_window':
+    case 'summarize_conversation':
+      return Math.min(normalized, 8);
+    case 'search_messages':
+    case 'advanced_search_messages':
+    case 'recent_messages':
+      return Math.min(normalized, 6);
+    default:
+      return normalized;
+  }
 }
 
 function createTeamsArchiveTool({ req }) {
+  const actionCounts = new Map();
+  const duplicateActionCounts = new Map();
+
   return tool(
     async ({
       action,
@@ -151,12 +215,53 @@ function createTeamsArchiveTool({ req }) {
         throw new Error('Authenticated user context is required for Teams archive access');
       }
 
+      const resolvedLimit = clampActionLimit(action, limit);
+      const actionPayload = {
+        action,
+        query,
+        topic,
+        chatId,
+        limit: resolvedLimit,
+        offset,
+        chatLimit,
+        messagesPerChat,
+        daysBack,
+        senderScope,
+        chatType,
+        participants,
+        sortBy,
+        aroundMessageId,
+        before,
+        after,
+      };
+      const actionSignature = buildActionSignature(action, actionPayload);
+      actionCounts.set(action, (actionCounts.get(action) || 0) + 1);
+      const duplicateCount = duplicateActionCounts.get(actionSignature) || 0;
+
+      if (duplicateCount > 0) {
+        logger.warn('[teams_archive_search] Suppressing duplicate tool call in same run', {
+          userId: user?.id || user?._id?.toString?.(),
+          action,
+          duplicateCount: duplicateCount + 1,
+        });
+        return formatJsonResult({
+          retrievalMode: 'duplicate_call_suppressed',
+          action,
+          guidance:
+            'This exact Teams archive tool request was already executed in the current run. Reuse the earlier result instead of repeating the same call.',
+        });
+      }
+
+      duplicateActionCounts.set(actionSignature, duplicateCount + 1);
+
       logger.debug('[teams_archive_search] Executing action', {
         userId: user?.id || user?._id?.toString?.(),
         action,
         chatId,
         topic,
         query,
+        limit: resolvedLimit,
+        invocationCount: actionCounts.get(action),
       });
 
       if (action === 'status') {
@@ -178,7 +283,7 @@ function createTeamsArchiveTool({ req }) {
           await TeamsArchiveService.searchMessages(user, {
             query,
             chatId,
-            limit,
+            limit: resolvedLimit,
             offset,
           }),
         );
@@ -189,7 +294,7 @@ function createTeamsArchiveTool({ req }) {
           await TeamsArchiveService.advancedSearchMessages(user, {
             query,
             topic,
-            limit,
+            limit: resolvedLimit,
             offset,
             daysBack,
             senderScope,
@@ -204,7 +309,7 @@ function createTeamsArchiveTool({ req }) {
         return formatJsonResult(
           await TeamsArchiveService.recentMessages(user, {
             query,
-            limit,
+            limit: resolvedLimit,
             daysBack,
           }),
         );
@@ -215,7 +320,7 @@ function createTeamsArchiveTool({ req }) {
           await TeamsArchiveService.listConversations(user, {
             query,
             topic,
-            limit,
+            limit: resolvedLimit,
             offset,
             daysBack,
             chatType,
@@ -230,7 +335,7 @@ function createTeamsArchiveTool({ req }) {
             chatId,
             query,
             topic,
-            limit,
+            limit: resolvedLimit,
             daysBack,
             chatType,
             participants,
@@ -241,7 +346,7 @@ function createTeamsArchiveTool({ req }) {
       if (action === 'get_messages') {
         return formatJsonResult(
           await TeamsArchiveService.listConversationMessages(user, chatId, {
-            limit,
+            limit: resolvedLimit,
             offset,
           }),
         );
@@ -255,7 +360,7 @@ function createTeamsArchiveTool({ req }) {
             query,
             before,
             after,
-            limit,
+            limit: resolvedLimit,
           }),
         );
       }
@@ -267,7 +372,7 @@ function createTeamsArchiveTool({ req }) {
             query,
             topic,
             daysBack,
-            limit,
+            limit: resolvedLimit,
           }),
         );
       }

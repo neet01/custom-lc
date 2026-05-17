@@ -222,41 +222,112 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
   properties: {
     action: {
       type: 'string',
-      enum: ['status', 'sync_archive', 'search_messages', 'list_conversations', 'get_messages'],
+      enum: [
+        'status',
+        'sync_archive',
+        'search_messages',
+        'advanced_search_messages',
+        'recent_messages',
+        'list_conversations',
+        'conversation_dossier',
+        'get_messages',
+        'get_messages_window',
+        'summarize_conversation',
+      ],
       description:
-        'Teams archive action. Use sync_archive sparingly to ingest historical chats, search_messages to query the archive, list_conversations to inspect archived chats, get_messages to read one archived chat, or status to check readiness.',
+        'Teams archive action. Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages for quick preview retrieval, advanced_search_messages for structured topic discovery across sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, conversation_dossier for exhaustive archive-backed retrieval of one resolved chat, get_messages for compact thread previews, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
     },
     query: {
       type: 'string',
-      description: 'For search_messages: natural-language or keyword query for archived Teams chats.',
+      description:
+        'For search_messages or recent_messages: a short search phrase for preview retrieval. For list_conversations or conversation_dossier this may be used as a conversation topic hint. Do not pass the full user question.',
+    },
+    topic: {
+      type: 'string',
+      description:
+        'For advanced_search_messages: the core topic or subject to search for. For list_conversations, conversation_dossier, or summarize_conversation this can also be used as a conversation topic hint. Pass the distilled subject, not the full user question.',
     },
     chatId: {
       type: 'string',
-      description: 'For get_messages or search_messages: archived Teams chat id to target.',
+      description:
+        'For conversation_dossier, get_messages, get_messages_window, summarize_conversation, or search_messages: the archived Teams chat id to scope the request to.',
     },
     limit: {
       type: 'integer',
       minimum: 1,
       maximum: 100,
-      description: 'Optional result limit for search and list operations.',
+      description:
+        'Optional result limit for searches, conversation lists, and message retrieval. Keep this small unless the user explicitly asks for exhaustive output.',
     },
     offset: {
       type: 'integer',
       minimum: 0,
       maximum: 100000,
-      description: 'Optional pagination offset for search and list operations.',
+      description: 'Optional pagination offset for list and search operations.',
     },
     chatLimit: {
       type: 'integer',
       minimum: 1,
-      maximum: 250,
-      description: 'For sync_archive: maximum number of chats to ingest in this run.',
+      maximum: 10000,
+      description: 'For sync_archive: maximum number of Teams chats to ingest during this sync request.',
     },
     messagesPerChat: {
       type: 'integer',
       minimum: 1,
-      maximum: 1000,
-      description: 'For sync_archive: maximum messages to ingest per chat in this run.',
+      maximum: 5000,
+      description:
+        'For sync_archive: maximum number of messages to ingest per Teams chat during this sync request.',
+    },
+    daysBack: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 3650,
+      description:
+        'For recent_messages or advanced_search_messages: how many days back to search.',
+    },
+    senderScope: {
+      type: 'string',
+      enum: ['any', 'me', 'others'],
+      description:
+        'For advanced_search_messages: whether to search messages from anyone, only the signed-in user, or everyone except the signed-in user.',
+    },
+    chatType: {
+      type: 'string',
+      enum: ['any', 'oneOnOne', 'group', 'meeting'],
+      description:
+        'For advanced_search_messages, list_conversations, or conversation_dossier: optionally restrict to one-on-one chats, group chats, or meeting chats.',
+    },
+    participants: {
+      type: 'array',
+      items: { type: 'string' },
+      maxItems: 10,
+      description:
+        'For advanced_search_messages, list_conversations, or conversation_dossier: optional participant names or emails to narrow the search to specific chats.',
+    },
+    sortBy: {
+      type: 'string',
+      enum: ['recent', 'oldest'],
+      description:
+        'For advanced_search_messages: whether to return the newest matches first or the oldest matches first.',
+    },
+    aroundMessageId: {
+      type: 'string',
+      description:
+        'For get_messages_window: optional archived message id or Teams graph message id to center the window around.',
+    },
+    before: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 50,
+      description:
+        'For get_messages_window: how many messages to return before the anchor message. Prefer small windows.',
+    },
+    after: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 50,
+      description:
+        'For get_messages_window: how many messages to return after the anchor message. Prefer small windows.',
     },
   },
   required: ['action'],

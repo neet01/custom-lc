@@ -1341,6 +1341,30 @@ function queueTeamsProjection(params) {
   };
 }
 
+function normalizeProjectionDiagnostics(stats = {}) {
+  const diagnostics = stats?.projectionDiagnostics || {};
+  const totalMessagesLoaded = Number(diagnostics.totalMessagesLoaded || 0);
+  const totalChunkableMessages = Number(diagnostics.totalChunkableMessages || 0);
+  const totalSkippedEmptyTextMessages = Number(diagnostics.totalSkippedEmptyTextMessages || 0);
+
+  return {
+    missingConversationCount: Number(diagnostics.missingConversationCount || 0),
+    zeroMessageConversationCount: Number(diagnostics.zeroMessageConversationCount || 0),
+    zeroChunkConversationCount: Number(diagnostics.zeroChunkConversationCount || 0),
+    truncatedConversationCount: Number(diagnostics.truncatedConversationCount || 0),
+    totalMessagesLoaded,
+    totalChunkableMessages,
+    totalSkippedEmptyTextMessages,
+    projectionMessageFetchLimit: Number(diagnostics.projectionMessageFetchLimit || 0),
+    chunkableMessageRate:
+      totalMessagesLoaded > 0 ? Number(((totalChunkableMessages / totalMessagesLoaded) * 100).toFixed(1)) : 0,
+    skippedEmptyTextRate:
+      totalMessagesLoaded > 0
+        ? Number(((totalSkippedEmptyTextMessages / totalMessagesLoaded) * 100).toFixed(1))
+        : 0,
+  };
+}
+
 async function getStatus(user) {
   const config = getTeamsArchiveConfig();
   const userId = user?.id || user?._id?.toString();
@@ -1461,6 +1485,7 @@ async function getStatus(user) {
           completedAt: latestProjection.completedAt,
           errorMessage: latestProjection.errorMessage,
           stats: latestProjection.stats || {},
+          projectionDiagnostics: normalizeProjectionDiagnostics(latestProjection.stats || {}),
         }
       : null,
     projectionCoverage: {

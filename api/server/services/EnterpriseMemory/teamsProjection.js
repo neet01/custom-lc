@@ -1,6 +1,8 @@
 const { logger } = require('@librechat/data-schemas');
 const db = require('~/models');
 
+const PROJECTION_MESSAGE_FETCH_LIMIT = 5000;
+
 function uniqueStrings(values = []) {
   const seen = new Set();
   const results = [];
@@ -183,10 +185,12 @@ async function projectTeamsConversationToMemory({
   });
 
   const chunks = [];
+  let skippedEmptyTextMessages = 0;
 
   for (const [index, message] of sortedMessages.entries()) {
     const text = String(message?.bodyText || message?.summary || message?.subject || '').trim();
     if (!text) {
+      skippedEmptyTextMessages += 1;
       continue;
     }
 
@@ -254,6 +258,10 @@ async function projectTeamsConversationToMemory({
     entityCount: 1 + participantEntityMap.size,
     relationshipCount: relationships.length,
     chunkCount: chunks.length,
+    totalMessages: sortedMessages.length,
+    chunkableMessageCount: chunks.length,
+    skippedEmptyTextMessages,
+    participantEntityCount: participantEntityMap.size,
   };
 }
 
@@ -289,17 +297,34 @@ async function projectTeamsArchiveSyncToMemory({
     let entityCount = 0;
     let relationshipCount = 0;
     let chunkCount = 0;
+    let missingConversationCount = 0;
+    let zeroMessageConversationCount = 0;
+    let zeroChunkConversationCount = 0;
+    let truncatedConversationCount = 0;
+    let totalMessagesLoaded = 0;
+    let totalChunkableMessages = 0;
+    let totalSkippedEmptyTextMessages = 0;
 
     for (const graphChatId of graphChatIds) {
       const [conversation] = await db.findTeamsArchiveConversations({ user: userId, graphChatId }, { limit: 1 });
       if (!conversation) {
+        missingConversationCount += 1;
+        logger.warn('[EnterpriseMemory] Teams projection skipped missing archived conversation', {
+          userId,
+          syncJobId,
+          graphChatId,
+        });
         continue;
       }
 
       const messages = await db.findTeamsArchiveMessages(
         { user: userId, graphChatId },
-        { limit: 5000, sort: { sentDateTime: 1, createdAt: 1 } },
+        { limit: PROJECTION_MESSAGE_FETCH_LIMIT, sort: { sentDateTime: 1, createdAt: 1 } },
       );
+      const archivedMessageCount = Number(conversation?.messageCount || 0);
+      const truncatedByFetchCap =
+        archivedMessageCount > messages.length ||
+        messages.length >= PROJECTION_MESSAGE_FETCH_LIMIT;
 
       const result = await projectTeamsConversationToMemory({
         userId,
@@ -313,7 +338,54 @@ async function projectTeamsArchiveSyncToMemory({
       entityCount += result.entityCount;
       relationshipCount += result.relationshipCount;
       chunkCount += result.chunkCount;
+      totalMessagesLoaded += result.totalMessages || 0;
+      totalChunkableMessages += result.chunkableMessageCount || 0;
+      totalSkippedEmptyTextMessages += result.skippedEmptyTextMessages || 0;
+
+      if ((result.totalMessages || 0) === 0) {
+        zeroMessageConversationCount += 1;
+      }
+
+      if ((result.chunkCount || 0) === 0) {
+        zeroChunkConversationCount += 1;
+        logger.info('[EnterpriseMemory] Teams projection produced zero searchable chunks for conversation', {
+          userId,
+          syncJobId,
+          graphChatId,
+          chatType: conversation?.chatType || '',
+          topic: conversation?.topic || '',
+          archivedMessageCount,
+          loadedMessageCount: result.totalMessages || 0,
+          skippedEmptyTextMessages: result.skippedEmptyTextMessages || 0,
+          participantCount: Array.isArray(conversation?.participants)
+            ? conversation.participants.length
+            : 0,
+        });
+      }
+
+      if (truncatedByFetchCap) {
+        truncatedConversationCount += 1;
+        logger.warn('[EnterpriseMemory] Teams projection truncated conversation by fetch cap', {
+          userId,
+          syncJobId,
+          graphChatId,
+          archivedMessageCount,
+          loadedMessageCount: result.totalMessages || 0,
+          projectionMessageFetchLimit: PROJECTION_MESSAGE_FETCH_LIMIT,
+        });
+      }
     }
+
+    const projectionDiagnostics = {
+      missingConversationCount,
+      zeroMessageConversationCount,
+      zeroChunkConversationCount,
+      truncatedConversationCount,
+      totalMessagesLoaded,
+      totalChunkableMessages,
+      totalSkippedEmptyTextMessages,
+      projectionMessageFetchLimit: PROJECTION_MESSAGE_FETCH_LIMIT,
+    };
 
     const updatedJob = await db.updateEnterpriseMemoryJob(
       projectionJob._id?.toString?.() || projectionJob.id,
@@ -327,9 +399,21 @@ async function projectTeamsArchiveSyncToMemory({
           entityCount,
           relationshipCount,
           chunkCount,
+          projectionDiagnostics,
         },
       },
     );
+
+    logger.info('[EnterpriseMemory] Teams projection completed', {
+      userId,
+      syncJobId,
+      requestedConversationCount: graphChatIds.length,
+      projectedConversationCount,
+      entityCount,
+      relationshipCount,
+      chunkCount,
+      projectionDiagnostics,
+    });
 
     return {
       status: 'success',
@@ -338,6 +422,7 @@ async function projectTeamsArchiveSyncToMemory({
       entityCount,
       relationshipCount,
       chunkCount,
+      projectionDiagnostics,
     };
   } catch (error) {
     await db.updateEnterpriseMemoryJob(projectionJob._id?.toString?.() || projectionJob.id, {

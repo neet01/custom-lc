@@ -186,6 +186,7 @@ export default function TeamsArchiveStatus() {
   const failedChats = backfillState?.failedChatCount ?? 0;
   const totalMessages = backfillState?.totalMessageCount ?? data?.messageCount ?? 0;
   const projectionCoverage = data?.projectionCoverage;
+  const projectionDiagnostics = data?.latestProjection?.projectionDiagnostics;
   const processedChats = completedChats + failedChats;
   const hasBackfillBacklog = backfillState?.status === 'paused' && pendingChats > 0;
   const determinateProgress =
@@ -510,6 +511,17 @@ export default function TeamsArchiveStatus() {
                   {projectionCoverage.searchableConversationCount <
                   projectionCoverage.indexedConversationCount
                     ? ` • ${projectionCoverage.searchableConversationCount.toLocaleString()} with searchable text chunks`
+                    : ''}
+                </div>
+              ) : null}
+              {projectionDiagnostics ? (
+                <div className="mt-1 text-[11px] text-text-secondary">
+                  {projectionDiagnostics.zeroChunkConversationCount.toLocaleString()} zero-chunk chats
+                  {projectionDiagnostics.truncatedConversationCount > 0
+                    ? ` • ${projectionDiagnostics.truncatedConversationCount.toLocaleString()} truncated by fetch cap`
+                    : ''}
+                  {projectionDiagnostics.totalSkippedEmptyTextMessages > 0
+                    ? ` • ${projectionDiagnostics.totalSkippedEmptyTextMessages.toLocaleString()} empty-text messages skipped`
                     : ''}
                 </div>
               ) : null}

@@ -121,6 +121,16 @@ describe('TeamsArchiveService', () => {
       stats: {
         projectedConversationCount: 780,
         chunkCount: 1122,
+        projectionDiagnostics: {
+          missingConversationCount: 0,
+          zeroMessageConversationCount: 150,
+          zeroChunkConversationCount: 200,
+          truncatedConversationCount: 4,
+          totalMessagesLoaded: 58000,
+          totalChunkableMessages: 54120,
+          totalSkippedEmptyTextMessages: 3880,
+          projectionMessageFetchLimit: 5000,
+        },
       },
     });
     db.getTeamsArchiveBackfillState.mockResolvedValue({
@@ -174,6 +184,18 @@ describe('TeamsArchiveService', () => {
       stats: {
         projectedConversationCount: 780,
         chunkCount: 1122,
+      },
+      projectionDiagnostics: {
+        missingConversationCount: 0,
+        zeroMessageConversationCount: 150,
+        zeroChunkConversationCount: 200,
+        truncatedConversationCount: 4,
+        totalMessagesLoaded: 58000,
+        totalChunkableMessages: 54120,
+        totalSkippedEmptyTextMessages: 3880,
+        projectionMessageFetchLimit: 5000,
+        chunkableMessageRate: 93.3,
+        skippedEmptyTextRate: 6.7,
       },
     });
   });

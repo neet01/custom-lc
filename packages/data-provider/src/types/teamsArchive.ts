@@ -45,6 +45,18 @@ export type TeamsArchiveLatestProjection = {
   completedAt?: string;
   errorMessage?: string;
   stats?: Record<string, unknown>;
+  projectionDiagnostics?: {
+    missingConversationCount: number;
+    zeroMessageConversationCount: number;
+    zeroChunkConversationCount: number;
+    truncatedConversationCount: number;
+    totalMessagesLoaded: number;
+    totalChunkableMessages: number;
+    totalSkippedEmptyTextMessages: number;
+    projectionMessageFetchLimit: number;
+    chunkableMessageRate: number;
+    skippedEmptyTextRate: number;
+  };
 };
 
 export type TeamsArchiveProjectionCoverage = {

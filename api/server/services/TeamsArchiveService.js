@@ -1823,6 +1823,13 @@ async function syncUserArchive(user, options = {}) {
     let lastHeartbeatAt = Date.now();
     const graphChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
     const processedChatTypeSummary = { oneOnOne: 0, group: 0, meeting: 0, unknown: 0 };
+    const discoveryDecisionSummary = {
+      noExistingConversation: 0,
+      resumableCursor: 0,
+      incompleteSyncStatus: 0,
+      sourceUpdated: 0,
+      alreadyComplete: 0,
+    };
     const completedGraphChatIds = new Set();
     const memberLookupController = createMemberLookupController(config);
 
@@ -1881,11 +1888,21 @@ async function syncUserArchive(user, options = {}) {
         const lastMessageSyncAt = existingConversation?.lastMessageSyncAt || null;
         const sourceUpdatedMs = sourceUpdatedAt?.getTime?.() ?? 0;
         const lastMessageSyncMs = lastMessageSyncAt ? new Date(lastMessageSyncAt).getTime() : 0;
-        const needsSync =
-          !existingConversation ||
-          existingConversation.syncStatus !== 'complete' ||
-          Boolean(existingConversation.syncCursor) ||
-          (sourceUpdatedMs > 0 && sourceUpdatedMs > lastMessageSyncMs);
+        let syncDecision = 'alreadyComplete';
+
+        if (!existingConversation) {
+          syncDecision = 'noExistingConversation';
+        } else if (Boolean(existingConversation.syncCursor)) {
+          syncDecision = 'resumableCursor';
+        } else if (existingConversation.syncStatus !== 'complete') {
+          syncDecision = 'incompleteSyncStatus';
+        } else if (sourceUpdatedMs > 0 && sourceUpdatedMs > lastMessageSyncMs) {
+          syncDecision = 'sourceUpdated';
+        }
+
+        const needsSync = syncDecision !== 'alreadyComplete';
+        discoveryDecisionSummary[syncDecision] =
+          (discoveryDecisionSummary[syncDecision] || 0) + 1;
 
         await db.upsertTeamsArchiveConversation({
           user: userId,
@@ -2154,6 +2171,7 @@ async function syncUserArchive(user, options = {}) {
       discoveryComplete,
       nextChatPageLinkPresent: Boolean(nextChatPageLink),
       graphChatTypeSummary,
+      discoveryDecisionSummary,
       processedChatTypeSummary,
       memberLookup: memberLookupController.stats,
     });
@@ -2172,6 +2190,7 @@ async function syncUserArchive(user, options = {}) {
       }),
       stats: {
         graphChatTypeSummary,
+        discoveryDecisionSummary,
         processedChatTypeSummary,
         memberLookup: memberLookupController.stats,
         backfillState: {

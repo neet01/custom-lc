@@ -236,7 +236,7 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
         'summarize_conversation',
       ],
       description:
-        'Teams archive action. Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages for quick preview retrieval, advanced_search_messages for structured topic discovery across sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, conversation_dossier for exhaustive archive-backed retrieval of one resolved chat, get_messages for compact thread previews, get_message_body to retrieve the full archived text for one exact message, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
+        'Teams archive action. Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages for broad lexical archive discovery and quick preview retrieval, advanced_search_messages for recall-safe union retrieval across enterprise memory and the raw Teams archive with sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, conversation_dossier for exhaustive archive-backed retrieval of one resolved chat, get_messages for compact thread previews, get_message_body to retrieve the full archived text for one exact message, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
     },
     query: {
       type: 'string',
@@ -897,7 +897,7 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   teams_archive_search: {
     name: 'teams_archive_search',
     description:
-      'Search and retrieve archived Microsoft Teams chats that were previously ingested into Cortex. Useful for querying historical Teams conversations after Teams becomes read-only.',
+      'Search and retrieve archived Microsoft Teams chats that were previously ingested into Cortex. Use search_messages for safer broad lexical discovery, advanced_search_messages for recall-safe union retrieval, conversation_dossier for completeness-sensitive conversation analysis, and get_message_body when previews are insufficient.',
     schema: teamsArchiveSchema,
     toolType: 'builtin',
   },

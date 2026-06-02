@@ -36,6 +36,10 @@ export interface ITeamsArchiveMessage extends Document {
   lastModifiedDateTime?: Date;
   deletedDateTime?: Date;
   etag?: string;
+  normalizedTextLength?: number;
+  isSystemLikeMessage?: boolean;
+  isChunkable?: boolean;
+  skipChunkReason?: string;
   tenantId?: string;
   createdAt?: Date;
   updatedAt?: Date;
@@ -157,6 +161,26 @@ const teamsArchiveMessageSchema = new Schema<ITeamsArchiveMessage>(
     etag: {
       type: String,
       maxlength: 256,
+    },
+    normalizedTextLength: {
+      type: Number,
+      default: 0,
+      index: true,
+    },
+    isSystemLikeMessage: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    isChunkable: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    skipChunkReason: {
+      type: String,
+      maxlength: 128,
+      index: true,
     },
     tenantId: {
       type: String,

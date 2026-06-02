@@ -252,14 +252,35 @@ async function graphRequest(user, pathname, options = {}) {
 }
 
 function decodeHtmlEntities(value) {
+  const namedEntities = {
+    nbsp: ' ',
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    copy: '©',
+    reg: '®',
+    trade: '™',
+    mdash: '-',
+    ndash: '-',
+    hellip: '...',
+    bull: '*',
+    middot: '·',
+    laquo: '<<',
+    raquo: '>>',
+  };
+
   return String(value || '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&#x27;/gi, "'");
+    .replace(/&#(\d+);/g, (_match, numeric) => {
+      const codePoint = Number(numeric);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : _match;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => {
+      const codePoint = Number.parseInt(hex, 16);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : _match;
+    })
+    .replace(/&([a-z][a-z0-9]+);/gi, (match, entity) => namedEntities[entity.toLowerCase()] ?? match);
 }
 
 function normalizeHtmlText(content, contentType = 'text') {
@@ -268,12 +289,33 @@ function normalizeHtmlText(content, contentType = 'text') {
     return raw.trim();
   }
 
+  const withLinkTargets = raw.replace(
+    /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+    (_match, href, linkText) => {
+      const normalizedLinkText = String(linkText || '').replace(/<[^>]+>/g, ' ').trim();
+      if (!normalizedLinkText) {
+        return ` ${href} `;
+      }
+      return ` ${normalizedLinkText} (${href}) `;
+    },
+  );
+
   return decodeHtmlEntities(
-    raw
+    withLinkTargets
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<\/(p|div|tr|li|h[1-6]|table|section|article|br)>/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/?(p|div|section|article|header|footer|aside|blockquote|h[1-6])[^>]*>/gi, '\n')
+      .replace(/<li[^>]*>/gi, '\n- ')
+      .replace(/<\/li>/gi, '\n')
+      .replace(/<tr[^>]*>/gi, '\n')
+      .replace(/<\/tr>/gi, '\n')
+      .replace(/<(td|th)[^>]*>/gi, ' | ')
+      .replace(/<\/(td|th)>/gi, ' ')
+      .replace(/<\/(ul|ol|table)>/gi, '\n')
       .replace(/<[^>]+>/g, ' ')
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+\|/g, ' |')
       .replace(/[ \t]+\n/g, '\n')
       .replace(/\n{3,}/g, '\n\n')
       .replace(/[ \t]{2,}/g, ' '),
@@ -292,16 +334,266 @@ function toArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function uniqueParticipants(participants) {
-  const seen = new Set();
-  return participants.filter((participant) => {
-    const key = `${participant.userId || ''}:${participant.email || ''}:${participant.displayName || ''}`;
-    if (!key || seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
+function buildParticipantIdentityKey(participant = {}) {
+  const userId = String(participant?.userId || participant?.mentionedUserId || '')
+    .trim()
+    .toLowerCase();
+  const email = String(participant?.email || '')
+    .trim()
+    .toLowerCase();
+  const displayName = String(participant?.displayName || '')
+    .trim()
+    .toLowerCase();
+
+  if (userId) {
+    return `user:${userId}`;
+  }
+
+  if (email) {
+    return `email:${email}`;
+  }
+
+  if (displayName) {
+    return `name:${displayName}`;
+  }
+
+  return '';
+}
+
+function collapseParticipantSources(sourceSet = new Set()) {
+  const normalizedSources = [...sourceSet].filter(Boolean);
+  if (normalizedSources.length === 0) {
+    return 'unknown';
+  }
+
+  if (normalizedSources.length === 1) {
+    return normalizedSources[0];
+  }
+
+  return 'mixed';
+}
+
+function deriveParticipantConfidence({ userId, email, source }) {
+  if (source === 'graph' || source === 'mixed' || String(userId || '').trim()) {
+    return 'high';
+  }
+
+  if (String(email || '').trim()) {
+    return 'medium';
+  }
+
+  return 'low';
+}
+
+function detectSystemLikeMessage(message, { bodyText, fromUser, fromDisplayName } = {}) {
+  const messageType = String(message?.messageType || '').trim().toLowerCase();
+  const hasStructuredSender = Boolean(String(fromUser?.id || '').trim() || String(fromDisplayName || '').trim());
+  const hasMeaningfulText = Boolean(String(bodyText || message?.summary || message?.subject || '').trim());
+
+  if (message?.deletedDateTime) {
     return true;
+  }
+
+  if (messageType && messageType !== 'message' && !hasMeaningfulText) {
+    return true;
+  }
+
+  if (!hasStructuredSender && !hasMeaningfulText) {
+    return true;
+  }
+
+  return false;
+}
+
+function classifyChunkability(message, { bodyText, normalizedTextLength, isSystemLikeMessage }) {
+  const candidateText = String(bodyText || message?.summary || message?.subject || '').trim();
+
+  if (message?.deletedDateTime) {
+    return { isChunkable: false, skipChunkReason: 'deleted_message' };
+  }
+
+  if (!candidateText && isSystemLikeMessage) {
+    return { isChunkable: false, skipChunkReason: 'system_like_message' };
+  }
+
+  if (!candidateText) {
+    return { isChunkable: false, skipChunkReason: 'empty_normalized_text' };
+  }
+
+  if (isSystemLikeMessage && normalizedTextLength < 8) {
+    return { isChunkable: false, skipChunkReason: 'system_like_message' };
+  }
+
+  return { isChunkable: true, skipChunkReason: '' };
+}
+
+function upsertParticipantRecord(targetMap, participant = {}, source = 'unknown') {
+  const key = buildParticipantIdentityKey(participant);
+  if (!key) {
+    return;
+  }
+
+  const existing = targetMap.get(key) || {
+    displayName: '',
+    email: '',
+    userId: '',
+    sourceSet: new Set(),
+  };
+
+  existing.displayName = existing.displayName || String(participant?.displayName || '').trim();
+  existing.email = existing.email || String(participant?.email || '').trim();
+  existing.userId =
+    existing.userId ||
+    String(participant?.userId || participant?.mentionedUserId || '').trim();
+  existing.sourceSet.add(source || 'unknown');
+  targetMap.set(key, existing);
+}
+
+function finalizeParticipantRecords(targetMap, { memberLookupFailed = false } = {}) {
+  const participants = [...targetMap.values()].map((participant) => {
+    const source = collapseParticipantSources(participant.sourceSet);
+    return {
+      displayName: participant.displayName,
+      email: participant.email,
+      userId: participant.userId,
+      source,
+      confidence: deriveParticipantConfidence({
+        userId: participant.userId,
+        email: participant.email,
+        source,
+      }),
+    };
   });
+
+  const stats = participants.reduce(
+    (acc, participant) => {
+      acc.totalCount += 1;
+      if (participant.source === 'graph') {
+        acc.graphCount += 1;
+      } else if (participant.source === 'inferred_from_messages') {
+        acc.inferredFromMessagesCount += 1;
+      } else if (participant.source === 'inferred_from_mentions') {
+        acc.inferredFromMentionsCount += 1;
+      } else if (participant.source === 'mixed') {
+        acc.mixedCount += 1;
+      } else {
+        acc.unknownCount += 1;
+      }
+      return acc;
+    },
+    {
+      totalCount: 0,
+      graphCount: 0,
+      inferredFromMessagesCount: 0,
+      inferredFromMentionsCount: 0,
+      mixedCount: 0,
+      unknownCount: 0,
+      memberLookupFailed,
+    },
+  );
+
+  const sourceSet = new Set(participants.map((participant) => participant.source).filter(Boolean));
+
+  return {
+    participants,
+    participantMetadataSource: collapseParticipantSources(sourceSet),
+    participantConfidence: participants.some((participant) => participant.confidence === 'high')
+      ? 'high'
+      : participants.some((participant) => participant.confidence === 'medium')
+        ? 'medium'
+        : 'low',
+    participantDegraded: Boolean(memberLookupFailed || (stats.graphCount === 0 && stats.totalCount > 0)),
+    participantStats: stats,
+  };
+}
+
+function mergeConversationParticipants({
+  graphParticipants = [],
+  existingParticipants = [],
+  inferredMessageParticipants = [],
+  inferredMentionParticipants = [],
+  memberLookupFailed = false,
+} = {}) {
+  const participantMap = new Map();
+
+  for (const participant of toArray(graphParticipants)) {
+    upsertParticipantRecord(participantMap, participant, 'graph');
+  }
+
+  for (const participant of toArray(existingParticipants)) {
+    upsertParticipantRecord(participantMap, participant, participant?.source || 'unknown');
+  }
+
+  for (const participant of toArray(inferredMessageParticipants)) {
+    upsertParticipantRecord(participantMap, participant, 'inferred_from_messages');
+  }
+
+  for (const participant of toArray(inferredMentionParticipants)) {
+    upsertParticipantRecord(participantMap, participant, 'inferred_from_mentions');
+  }
+
+  return finalizeParticipantRecords(participantMap, { memberLookupFailed });
+}
+
+function extractInferredParticipants(messages = []) {
+  const messageParticipants = [];
+  const mentionParticipants = [];
+
+  for (const message of messages) {
+    if (message?.fromDisplayName || message?.fromEmail || message?.fromUserId) {
+      messageParticipants.push({
+        displayName: message?.fromDisplayName,
+        email: message?.fromEmail,
+        userId: message?.fromUserId,
+      });
+    }
+
+    for (const mention of toArray(message?.mentions)) {
+      mentionParticipants.push({
+        displayName: mention?.displayName,
+        userId: mention?.mentionedUserId,
+      });
+    }
+  }
+
+  return {
+    inferredMessageParticipants: messageParticipants,
+    inferredMentionParticipants: mentionParticipants,
+  };
+}
+
+function uniqueParticipants(participants) {
+  const participantMap = new Map();
+
+  for (const participant of participants) {
+    const key = buildParticipantIdentityKey(participant);
+    if (!key) {
+      continue;
+    }
+
+    const existing = participantMap.get(key) || {
+      displayName: '',
+      email: '',
+      userId: '',
+      sourceSet: new Set(),
+      confidence: 'low',
+    };
+
+    existing.displayName = existing.displayName || String(participant?.displayName || '').trim();
+    existing.email = existing.email || String(participant?.email || '').trim();
+    existing.userId = existing.userId || String(participant?.userId || '').trim();
+    existing.sourceSet.add(String(participant?.source || 'unknown').trim() || 'unknown');
+    existing.confidence = participant?.confidence || existing.confidence;
+    participantMap.set(key, existing);
+  }
+
+  return [...participantMap.values()].map((participant) => ({
+    displayName: participant.displayName,
+    email: participant.email,
+    userId: participant.userId,
+    source: collapseParticipantSources(participant.sourceSet),
+    confidence: participant.confidence,
+  }));
 }
 
 function normalizeConversation(chat, members = []) {
@@ -311,6 +603,8 @@ function normalizeConversation(chat, members = []) {
         displayName: member?.displayName || member?.email || '',
         email: member?.email || member?.userId || '',
         userId: member?.userId,
+        source: 'graph',
+        confidence: member?.userId || member?.email ? 'high' : 'medium',
       }))
       .filter((participant) => participant.displayName || participant.email || participant.userId),
   );
@@ -321,6 +615,18 @@ function normalizeConversation(chat, members = []) {
     topic: chat.topic || chat.subject || '',
     webUrl: chat.webUrl || '',
     participants,
+    participantMetadataSource: participants.length > 0 ? 'graph' : 'unknown',
+    participantConfidence: participants.length > 0 ? 'high' : 'low',
+    participantDegraded: false,
+    participantStats: {
+      totalCount: participants.length,
+      graphCount: participants.length,
+      inferredFromMessagesCount: 0,
+      inferredFromMentionsCount: 0,
+      mixedCount: 0,
+      unknownCount: participants.length === 0 ? 1 : 0,
+      memberLookupFailed: false,
+    },
     sourceUpdatedAt: toDate(chat.lastUpdatedDateTime),
   };
 }
@@ -335,6 +641,17 @@ function normalizeMessage(chatId, message) {
   const bodyContent = String(message?.body?.content || '');
   const bodyText = normalizeHtmlText(bodyContent, bodyContentType);
   const bodyPreview = bodyText.slice(0, 500);
+  const normalizedTextLength = bodyText.length;
+  const isSystemLikeMessage = detectSystemLikeMessage(message, {
+    bodyText,
+    fromUser,
+    fromDisplayName: from.displayName,
+  });
+  const { isChunkable, skipChunkReason } = classifyChunkability(message, {
+    bodyText,
+    normalizedTextLength,
+    isSystemLikeMessage,
+  });
 
   return {
     graphChatId: chatId,
@@ -367,6 +684,10 @@ function normalizeMessage(chatId, message) {
     lastModifiedDateTime: toDate(message.lastModifiedDateTime),
     deletedDateTime: toDate(message.deletedDateTime),
     etag: message.etag || message['@odata.etag'] || '',
+    normalizedTextLength,
+    isSystemLikeMessage,
+    isChunkable,
+    skipChunkReason,
   };
 }
 
@@ -856,6 +1177,340 @@ function mapDossierHighlights(messages = [], conversation, limit = 8) {
   );
 }
 
+function buildIntentText(options = {}) {
+  return [
+    String(options.query || '').trim(),
+    String(options.topic || '').trim(),
+    ...toArray(options.participants).map((participant) => String(participant || '').trim()),
+    String(options.chatType || '').trim(),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function classifyRetrievalIntent(options = {}, { mode = 'advanced' } = {}) {
+  const text = buildIntentText(options);
+  const participantScoped = toArray(options.participants).filter(Boolean).length > 0;
+  const oneOnOneQuery =
+    String(options.chatType || '').trim() === 'oneOnOne' ||
+    /\b(one[- ]on[- ]one|1:1|dm|direct message)\b/i.test(text);
+  const exactnessSensitive =
+    /\b(all|everything|entire|complete|completeness|exact|exactly|verbatim|wording)\b/i.test(
+      text,
+    );
+  const detailSensitive =
+    /\b(full body|full text|full context|details?|decisions?|action items?|next steps?|context|history)\b/i.test(
+      text,
+    );
+  const recentOnly =
+    mode === 'recent' ||
+    /\b(recent|latest|today|yesterday|this week|last week)\b/i.test(text) ||
+    Boolean(options.daysBack);
+  const broadTopicDiscovery =
+    Boolean(String(options.topic || options.query || '').trim()) &&
+    !participantScoped &&
+    !oneOnOneQuery &&
+    !exactnessSensitive &&
+    !detailSensitive;
+
+  return {
+    participantScoped,
+    oneOnOneQuery,
+    exactnessSensitive,
+    broadTopicDiscovery,
+    recentOnly,
+    fullBodyDetailsQuery: detailSensitive,
+    completenessSensitive: exactnessSensitive || detailSensitive,
+  };
+}
+
+function getPreviewTextLength(result) {
+  return String(
+    result?.excerpt ||
+      result?.bodyPreview ||
+      result?.summary ||
+      result?.text ||
+      '',
+  )
+    .replace(/\s+/g, ' ')
+    .trim().length;
+}
+
+function arePreviewsLikelyInsufficient(results = []) {
+  if (!Array.isArray(results) || results.length === 0) {
+    return false;
+  }
+
+  return results.every((result) => getPreviewTextLength(result) < 160);
+}
+
+function buildArchiveUnionDecision({ intent, memoryResults, requestedLimit }) {
+  const reasons = [];
+  const memoryResultCount = Array.isArray(memoryResults?.results) ? memoryResults.results.length : 0;
+  const normalizedLimit = clampInteger(requestedLimit, 4, { min: 1, max: 12 });
+
+  if (intent.broadTopicDiscovery) {
+    reasons.push('broad_topic_query');
+  }
+  if (intent.exactnessSensitive) {
+    reasons.push('exactness_requested');
+  }
+  if (intent.fullBodyDetailsQuery) {
+    reasons.push('details_requested');
+  }
+  if (intent.participantScoped || intent.oneOnOneQuery) {
+    reasons.push('person_or_dm_scope');
+  }
+  if (memoryResultCount > 0 && memoryResultCount < Math.min(3, normalizedLimit)) {
+    reasons.push('low_memory_result_count');
+  }
+  if (memoryResultCount > 0 && arePreviewsLikelyInsufficient(memoryResults.results)) {
+    reasons.push('preview_insufficient');
+  }
+
+  return {
+    runArchiveUnion: memoryResultCount === 0 || reasons.length > 0,
+    reasons,
+    memoryResultCount,
+  };
+}
+
+function dedupeMergedRetrievalResults({ archiveResults = [], memoryResults = [], limit = 6 }) {
+  const merged = [];
+  const indexByKey = new Map();
+
+  const pushResult = (result, evidenceSource) => {
+    const key = String(result?.graphMessageId || result?.sourceRecordId || result?.id || '').trim();
+    const normalized = {
+      ...result,
+      evidenceSource,
+    };
+
+    if (!key) {
+      merged.push(normalized);
+      return;
+    }
+
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, merged.length);
+      merged.push(normalized);
+      return;
+    }
+
+    if (evidenceSource === 'archive') {
+      merged[existingIndex] = {
+        ...merged[existingIndex],
+        ...normalized,
+        evidenceSource: 'archive',
+      };
+    }
+  };
+
+  for (const result of archiveResults) {
+    pushResult(result, 'archive');
+  }
+
+  for (const result of memoryResults) {
+    pushResult(result, 'enterprise_memory');
+  }
+
+  return merged.slice(0, limit);
+}
+
+function resolveConversationFromSearchResults(results = [], explicitResolvedConversation) {
+  if (explicitResolvedConversation?.graphChatId) {
+    return explicitResolvedConversation;
+  }
+
+  const conversationIds = [...new Set(results.map((result) => result?.graphChatId).filter(Boolean))];
+  if (conversationIds.length !== 1) {
+    return null;
+  }
+
+  const exemplar = results.find((result) => result?.graphChatId === conversationIds[0]);
+  return exemplar
+    ? {
+        graphChatId: exemplar.graphChatId,
+        chatType: exemplar.chatType || '',
+        topic: exemplar.topic || '',
+        participants: exemplar.participants || [],
+      }
+    : null;
+}
+
+async function buildMessageBodyEscalations(user, options = {}, results = []) {
+  const uniqueMessageIds = [
+    ...new Set(
+      results
+        .map((result) => result?.graphMessageId || result?.id)
+        .filter(Boolean),
+    ),
+  ].slice(0, 2);
+
+  if (uniqueMessageIds.length === 0) {
+    return [];
+  }
+
+  const escalations = [];
+  for (const messageId of uniqueMessageIds) {
+    const fullBody = await getMessageBody(user, {
+      chatId: options.chatId,
+      messageId,
+    });
+    if (fullBody?.resolved) {
+      escalations.push(fullBody);
+    }
+  }
+
+  return escalations;
+}
+
+async function runArchiveAdvancedMessageSearch(user, options = {}) {
+  const userId = user?.id || user?._id?.toString();
+  const topic = String(options.topic || options.query || '').trim();
+  const senderScope = String(options.senderScope || 'any').trim();
+  const chatType = String(options.chatType || 'any').trim();
+  const sortBy = String(options.sortBy || 'recent').trim();
+  const limit = clampInteger(options.limit, Math.min(getTeamsArchiveConfig().defaultSearchLimit, 4), {
+    max: 12,
+  });
+  const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
+  const daysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : undefined;
+
+  const validSenderScopes = new Set(['any', 'me', 'others']);
+  const validChatTypes = new Set(['any', 'oneOnOne', 'group', 'meeting']);
+  const normalizedSenderScope = validSenderScopes.has(senderScope) ? senderScope : 'any';
+  const normalizedChatType = validChatTypes.has(chatType) ? chatType : 'any';
+  const participantClauses = buildParticipantConversationClauses(options.participants);
+  const explicitConversationFilters =
+    normalizedChatType !== 'any' || participantClauses.length > 0;
+
+  let matchedConversations = [];
+  let matchedConversationIds = [];
+  if (explicitConversationFilters) {
+    const lookup = await findConversationCandidates(userId, {
+      ...options,
+      topic: '',
+      query: '',
+      chatType: normalizedChatType,
+      candidateLimit: 1000,
+    });
+    matchedConversations = lookup.conversations;
+    matchedConversationIds = matchedConversations
+      .map((conversation) => conversation.graphChatId)
+      .filter(Boolean);
+
+    if (matchedConversationIds.length === 0) {
+      return {
+        retrievalMode: 'advanced_message_previews',
+        topic: topic || undefined,
+        senderScope: normalizedSenderScope,
+        chatType: normalizedChatType,
+        daysBack,
+        participants: toArray(options.participants).filter(Boolean),
+        guidance:
+          'No matching chats were found for the requested participant or chat-type constraints. Consider broadening those filters.',
+        resolvedConversation: undefined,
+        resultCount: 0,
+        results: [],
+        trace: {
+          archiveSearched: true,
+          archiveResultCount: 0,
+          conversationFiltersApplied: {
+            chatType: normalizedChatType !== 'any',
+            participants: participantClauses.length > 0,
+            daysBack: Boolean(daysBack),
+          },
+          topicGateApplied: false,
+          matchedConversationCount: 0,
+        },
+      };
+    }
+  }
+
+  const senderClauses = getUserSenderClauses(user);
+  const senderFilter =
+    normalizedSenderScope === 'me'
+      ? senderClauses.length > 0
+        ? { $or: senderClauses }
+        : {}
+      : normalizedSenderScope === 'others'
+        ? senderClauses.length > 0
+          ? { $nor: senderClauses }
+          : {}
+        : {};
+
+  const { clauses: topicClauses } = buildTopicSearchClauses(topic);
+  const messageFilter = {
+    user: userId,
+    ...(matchedConversationIds.length > 0 ? { graphChatId: { $in: matchedConversationIds } } : {}),
+    ...(daysBack ? { sentDateTime: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } } : {}),
+    ...senderFilter,
+    ...(topicClauses.length > 0 ? { $and: topicClauses } : {}),
+  };
+
+  const messages = await db.findTeamsArchiveMessages(messageFilter, {
+    limit,
+    offset,
+    sort: sortBy === 'oldest' ? { sentDateTime: 1, createdAt: 1 } : { sentDateTime: -1, createdAt: -1 },
+  });
+
+  const conversationIds = [...new Set(messages.map((message) => message.graphChatId).filter(Boolean))];
+  const conversations = conversationIds.length
+    ? await db.findTeamsArchiveConversations(
+        { user: userId, graphChatId: { $in: conversationIds } },
+        { limit: Math.max(conversationIds.length, 1) },
+      )
+    : [];
+  const conversationMap = new Map(
+    conversations.map((conversation) => [conversation.graphChatId, conversation]),
+  );
+
+  const resolvedConversation =
+    matchedConversations.length === 1
+      ? mapConversationCandidate(matchedConversations[0])
+      : conversationIds.length === 1
+        ? conversationMap.get(conversationIds[0])
+          ? mapConversationCandidate(conversationMap.get(conversationIds[0]))
+          : undefined
+        : undefined;
+
+  return {
+    retrievalMode: 'advanced_message_previews',
+    topic: topic || undefined,
+    senderScope: normalizedSenderScope,
+    chatType: normalizedChatType,
+    daysBack,
+    participants: toArray(options.participants).filter(Boolean),
+    guidance:
+      resolvedConversation
+        ? 'These previews are scoped to one resolved conversation. If completeness matters, use conversation_dossier or summarize_conversation before expanding with get_messages_window.'
+        : 'These are compact previews optimized for topic discovery. If a single conversation stands out, use summarize_conversation before expanding with get_messages_window.',
+    ...(resolvedConversation ? { resolvedConversation } : {}),
+    resultCount: messages.length,
+    results: messages.map((message) =>
+      mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {
+        excerptLimit: 260,
+      }),
+    ),
+    trace: {
+      archiveSearched: true,
+      archiveResultCount: messages.length,
+      conversationFiltersApplied: {
+        chatType: normalizedChatType !== 'any',
+        participants: participantClauses.length > 0,
+        daysBack: Boolean(daysBack),
+      },
+      topicGateApplied: false,
+      matchedConversationCount: matchedConversations.length,
+    },
+  };
+}
+
 function buildConversationLookupFilter(userId, options = {}) {
   const chatType = String(options.chatType || 'any').trim();
   const validChatTypes = new Set(['any', 'oneOnOne', 'group', 'meeting']);
@@ -1160,24 +1815,54 @@ function isDiscoveryRefreshDue(backfillState) {
 async function listChatMembers(user, chatId, chatType, controller) {
   const normalizedChatType = String(chatType || 'unknown');
   if (!shouldAttemptMemberLookup(normalizedChatType, controller)) {
-    return [];
+    return {
+      participants: [],
+      failed: controller?.mode === 'disabled' || controller?.disabledChatTypes?.has(normalizedChatType),
+      pageCount: 0,
+    };
   }
 
   try {
-    const response = await graphRequest(user, `/chats/${encodeURIComponent(chatId)}/members`, {
-      query: { $top: 50 },
-      suppressErrorLog: true,
-    });
+    let nextLink = null;
+    let pageCount = 0;
+    const participants = [];
+
+    do {
+      const response = await graphRequest(
+        user,
+        nextLink || `/chats/${encodeURIComponent(chatId)}/members`,
+        nextLink
+          ? {
+              suppressErrorLog: true,
+            }
+          : {
+              query: { $top: 50 },
+              suppressErrorLog: true,
+            },
+      );
+
+      pageCount += 1;
+      participants.push(
+        ...toArray(response?.value).map((member) => ({
+          displayName: member?.displayName || member?.email || '',
+          email: member?.email || '',
+          userId: member?.userId || member?.id || '',
+          source: 'graph',
+          confidence: member?.userId || member?.email ? 'high' : 'medium',
+        })),
+      );
+      nextLink = response?.['@odata.nextLink'] || null;
+    } while (nextLink);
 
     if (controller) {
-      controller.stats.successCount += 1;
+      controller.stats.successCount += pageCount;
     }
 
-    return toArray(response?.value).map((member) => ({
-      displayName: member?.displayName || member?.email || '',
-      email: member?.email || '',
-      userId: member?.userId || member?.id || '',
-    }));
+    return {
+      participants: uniqueParticipants(participants),
+      failed: false,
+      pageCount,
+    };
   } catch (error) {
     const disabledByCircuitBreaker = recordMemberLookupFailure(normalizedChatType, controller);
     logger.warn('[TeamsArchiveService] Failed to list chat members', {
@@ -1193,7 +1878,11 @@ async function listChatMembers(user, chatId, chatType, controller) {
       });
     }
 
-    return [];
+    return {
+      participants: [],
+      failed: true,
+      pageCount: 0,
+    };
   }
 }
 
@@ -1356,6 +2045,9 @@ function normalizeProjectionDiagnostics(stats = {}) {
     totalChunkableMessages,
     totalSkippedEmptyTextMessages,
     projectionMessageFetchLimit: Number(diagnostics.projectionMessageFetchLimit || 0),
+    zeroChunkReasonCounts: diagnostics.zeroChunkReasonCounts || {},
+    searchableConversationCountsByChatType: diagnostics.searchableConversationCountsByChatType || {},
+    participantDegradedConversationCount: Number(diagnostics.participantDegradedConversationCount || 0),
     chunkableMessageRate:
       totalMessagesLoaded > 0 ? Number(((totalChunkableMessages / totalMessagesLoaded) * 100).toFixed(1)) : 0,
     skippedEmptyTextRate:
@@ -1379,6 +2071,10 @@ async function getStatus(user) {
     projectionChunkCount,
     projectionEntityConversationCount,
     projectionConversationCount,
+    searchableOneOnOneConversationCount,
+    searchableGroupConversationCount,
+    searchableMeetingConversationCount,
+    participantDegradedConversationCount,
   ] = await Promise.all([
     userId ? db.countTeamsArchiveConversations({ user: userId }) : 0,
     userId ? db.countTeamsArchiveMessages({ user: userId }) : 0,
@@ -1412,6 +2108,31 @@ async function getStatus(user) {
           sourceRecordType: 'teams_message',
         })
       : 0,
+    userId && typeof db.countDistinctEnterpriseMemoryChunkField === 'function'
+      ? db.countDistinctEnterpriseMemoryChunkField('sourceParentRecordId', {
+          user: userId,
+          source: 'teams',
+          'metadata.chatType': 'oneOnOne',
+          chunkType: { $in: ['message', 'conversation_window'] },
+        })
+      : 0,
+    userId && typeof db.countDistinctEnterpriseMemoryChunkField === 'function'
+      ? db.countDistinctEnterpriseMemoryChunkField('sourceParentRecordId', {
+          user: userId,
+          source: 'teams',
+          'metadata.chatType': 'group',
+          chunkType: { $in: ['message', 'conversation_window'] },
+        })
+      : 0,
+    userId && typeof db.countDistinctEnterpriseMemoryChunkField === 'function'
+      ? db.countDistinctEnterpriseMemoryChunkField('sourceParentRecordId', {
+          user: userId,
+          source: 'teams',
+          'metadata.chatType': 'meeting',
+          chunkType: { $in: ['message', 'conversation_window'] },
+        })
+      : 0,
+    userId ? db.countTeamsArchiveConversations({ user: userId, participantDegraded: true }) : 0,
   ]);
 
   const normalizedBackfillStatus = backfillState
@@ -1505,6 +2226,22 @@ async function getStatus(user) {
               ((((projectionEntityConversationCount || 0) / conversationCount) * 100).toFixed(1)),
             )
           : 0,
+    },
+    searchabilityDiagnostics: {
+      discoveredConversationCount: backfillState?.discoveredChatCount || conversationCount || 0,
+      archivedConversationCount: conversationCount || 0,
+      projectedConversationCount: projectionEntityConversationCount || 0,
+      searchableConversationCount: projectionConversationCount || 0,
+      zeroChunkConversationCount:
+        normalizeProjectionDiagnostics(latestProjection?.stats || {}).zeroChunkConversationCount || 0,
+      zeroChunkReasonCounts:
+        normalizeProjectionDiagnostics(latestProjection?.stats || {}).zeroChunkReasonCounts || {},
+      searchableConversationCountsByChatType: {
+        oneOnOne: searchableOneOnOneConversationCount || 0,
+        group: searchableGroupConversationCount || 0,
+        meeting: searchableMeetingConversationCount || 0,
+      },
+      participantDegradedConversationCount: participantDegradedConversationCount || 0,
     },
   };
 }
@@ -1880,9 +2617,14 @@ async function syncUserArchive(user, options = {}) {
       await mapWithConcurrency(chats, config.discoveryConcurrency, async (chat) => {
         await ensureSyncJobActive(syncJob._id?.toString?.() || syncJob.id);
         const chatType = String(chat?.chatType || 'unknown');
-        const members = await listChatMembers(user, chat.id, chatType, memberLookupController);
-        const normalizedConversation = normalizeConversation(chat, members);
         const existingConversation = existingConversationMap.get(chat.id);
+        const memberLookup = await listChatMembers(user, chat.id, chatType, memberLookupController);
+        const normalizedConversation = normalizeConversation(chat, memberLookup.participants);
+        const enrichedParticipants = mergeConversationParticipants({
+          graphParticipants: normalizedConversation.participants,
+          existingParticipants: existingConversation?.participants || [],
+          memberLookupFailed: memberLookup.failed,
+        });
         const sourceUpdatedAt =
           normalizedConversation.sourceUpdatedAt || existingConversation?.sourceUpdatedAt;
         const lastMessageSyncAt = existingConversation?.lastMessageSyncAt || null;
@@ -1907,6 +2649,11 @@ async function syncUserArchive(user, options = {}) {
         await db.upsertTeamsArchiveConversation({
           user: userId,
           ...normalizedConversation,
+          participants: enrichedParticipants.participants,
+          participantMetadataSource: enrichedParticipants.participantMetadataSource,
+          participantConfidence: enrichedParticipants.participantConfidence,
+          participantDegraded: enrichedParticipants.participantDegraded,
+          participantStats: enrichedParticipants.participantStats,
           sourceDiscoveredAt: existingConversation?.sourceDiscoveredAt || new Date(),
           sourceLastMessageAt: normalizedConversation.sourceUpdatedAt,
           syncStatus: needsSync ? 'pending' : existingConversation?.syncStatus || 'complete',
@@ -2006,6 +2753,8 @@ async function syncUserArchive(user, options = {}) {
       let latestMessageAt = conversation?.lastMessageAt || null;
       let conversationFailed = false;
       let reachedIncrementalCutoff = false;
+      const inferredMessageParticipants = [];
+      const inferredMentionParticipants = [];
 
       await db.updateTeamsArchiveConversation(conversationId, {
         syncStatus: 'running',
@@ -2026,6 +2775,9 @@ async function syncUserArchive(user, options = {}) {
           }));
 
           if (normalizedMessages.length > 0) {
+            const inferredParticipants = extractInferredParticipants(normalizedMessages);
+            inferredMessageParticipants.push(...inferredParticipants.inferredMessageParticipants);
+            inferredMentionParticipants.push(...inferredParticipants.inferredMentionParticipants);
             persistedMessages += await db.bulkUpsertTeamsArchiveMessages(normalizedMessages);
             const sortedMessages = [...normalizedMessages]
               .filter((message) => message.sentDateTime instanceof Date)
@@ -2081,6 +2833,15 @@ async function syncUserArchive(user, options = {}) {
         graphChatId: conversation.graphChatId,
       });
       const isConversationComplete = !conversationFailed && (incrementalRefresh || !nextMessageCursor);
+      const enrichedParticipants = mergeConversationParticipants({
+        graphParticipants: toArray(conversation?.participants).filter(
+          (participant) => participant?.source === 'graph' || participant?.source === 'mixed',
+        ),
+        existingParticipants: conversation?.participants || [],
+        inferredMessageParticipants,
+        inferredMentionParticipants,
+        memberLookupFailed: Boolean(conversation?.participantDegraded),
+      });
 
       const conversationRecord = await db.updateTeamsArchiveConversation(conversationId, {
         syncStatus: conversationFailed ? 'failed' : isConversationComplete ? 'complete' : 'pending',
@@ -2092,6 +2853,11 @@ async function syncUserArchive(user, options = {}) {
         lastSyncedAt: new Date(),
         lastMessageAt: latestMessageAt || conversation?.lastMessageAt,
         messageCount: messageCountForConversation,
+        participants: enrichedParticipants.participants,
+        participantMetadataSource: enrichedParticipants.participantMetadataSource,
+        participantConfidence: enrichedParticipants.participantConfidence,
+        participantDegraded: enrichedParticipants.participantDegraded,
+        participantStats: enrichedParticipants.participantStats,
       });
 
       if (isConversationComplete) {
@@ -2836,20 +3602,23 @@ async function searchMessages(user, options = {}) {
 
 async function recentMessages(user, options = {}) {
   assertEnabled();
+  const intent = classifyRetrievalIntent({ ...options, senderScope: 'me' }, { mode: 'recent' });
+  let memoryResults = null;
+  let memorySearchError = null;
+  let memorySearched = false;
+
   if (typeof searchTeamsMemoryChunks === 'function') {
     try {
-      const memoryResults = await searchTeamsMemoryChunks(user, {
+      memorySearched = true;
+      memoryResults = await searchTeamsMemoryChunks(user, {
         query: options.query,
         limit: options.limit,
         daysBack: options.daysBack,
         senderScope: 'me',
         sortBy: 'recent',
       });
-
-      if (hasNonEmptyMemoryResults(memoryResults)) {
-        return memoryResults;
-      }
     } catch (error) {
+      memorySearchError = error;
       logger.warn('[TeamsArchiveService] Enterprise memory recent retrieval failed, falling back', {
         userId: user?.id || user?._id?.toString?.(),
         error: error?.message || error,
@@ -2904,30 +3673,80 @@ async function recentMessages(user, options = {}) {
     conversations.map((conversation) => [conversation.graphChatId, conversation]),
   );
 
+  const archiveResults = messages.map((message) =>
+    mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {
+      excerptLimit: 220,
+    }),
+  );
+  const unionDecision = buildArchiveUnionDecision({
+    intent,
+    memoryResults,
+    requestedLimit: limit,
+  });
+  const fallbackReasons = [];
+  if (memorySearchError) {
+    fallbackReasons.push('memory_error');
+  }
+  fallbackReasons.push(...unionDecision.reasons);
+
+  const finalResults =
+    memoryResults && hasNonEmptyMemoryResults(memoryResults)
+      ? dedupeMergedRetrievalResults({
+          archiveResults: unionDecision.runArchiveUnion ? archiveResults : [],
+          memoryResults: memoryResults.results,
+          limit,
+        })
+      : archiveResults.slice(0, limit);
+
   return {
     retrievalMode: 'recent_message_previews',
     daysBack,
     query: query || undefined,
     guidance:
       'These are compact previews of recent messages sent by the signed-in user. Use get_messages_window for local context around one result.',
-    resultCount: messages.length,
-    results: messages.map((message) =>
-      mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {
-        excerptLimit: 220,
-      }),
-    ),
+    trace: {
+      detectedIntent: intent,
+      filtersApplied: {
+        senderScope: 'me',
+        daysBack,
+        query: Boolean(query),
+      },
+      memorySearched,
+      memoryResultCount: Array.isArray(memoryResults?.results) ? memoryResults.results.length : 0,
+      archiveUnionRan: Boolean(memoryResults && unionDecision.runArchiveUnion),
+      archiveResultCount: archiveResults.length,
+      fullBodyEscalationRan: false,
+      conversationDossierRan: false,
+      dedupedFinalResultCount: finalResults.length,
+      fallbackReasons,
+    },
+    resultCount: finalResults.length,
+    results: finalResults,
   };
 }
 
 async function advancedSearchMessages(user, options = {}) {
   assertEnabled();
+  const intent = classifyRetrievalIntent(options, { mode: 'advanced' });
+  const topic = String(options.topic || options.query || '').trim();
+  const senderScope = String(options.senderScope || 'any').trim();
+  const chatType = String(options.chatType || 'any').trim();
+  const limit = clampInteger(options.limit, Math.min(getTeamsArchiveConfig().defaultSearchLimit, 4), {
+    max: 6,
+  });
+  const daysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : undefined;
+
+  let memoryResults = null;
+  let memorySearchError = null;
+  let memorySearched = false;
   if (typeof searchTeamsMemoryChunks === 'function') {
     try {
-      const memoryResults = await searchTeamsMemoryChunks(user, options);
-      if (hasNonEmptyMemoryResults(memoryResults)) {
-        return memoryResults;
-      }
+      memorySearched = true;
+      memoryResults = await searchTeamsMemoryChunks(user, options);
     } catch (error) {
+      memorySearchError = error;
       logger.warn('[TeamsArchiveService] Enterprise memory advanced retrieval failed, falling back', {
         userId: user?.id || user?._id?.toString?.(),
         error: error?.message || error,
@@ -2935,113 +3754,108 @@ async function advancedSearchMessages(user, options = {}) {
     }
   }
 
-  const userId = user?.id || user?._id?.toString();
-  const topic = String(options.topic || options.query || '').trim();
-  const senderScope = String(options.senderScope || 'any').trim();
-  const chatType = String(options.chatType || 'any').trim();
-  const sortBy = String(options.sortBy || 'recent').trim();
-  const limit = clampInteger(options.limit, Math.min(getTeamsArchiveConfig().defaultSearchLimit, 4), {
-    max: 6,
+  const unionDecision = buildArchiveUnionDecision({
+    intent,
+    memoryResults,
+    requestedLimit: limit,
   });
-  const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
-  const daysBack = options.daysBack
-    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
-    : undefined;
+  const archiveResult = await runArchiveAdvancedMessageSearch(user, {
+    ...options,
+    limit: Math.min(limit * 3, 12),
+  });
+  const archiveResults = archiveResult.results || [];
+  const fallbackReasons = [];
+  if (memorySearchError) {
+    fallbackReasons.push('memory_error');
+  }
+  fallbackReasons.push(...unionDecision.reasons);
 
-  const validSenderScopes = new Set(['any', 'me', 'others']);
-  const validChatTypes = new Set(['any', 'oneOnOne', 'group', 'meeting']);
-  const normalizedSenderScope = validSenderScopes.has(senderScope) ? senderScope : 'any';
-  const normalizedChatType = validChatTypes.has(chatType) ? chatType : 'any';
+  const finalResults =
+    memoryResults && hasNonEmptyMemoryResults(memoryResults)
+      ? dedupeMergedRetrievalResults({
+          archiveResults: unionDecision.runArchiveUnion ? archiveResults : [],
+          memoryResults: memoryResults.results,
+          limit,
+        })
+      : archiveResults.slice(0, limit);
 
-  const { phraseRegex, termRegexes, clauses: topicClauses } = buildTopicSearchClauses(topic);
-  const participantClauses = buildParticipantConversationClauses(options.participants);
-  let matchedConversationIds = [];
-  let matchedConversations = [];
-  if (normalizedChatType !== 'any' || topic || participantClauses.length > 0) {
-    const lookup = await findConversationCandidates(userId, {
-      ...options,
-      topic,
-      query: topic,
-      chatType: normalizedChatType,
-      candidateLimit: 1000,
+  const resolvedConversation = resolveConversationFromSearchResults(
+    finalResults,
+    archiveResult.resolvedConversation,
+  );
+
+  let conversationDossier = null;
+  let conversationDossierRan = false;
+  if (
+    resolvedConversation?.graphChatId &&
+    (intent.completenessSensitive ||
+      intent.participantScoped ||
+      intent.oneOnOneQuery)
+  ) {
+    conversationDossier = await getConversationDossier(user, {
+      chatId: resolvedConversation.graphChatId,
+      query: options.query,
+      topic: options.topic,
+      daysBack: options.daysBack,
+      limit: Math.min(limit, 4),
+      participants: options.participants,
+      chatType: options.chatType,
     });
-    matchedConversations = lookup.conversations;
-    matchedConversationIds = matchedConversations
-      .map((conversation) => conversation.graphChatId)
-      .filter(Boolean);
-
-    if (matchedConversationIds.length === 0) {
-      return {
-        retrievalMode: 'advanced_message_previews',
-        topic: topic || undefined,
-        senderScope: normalizedSenderScope,
-        chatType: normalizedChatType,
-        daysBack,
-        participants: toArray(options.participants).filter(Boolean),
-        guidance:
-          'No matching chats were found. Consider broadening the topic, participants, or timeframe.',
-        results: [],
-      };
+    conversationDossierRan = Boolean(conversationDossier?.resolved);
+    if (conversationDossierRan) {
+      fallbackReasons.push('conversation_dossier_escalation');
     }
   }
 
-  const senderClauses = getUserSenderClauses(user);
-  const senderFilter =
-    normalizedSenderScope === 'me'
-      ? senderClauses.length > 0
-        ? { $or: senderClauses }
-        : {}
-      : normalizedSenderScope === 'others'
-        ? senderClauses.length > 0
-          ? { $nor: senderClauses }
-          : {}
-        : {};
+  let fullBodies = [];
+  const shouldRunFullBodyEscalation =
+    intent.exactnessSensitive ||
+    intent.fullBodyDetailsQuery ||
+    ((intent.participantScoped || intent.oneOnOneQuery) &&
+      finalResults.length > 0 &&
+      arePreviewsLikelyInsufficient(finalResults));
 
-  const messageFilter = {
-    user: userId,
-    ...(matchedConversationIds.length > 0 ? { graphChatId: { $in: matchedConversationIds } } : {}),
-    ...(daysBack ? { sentDateTime: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } } : {}),
-    ...senderFilter,
-    ...(topicClauses.length > 0 ? { $and: topicClauses } : {}),
-  };
-
-  const messages = await db.findTeamsArchiveMessages(messageFilter, {
-    limit,
-    offset,
-    sort: sortBy === 'oldest' ? { sentDateTime: 1, createdAt: 1 } : { sentDateTime: -1, createdAt: -1 },
-  });
-
-  const conversationIds = [...new Set(messages.map((message) => message.graphChatId).filter(Boolean))];
-  const conversations = conversationIds.length
-    ? await db.findTeamsArchiveConversations(
-        { user: userId, graphChatId: { $in: conversationIds } },
-        { limit: Math.max(conversationIds.length, 1) },
-      )
-    : [];
-  const conversationMap = new Map(
-    conversations.map((conversation) => [conversation.graphChatId, conversation]),
-  );
-  const resolvedConversation =
-    matchedConversations.length === 1 ? mapConversationCandidate(matchedConversations[0]) : undefined;
+  if (shouldRunFullBodyEscalation && finalResults.length > 0) {
+    fullBodies = await buildMessageBodyEscalations(user, options, finalResults);
+    if (fullBodies.length > 0) {
+      fallbackReasons.push('full_body_escalation');
+    }
+  }
 
   return {
     retrievalMode: 'advanced_message_previews',
     topic: topic || undefined,
-    senderScope: normalizedSenderScope,
-    chatType: normalizedChatType,
+    senderScope,
+    chatType,
     daysBack,
     participants: toArray(options.participants).filter(Boolean),
     guidance:
       resolvedConversation
-        ? 'These previews are scoped to one resolved conversation. If completeness matters, use conversation_dossier or summarize_conversation before expanding with get_messages_window.'
-        : 'These are compact previews optimized for topic discovery. If a single conversation stands out, use summarize_conversation before expanding with get_messages_window.',
+        ? 'These results were gathered with recall-safe union retrieval. When completeness matters, rely on the conversation dossier and full-body expansions before answering.'
+        : 'These results were gathered with recall-safe union retrieval across enterprise memory and the raw Teams archive. Use the dossier or full-body expansions before answering completeness-sensitive questions.',
     ...(resolvedConversation ? { resolvedConversation } : {}),
-    resultCount: messages.length,
-    results: messages.map((message) =>
-      mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {
-        excerptLimit: 260,
-      }),
-    ),
+    ...(conversationDossierRan ? { conversationDossier } : {}),
+    ...(fullBodies.length > 0 ? { fullBodies } : {}),
+    trace: {
+      detectedIntent: intent,
+      filtersApplied: {
+        senderScope,
+        chatType,
+        daysBack: Boolean(daysBack),
+        participants: toArray(options.participants).filter(Boolean),
+        topic: Boolean(topic),
+      },
+      memorySearched,
+      memoryResultCount: Array.isArray(memoryResults?.results) ? memoryResults.results.length : 0,
+      archiveUnionRan: Boolean(memoryResults ? unionDecision.runArchiveUnion : true),
+      archiveResultCount: archiveResults.length,
+      fullBodyEscalationRan: fullBodies.length > 0,
+      conversationDossierRan,
+      dedupedFinalResultCount: finalResults.length,
+      fallbackReasons,
+    },
+    resultCount: finalResults.length,
+    results: finalResults,
   };
 }
 

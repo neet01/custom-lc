@@ -2,6 +2,8 @@ const { logger } = require('@librechat/data-schemas');
 const db = require('~/models');
 
 const PROJECTION_MESSAGE_FETCH_LIMIT = 5000;
+const CONVERSATION_WINDOW_MESSAGE_TARGET = 20;
+const CONVERSATION_WINDOW_MAX_TIME_GAP_MS = 12 * 60 * 60 * 1000;
 
 function uniqueStrings(values = []) {
   const seen = new Set();
@@ -97,6 +99,63 @@ function formatConversationTitle(conversation) {
   return `Teams chat ${conversation?.graphChatId || ''}`.trim();
 }
 
+function getChunkableMessageText(message) {
+  return String(message?.bodyText || message?.summary || message?.subject || '').trim();
+}
+
+function pushConversationWindow(currentWindow, windows) {
+  if (currentWindow.length > 0) {
+    windows.push(currentWindow);
+  }
+}
+
+function buildConversationWindows(sortedMessages = []) {
+  const chunkableMessages = sortedMessages.filter((message) => {
+    if (typeof message?.isChunkable === 'boolean') {
+      return message.isChunkable;
+    }
+    return Boolean(getChunkableMessageText(message));
+  });
+
+  const windows = [];
+  let currentWindow = [];
+
+  for (const message of chunkableMessages) {
+    const lastMessage = currentWindow[currentWindow.length - 1];
+    const lastTime = lastMessage?.sentDateTime ? new Date(lastMessage.sentDateTime).getTime() : 0;
+    const currentTime = message?.sentDateTime ? new Date(message.sentDateTime).getTime() : 0;
+    const timeGapExceeded =
+      lastMessage &&
+      currentTime > 0 &&
+      lastTime > 0 &&
+      currentTime - lastTime > CONVERSATION_WINDOW_MAX_TIME_GAP_MS;
+
+    if (
+      currentWindow.length >= CONVERSATION_WINDOW_MESSAGE_TARGET ||
+      timeGapExceeded
+    ) {
+      pushConversationWindow(currentWindow, windows);
+      currentWindow = [];
+    }
+
+    currentWindow.push(message);
+  }
+
+  pushConversationWindow(currentWindow, windows);
+  return windows;
+}
+
+function formatConversationWindowText(messages = []) {
+  return messages
+    .map((message) => {
+      const timestamp = message?.sentDateTime?.toISOString?.() || '';
+      const sender = String(message?.fromDisplayName || message?.fromEmail || 'Unknown').trim();
+      const text = getChunkableMessageText(message);
+      return `[${timestamp}] ${sender}: ${text}`.trim();
+    })
+    .join('\n');
+}
+
 async function projectTeamsConversationToMemory({
   userId,
   tenantId,
@@ -186,11 +245,18 @@ async function projectTeamsConversationToMemory({
 
   const chunks = [];
   let skippedEmptyTextMessages = 0;
+  const skippedReasonCounts = {};
+  let messageChunkCount = 0;
 
   for (const [index, message] of sortedMessages.entries()) {
-    const text = String(message?.bodyText || message?.summary || message?.subject || '').trim();
-    if (!text) {
+    const text = getChunkableMessageText(message);
+    const messageIsChunkable =
+      typeof message?.isChunkable === 'boolean' ? Boolean(message.isChunkable) : Boolean(text);
+
+    if (!messageIsChunkable || !text) {
       skippedEmptyTextMessages += 1;
+      const skipReason = String(message?.skipChunkReason || 'empty_normalized_text').trim() || 'empty_normalized_text';
+      skippedReasonCounts[skipReason] = (skippedReasonCounts[skipReason] || 0) + 1;
       continue;
     }
 
@@ -240,13 +306,76 @@ async function projectTeamsConversationToMemory({
         fromDisplayName: message.fromDisplayName || '',
         fromEmail: message.fromEmail || '',
         fromUserId: message.fromUserId || '',
+        subject: message.subject || '',
         webUrl: message.webUrl || '',
         importance: message.importance || '',
         messageType: message.messageType || '',
         attachmentCount: Array.isArray(message.attachments) ? message.attachments.length : 0,
         mentionCount: Array.isArray(message.mentions) ? message.mentions.length : 0,
+        chatType: conversation.chatType || '',
       },
     });
+    messageChunkCount += 1;
+  }
+
+  const conversationWindows = buildConversationWindows(sortedMessages);
+  let conversationWindowChunkCount = 0;
+  for (const [windowIndex, windowMessages] of conversationWindows.entries()) {
+    const windowText = formatConversationWindowText(windowMessages);
+    if (!windowText.trim()) {
+      continue;
+    }
+
+    const windowEntityIds = uniqueStrings([
+      conversationEntity._id.toString(),
+      ...windowMessages.flatMap((message) => {
+        const senderKey = buildPersonCanonicalKey({
+          userId: message?.fromUserId,
+          email: message?.fromEmail,
+          displayName: message?.fromDisplayName,
+        });
+        const senderEntity = participantEntityMap.get(senderKey);
+        return senderEntity?._id?.toString?.() ? [senderEntity._id.toString()] : [];
+      }),
+    ]);
+    const senderLabels = uniqueStrings(
+      windowMessages.map((message) => message?.fromDisplayName || message?.fromEmail),
+    );
+    const firstMessage = windowMessages[0];
+    const lastMessage = windowMessages[windowMessages.length - 1];
+
+    chunks.push({
+      user: userId,
+      tenantId,
+      visibilityScope,
+      source: 'teams',
+      sourceRecordType: 'teams_chat',
+      sourceRecordId: conversation.graphChatId,
+      sourceParentRecordId: conversation.graphChatId,
+      parentEntityId: conversationEntity._id.toString(),
+      entityIds: windowEntityIds,
+      chunkType: 'conversation_window',
+      title: `${formatConversationTitle(conversation)} window ${windowIndex + 1}`.trim(),
+      text: windowText,
+      summary: `${windowMessages.length} messages from ${senderLabels.slice(0, 4).join(', ')}`.trim(),
+      orderIndex: windowIndex,
+      sourceTimestamp: lastMessage?.sentDateTime || firstMessage?.sentDateTime,
+      metadata: {
+        graphChatId: conversation.graphChatId,
+        chatType: conversation.chatType || '',
+        participants: uniqueStrings(
+          (conversation?.participants || []).map(
+            (participant) => participant?.displayName || participant?.email,
+          ),
+        ),
+        senders: senderLabels,
+        firstMessageAt: firstMessage?.sentDateTime || null,
+        lastMessageAt: lastMessage?.sentDateTime || null,
+        messageIds: windowMessages.map((message) => message.graphMessageId).filter(Boolean),
+        includedMessageCount: windowMessages.length,
+      },
+    });
+    conversationWindowChunkCount += 1;
   }
 
   await Promise.all([
@@ -258,10 +387,18 @@ async function projectTeamsConversationToMemory({
     entityCount: 1 + participantEntityMap.size,
     relationshipCount: relationships.length,
     chunkCount: chunks.length,
+    messageChunkCount,
+    conversationWindowChunkCount,
     totalMessages: sortedMessages.length,
-    chunkableMessageCount: chunks.length,
+    chunkableMessageCount: messageChunkCount,
     skippedEmptyTextMessages,
     participantEntityCount: participantEntityMap.size,
+    skippedReasonCounts,
+    zeroChunkReasonCounts:
+      messageChunkCount === 0 && conversationWindowChunkCount === 0 ? skippedReasonCounts : {},
+    searchable: chunks.length > 0,
+    chatType: conversation?.chatType || 'unknown',
+    participantDegraded: Boolean(conversation?.participantDegraded),
   };
 }
 
@@ -304,6 +441,16 @@ async function projectTeamsArchiveSyncToMemory({
     let totalMessagesLoaded = 0;
     let totalChunkableMessages = 0;
     let totalSkippedEmptyTextMessages = 0;
+    let messageChunkCount = 0;
+    let conversationWindowChunkCount = 0;
+    let participantDegradedConversationCount = 0;
+    const zeroChunkReasonCounts = {};
+    const searchableConversationCountsByChatType = {
+      oneOnOne: 0,
+      group: 0,
+      meeting: 0,
+      unknown: 0,
+    };
 
     for (const graphChatId of graphChatIds) {
       const [conversation] = await db.findTeamsArchiveConversations({ user: userId, graphChatId }, { limit: 1 });
@@ -338,9 +485,18 @@ async function projectTeamsArchiveSyncToMemory({
       entityCount += result.entityCount;
       relationshipCount += result.relationshipCount;
       chunkCount += result.chunkCount;
+      messageChunkCount += result.messageChunkCount || 0;
+      conversationWindowChunkCount += result.conversationWindowChunkCount || 0;
       totalMessagesLoaded += result.totalMessages || 0;
       totalChunkableMessages += result.chunkableMessageCount || 0;
       totalSkippedEmptyTextMessages += result.skippedEmptyTextMessages || 0;
+      if (result.participantDegraded) {
+        participantDegradedConversationCount += 1;
+      }
+      if (result.searchable) {
+        searchableConversationCountsByChatType[result.chatType] =
+          (searchableConversationCountsByChatType[result.chatType] || 0) + 1;
+      }
 
       if ((result.totalMessages || 0) === 0) {
         zeroMessageConversationCount += 1;
@@ -348,6 +504,9 @@ async function projectTeamsArchiveSyncToMemory({
 
       if ((result.chunkCount || 0) === 0) {
         zeroChunkConversationCount += 1;
+        for (const [reason, count] of Object.entries(result.zeroChunkReasonCounts || {})) {
+          zeroChunkReasonCounts[reason] = (zeroChunkReasonCounts[reason] || 0) + Number(count || 0);
+        }
         logger.info('[EnterpriseMemory] Teams projection produced zero searchable chunks for conversation', {
           userId,
           syncJobId,
@@ -357,6 +516,7 @@ async function projectTeamsArchiveSyncToMemory({
           archivedMessageCount,
           loadedMessageCount: result.totalMessages || 0,
           skippedEmptyTextMessages: result.skippedEmptyTextMessages || 0,
+          zeroChunkReasonCounts: result.zeroChunkReasonCounts || {},
           participantCount: Array.isArray(conversation?.participants)
             ? conversation.participants.length
             : 0,
@@ -385,6 +545,11 @@ async function projectTeamsArchiveSyncToMemory({
       totalChunkableMessages,
       totalSkippedEmptyTextMessages,
       projectionMessageFetchLimit: PROJECTION_MESSAGE_FETCH_LIMIT,
+      zeroChunkReasonCounts,
+      searchableConversationCountsByChatType,
+      participantDegradedConversationCount,
+      messageChunkCount,
+      conversationWindowChunkCount,
     };
 
     const updatedJob = await db.updateEnterpriseMemoryJob(

@@ -172,16 +172,16 @@ async function searchTeamsMemoryChunks(user, options = {}) {
   const { phraseRegex, termRegexes, clauses: topicChunkClauses } = buildChunkSearchClauses(topic);
 
   let matchedConversationIds = [];
-  if (normalizedChatType !== 'any' || topic || participantClauses.length > 0) {
+  const shouldPrefilterConversations =
+    normalizedChatType !== 'any' || participantClauses.length > 0;
+
+  if (shouldPrefilterConversations) {
     const conversationFilter = {
       user: userId,
       ...(normalizedChatType !== 'any' ? { chatType: normalizedChatType } : {}),
-      ...((topic || participantClauses.length > 0)
+      ...(participantClauses.length > 0
         ? {
-            $and: [
-              ...(topic ? [{ topic: phraseRegex || termRegexes[0] || buildSearchRegex(topic) }] : []),
-              ...participantClauses,
-            ],
+            $and: [...participantClauses],
           }
         : {}),
     };
@@ -202,7 +202,13 @@ async function searchTeamsMemoryChunks(user, options = {}) {
         daysBack,
         participants: toArray(options.participants).filter(Boolean),
         guidance:
-          'No matching memory chunks were found. Consider broadening the topic, participants, or timeframe.',
+          'No matching memory chunks were found. Consider broadening the participants, chat type, or timeframe.',
+        trace: {
+          backend: 'enterprise_memory',
+          conversationPrefilterApplied: true,
+          topicPrefilterApplied: false,
+          matchedConversationCount: 0,
+        },
         results: [],
       };
     }
@@ -253,6 +259,12 @@ async function searchTeamsMemoryChunks(user, options = {}) {
     participants: toArray(options.participants).filter(Boolean),
     guidance:
       'These are compact enterprise-memory previews. If one conversation stands out, summarize that conversation before expanding to a bounded message window.',
+    trace: {
+      backend: 'enterprise_memory',
+      conversationPrefilterApplied: shouldPrefilterConversations,
+      topicPrefilterApplied: false,
+      matchedConversationCount: matchedConversationIds.length,
+    },
     resultCount: chunks.length,
     results: chunks.map((chunk) => {
       const conversation = conversationMap.get(chunk.sourceParentRecordId);

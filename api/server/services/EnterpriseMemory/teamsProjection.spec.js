@@ -69,6 +69,8 @@ describe('teamsProjection', () => {
           bodyText: '',
           summary: '',
           subject: '',
+          isChunkable: false,
+          skipChunkReason: 'system_like_message',
           mentions: [],
           attachments: [],
           sentDateTime: new Date('2026-05-01T00:00:00.000Z'),
@@ -79,6 +81,8 @@ describe('teamsProjection', () => {
           bodyText: '',
           summary: '',
           subject: '',
+          isChunkable: false,
+          skipChunkReason: 'empty_normalized_text',
           mentions: [],
           attachments: [],
           sentDateTime: new Date('2026-05-02T00:00:00.000Z'),
@@ -89,6 +93,8 @@ describe('teamsProjection', () => {
           bodyText: '',
           summary: '',
           subject: '',
+          isChunkable: false,
+          skipChunkReason: 'empty_normalized_text',
           mentions: [],
           attachments: [],
           sentDateTime: new Date('2026-05-03T00:00:00.000Z'),
@@ -115,6 +121,17 @@ describe('teamsProjection', () => {
         totalChunkableMessages: 0,
         totalSkippedEmptyTextMessages: 3,
         projectionMessageFetchLimit: 5000,
+        zeroChunkReasonCounts: {
+          system_like_message: 1,
+          empty_normalized_text: 2,
+        },
+        searchableConversationCountsByChatType: {
+          oneOnOne: 0,
+          group: 0,
+          meeting: 0,
+          unknown: 0,
+        },
+        participantDegradedConversationCount: 0,
       },
     });
 
@@ -126,6 +143,9 @@ describe('teamsProjection', () => {
           projectionDiagnostics: expect.objectContaining({
             missingConversationCount: 1,
             zeroChunkConversationCount: 2,
+            zeroChunkReasonCounts: expect.objectContaining({
+              empty_normalized_text: 2,
+            }),
           }),
         }),
       }),
@@ -143,8 +163,102 @@ describe('teamsProjection', () => {
         projectionDiagnostics: expect.objectContaining({
           zeroChunkConversationCount: 2,
           totalSkippedEmptyTextMessages: 3,
+          zeroChunkReasonCounts: expect.objectContaining({
+            system_like_message: 1,
+            empty_normalized_text: 2,
+          }),
         }),
       }),
     );
+  });
+
+  it('creates message and conversation_window chunks and tracks searchable chat-type diagnostics', async () => {
+    db.findTeamsArchiveConversations.mockResolvedValue([
+      {
+        graphChatId: 'chat-windowed',
+        chatType: 'oneOnOne',
+        topic: 'Windowed chat',
+        messageCount: 3,
+        participantDegraded: true,
+        participants: [{ displayName: 'Manager', email: 'manager@example.com', source: 'graph' }],
+      },
+    ]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        graphMessageId: 'm-1',
+        graphChatId: 'chat-windowed',
+        fromDisplayName: 'Manager',
+        fromEmail: 'manager@example.com',
+        fromUserId: 'manager-1',
+        bodyText: 'First message',
+        bodyPreview: 'First message',
+        isChunkable: true,
+        mentions: [],
+        attachments: [],
+        sentDateTime: new Date('2026-05-01T00:00:00.000Z'),
+      },
+      {
+        graphMessageId: 'm-2',
+        graphChatId: 'chat-windowed',
+        fromDisplayName: 'Test User',
+        fromEmail: 'user@example.com',
+        fromUserId: 'user-1',
+        bodyText: 'Second message',
+        bodyPreview: 'Second message',
+        isChunkable: true,
+        mentions: [],
+        attachments: [],
+        sentDateTime: new Date('2026-05-01T00:10:00.000Z'),
+      },
+      {
+        graphMessageId: 'm-3',
+        graphChatId: 'chat-windowed',
+        fromDisplayName: 'Manager',
+        fromEmail: 'manager@example.com',
+        fromUserId: 'manager-1',
+        bodyText: 'Third message',
+        bodyPreview: 'Third message',
+        isChunkable: true,
+        mentions: [],
+        attachments: [],
+        sentDateTime: new Date('2026-05-01T00:20:00.000Z'),
+      },
+    ]);
+
+    const result = await projectTeamsArchiveSyncToMemory({
+      userId: 'user-1',
+      tenantId: 'tenant-1',
+      syncJobId: 'sync-2',
+      graphChatIds: ['chat-windowed'],
+    });
+
+    expect(result).toMatchObject({
+      status: 'success',
+      projectedConversationCount: 1,
+      chunkCount: 4,
+      projectionDiagnostics: {
+        searchableConversationCountsByChatType: {
+          oneOnOne: 1,
+          group: 0,
+          meeting: 0,
+          unknown: 0,
+        },
+        participantDegradedConversationCount: 1,
+      },
+    });
+
+    const chunkRecords = db.bulkUpsertEnterpriseMemoryChunks.mock.calls[0][0];
+    expect(chunkRecords.filter((record) => record.chunkType === 'message')).toHaveLength(3);
+    expect(chunkRecords.filter((record) => record.chunkType === 'conversation_window')).toHaveLength(1);
+    expect(chunkRecords.find((record) => record.chunkType === 'conversation_window')).toMatchObject({
+      sourceRecordType: 'teams_chat',
+      sourceRecordId: 'chat-windowed',
+      sourceParentRecordId: 'chat-windowed',
+      metadata: expect.objectContaining({
+        chatType: 'oneOnOne',
+        includedMessageCount: 3,
+        messageIds: ['m-1', 'm-2', 'm-3'],
+      }),
+    });
   });
 });

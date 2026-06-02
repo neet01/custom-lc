@@ -6,6 +6,8 @@ export interface TeamsArchiveParticipantData {
   displayName?: string;
   email?: string;
   userId?: string;
+  source?: 'graph' | 'inferred_from_messages' | 'inferred_from_mentions' | 'mixed' | 'unknown';
+  confidence?: 'high' | 'medium' | 'low';
 }
 
 export interface TeamsArchiveConversationData {
@@ -27,6 +29,10 @@ export interface TeamsArchiveConversationData {
   lastSyncedAt?: Date;
   sourceUpdatedAt?: Date;
   messageCount?: number;
+  participantMetadataSource?: 'graph' | 'inferred_from_messages' | 'inferred_from_mentions' | 'mixed' | 'unknown';
+  participantConfidence?: 'high' | 'medium' | 'low';
+  participantDegraded?: boolean;
+  participantStats?: Record<string, unknown>;
 }
 
 export interface TeamsArchiveAttachmentData {
@@ -65,6 +71,10 @@ export interface TeamsArchiveMessageData {
   lastModifiedDateTime?: Date;
   deletedDateTime?: Date;
   etag?: string;
+  normalizedTextLength?: number;
+  isSystemLikeMessage?: boolean;
+  isChunkable?: boolean;
+  skipChunkReason?: string;
 }
 
 export interface TeamsArchiveSyncJobData {

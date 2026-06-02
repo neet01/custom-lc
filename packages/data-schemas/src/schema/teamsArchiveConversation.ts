@@ -4,6 +4,8 @@ export interface ITeamsArchiveParticipant {
   displayName?: string;
   email?: string;
   userId?: string;
+  source?: 'graph' | 'inferred_from_messages' | 'inferred_from_mentions' | 'mixed' | 'unknown';
+  confidence?: 'high' | 'medium' | 'low';
 }
 
 export interface ITeamsArchiveConversation extends Document {
@@ -25,6 +27,10 @@ export interface ITeamsArchiveConversation extends Document {
   lastSyncedAt?: Date;
   sourceUpdatedAt?: Date;
   messageCount?: number;
+  participantMetadataSource?: 'graph' | 'inferred_from_messages' | 'inferred_from_mentions' | 'mixed' | 'unknown';
+  participantConfidence?: 'high' | 'medium' | 'low';
+  participantDegraded?: boolean;
+  participantStats?: Record<string, unknown>;
   tenantId?: string;
   createdAt?: Date;
   updatedAt?: Date;
@@ -35,6 +41,16 @@ const participantSchema = new Schema<ITeamsArchiveParticipant>(
     displayName: { type: String, maxlength: 256 },
     email: { type: String, maxlength: 320 },
     userId: { type: String, maxlength: 128 },
+    source: {
+      type: String,
+      enum: ['graph', 'inferred_from_messages', 'inferred_from_mentions', 'mixed', 'unknown'],
+      default: 'unknown',
+    },
+    confidence: {
+      type: String,
+      enum: ['high', 'medium', 'low'],
+      default: 'low',
+    },
   },
   { _id: false },
 );
@@ -119,6 +135,26 @@ const teamsArchiveConversationSchema = new Schema<ITeamsArchiveConversation>(
       type: Number,
       default: 0,
     },
+    participantMetadataSource: {
+      type: String,
+      enum: ['graph', 'inferred_from_messages', 'inferred_from_mentions', 'mixed', 'unknown'],
+      default: 'unknown',
+      index: true,
+    },
+    participantConfidence: {
+      type: String,
+      enum: ['high', 'medium', 'low'],
+      default: 'low',
+      index: true,
+    },
+    participantDegraded: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    participantStats: {
+      type: Schema.Types.Mixed,
+    },
     tenantId: {
       type: String,
       index: true,
@@ -133,6 +169,7 @@ teamsArchiveConversationSchema.index({ user: 1, graphChatId: 1 }, { unique: true
 teamsArchiveConversationSchema.index({ user: 1, lastMessageAt: -1 });
 teamsArchiveConversationSchema.index({ user: 1, syncStatus: 1, sourceUpdatedAt: -1, updatedAt: -1 });
 teamsArchiveConversationSchema.index({ user: 1, sourceLastMessageAt: -1, updatedAt: -1 });
+teamsArchiveConversationSchema.index({ user: 1, participantDegraded: 1, updatedAt: -1 });
 teamsArchiveConversationSchema.index({ tenantId: 1, lastMessageAt: -1 });
 
 export default teamsArchiveConversationSchema;

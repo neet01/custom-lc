@@ -98,7 +98,11 @@
     "migrate:prompt-permissions:batch": "node config/migrate-prompt-permissions.js --batch-size=50",
     "migrate:usage-records": "node config/migrate-usage-records.js",
     "migrate:issue-reports": "node config/migrate-issue-reports.js",
-    "migrate:outlook-audit": "node config/migrate-outlook-audit.js"
+    "migrate:outlook-audit": "node config/migrate-outlook-audit.js",
+    "reconcile:cortex-indexes:dry-run": "node config/reconcile-cortex-indexes.js --dry-run",
+    "reconcile:cortex-indexes": "node config/reconcile-cortex-indexes.js --apply",
+    "verify:cortex-indexes": "node config/reconcile-cortex-indexes.js --verify",
+    "explain:cortex-indexes": "node config/reconcile-cortex-indexes.js --explain"
   },
   "repository": {
     "type": "git",

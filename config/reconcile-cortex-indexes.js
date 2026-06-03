@@ -24,9 +24,24 @@ const INDEXES = {
       reason: 'Recent chat message reads',
     },
     {
+      name: 'teams_message_by_chat_sent_created_desc',
+      key: { user: 1, graphChatId: 1, sentDateTime: -1, createdAt: -1 },
+      reason: 'Recent chat message reads with stable tie-break ordering',
+    },
+    {
       name: 'teams_message_by_sender_sent_desc',
       key: { user: 1, fromUserId: 1, sentDateTime: -1 },
       reason: 'Sender-scoped archive search',
+    },
+    {
+      name: 'teams_message_by_sender_email_sent_desc',
+      key: { user: 1, fromEmail: 1, sentDateTime: -1 },
+      reason: 'Sender-scoped archive fallback by email',
+    },
+    {
+      name: 'teams_message_by_sender_display_sent_desc',
+      key: { user: 1, fromDisplayName: 1, sentDateTime: -1 },
+      reason: 'Sender-scoped archive fallback by display name',
     },
     {
       name: 'teams_message_by_user_sent_desc',
@@ -266,6 +281,10 @@ function keysEqual(left, right) {
   return stableStringify(left) === stableStringify(right);
 }
 
+function isTextIndexSpec(indexSpec) {
+  return Object.values(indexSpec.key).some((direction) => direction === 'text');
+}
+
 function normalizeIndexForOutput(index) {
   return {
     name: index.name,
@@ -275,6 +294,12 @@ function normalizeIndexForOutput(index) {
 }
 
 function findExistingIndex(currentIndexes, target) {
+  if (isTextIndexSpec(target)) {
+    // MongoDB stores text index keys internally as {_fts: 'text', _ftsx: 1},
+    // so matching by the requested key shape produces false negatives.
+    return currentIndexes.find((index) => index.name === target.name || keysEqual(index.key, target.key));
+  }
+
   return currentIndexes.find((index) => keysEqual(index.key, target.key));
 }
 
@@ -510,6 +535,31 @@ async function runExplainChecks(db) {
       { user: sampleMessage.user, graphChatId: sampleMessage.graphChatId },
       { sort: { sentDateTime: 1, createdAt: 1 } },
     );
+
+    await explainFind(
+      messages,
+      'Teams recent message lookup by user + graphChatId sorted by sentDateTime desc',
+      { user: sampleMessage.user, graphChatId: sampleMessage.graphChatId },
+      { sort: { sentDateTime: -1, createdAt: -1 } },
+    );
+
+    if (sampleMessage.fromEmail) {
+      await explainFind(
+        messages,
+        'Teams sender fallback lookup by user + fromEmail sorted by sentDateTime desc',
+        { user: sampleMessage.user, fromEmail: sampleMessage.fromEmail },
+        { sort: { sentDateTime: -1 } },
+      );
+    }
+
+    if (sampleMessage.fromDisplayName) {
+      await explainFind(
+        messages,
+        'Teams sender fallback lookup by user + fromDisplayName sorted by sentDateTime desc',
+        { user: sampleMessage.user, fromDisplayName: sampleMessage.fromDisplayName },
+        { sort: { sentDateTime: -1 } },
+      );
+    }
   } else {
     console.log('[SKIP] No sample Teams archive message found.');
   }

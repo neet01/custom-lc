@@ -304,6 +304,7 @@ function createTeamsArchiveTool({ req }) {
           await TeamsArchiveService.advancedSearchMessages(user, {
             query,
             topic,
+            chatId,
             limit: resolvedLimit,
             offset,
             daysBack,

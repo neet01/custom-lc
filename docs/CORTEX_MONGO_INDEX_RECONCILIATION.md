@@ -106,6 +106,9 @@ The high-risk unique indexes are:
 The script runs `explain("executionStats")` for:
 
 - Teams message lookup by `user + graphChatId`, sorted by `sentDateTime`
+- Teams recent message lookup by `user + graphChatId`, sorted by `sentDateTime` descending
+- Teams sender fallback lookup by `user + fromEmail`, sorted by `sentDateTime` descending
+- Teams sender fallback lookup by `user + fromDisplayName`, sorted by `sentDateTime` descending
 - Teams conversation lookup by `user + graphChatId`
 - Enterprise memory chunk lookup by `user + source + sourceRecordType`
 - Enterprise memory chunk lookup by `user + source + metadata.chatType + chunkType`
@@ -117,4 +120,6 @@ Healthy output should show `IXSCAN` stages and low `totalDocsExamined`. If outpu
 
 - Index creation uses `background: true` where supported.
 - The script is idempotent and skips indexes that already exist with the expected key and uniqueness.
+- If the script is updated with additional indexes, rerun `--dry-run`, then `--apply`; existing indexes will be skipped and only missing indexes will be created.
 - If an index exists with the same key but different uniqueness, the script prints a manual-action warning and does not modify that index.
+- MongoDB reports text indexes internally as `_fts/_ftsx`; the script verifies the configured text index by name to avoid false missing-index reports.

@@ -4,6 +4,10 @@ function toArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function looksLikeMongoObjectId(value) {
+  return /^[a-f0-9]{24}$/i.test(String(value || '').trim());
+}
+
 function clampInteger(value, fallback, { min = 1, max = 500 } = {}) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -154,6 +158,8 @@ async function searchTeamsMemoryChunks(user, options = {}) {
 
   const userId = user?.id || user?._id?.toString();
   const topic = String(options.topic || options.query || '').trim();
+  const chatId = String(options.chatId || options.graphChatId || '').trim();
+  const scopedGraphChatId = chatId && !looksLikeMongoObjectId(chatId) ? chatId : '';
   const senderScope = String(options.senderScope || 'any').trim();
   const chatType = String(options.chatType || 'any').trim();
   const sortBy = String(options.sortBy || 'recent').trim();
@@ -171,9 +177,9 @@ async function searchTeamsMemoryChunks(user, options = {}) {
   const participantClauses = buildParticipantConversationClauses(options.participants);
   const { phraseRegex, termRegexes, clauses: topicChunkClauses } = buildChunkSearchClauses(topic);
 
-  let matchedConversationIds = [];
+  let matchedConversationIds = scopedGraphChatId ? [scopedGraphChatId] : [];
   const shouldPrefilterConversations =
-    normalizedChatType !== 'any' || participantClauses.length > 0;
+    !scopedGraphChatId && (normalizedChatType !== 'any' || participantClauses.length > 0);
 
   if (shouldPrefilterConversations) {
     const conversationFilter = {
@@ -253,6 +259,7 @@ async function searchTeamsMemoryChunks(user, options = {}) {
   return {
     retrievalMode: 'enterprise_memory',
     topic: topic || undefined,
+    ...(scopedGraphChatId ? { chatId, graphChatId: scopedGraphChatId } : {}),
     senderScope: normalizedSenderScope,
     chatType: normalizedChatType,
     daysBack,
@@ -262,6 +269,7 @@ async function searchTeamsMemoryChunks(user, options = {}) {
     trace: {
       backend: 'enterprise_memory',
       conversationPrefilterApplied: shouldPrefilterConversations,
+      chatIdScoped: Boolean(scopedGraphChatId),
       topicPrefilterApplied: false,
       matchedConversationCount: matchedConversationIds.length,
     },

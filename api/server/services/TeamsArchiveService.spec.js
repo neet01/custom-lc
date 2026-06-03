@@ -1259,6 +1259,121 @@ describe('TeamsArchiveService', () => {
     });
   });
 
+  it('resolves Graph chat ids without attempting unsafe ObjectId conversation lookup', async () => {
+    const graphChatId = '19:meeting_YTY0ZWU3NTEtNWJjNi00NmNkLTgxODAtZjdjMmQxZTEzZDQz@thread.v2';
+    const conversation = {
+      _id: 'conversation-object-id',
+      graphChatId,
+      chatType: 'meeting',
+      topic: 'IT Eng Standup',
+      participants: [{ displayName: 'Test User', email: 'user@example.com' }],
+    };
+
+    db.findTeamsArchiveConversations.mockResolvedValue([conversation]);
+    db.countTeamsArchiveMessages.mockResolvedValue(1);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'meeting-message-1',
+        graphMessageId: 'meeting-message-graph-1',
+        graphChatId,
+        fromUserId: 'entra-user-1',
+        fromDisplayName: 'Test User',
+        fromEmail: 'user@example.com',
+        bodyPreview: 'Large meeting update',
+        bodyText: 'Large meeting update',
+        sentDateTime: new Date('2026-05-20T12:00:00.000Z'),
+      },
+    ]);
+
+    const result = await TeamsArchiveService.getConversationDossier(user, {
+      chatId: graphChatId,
+      topic: 'update',
+      limit: 4,
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_dossier',
+      resolved: true,
+      chat: {
+        graphChatId,
+        chatType: 'meeting',
+      },
+      matchedMessages: 1,
+    });
+    expect(db.findTeamsArchiveConversations).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: graphChatId,
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('scopes advanced archive search by Graph chat id when chatId is provided', async () => {
+    const graphChatId = '19:meeting_YTY0ZWU3NTEtNWJjNi00NmNkLTgxODAtZjdjMmQxZTEzZDQz@thread.v2';
+    searchTeamsMemoryChunks.mockResolvedValue({
+      retrievalMode: 'enterprise_memory',
+      results: [],
+    });
+    db.findTeamsArchiveConversations.mockResolvedValue([
+      {
+        _id: 'conversation-object-id',
+        graphChatId,
+        chatType: 'meeting',
+        topic: 'IT Eng Standup',
+        participants: [{ displayName: 'Test User', email: 'user@example.com' }],
+      },
+    ]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'meeting-message-1',
+        graphMessageId: 'meeting-message-graph-1',
+        graphChatId,
+        fromUserId: 'entra-user-1',
+        fromDisplayName: 'Test User',
+        fromEmail: 'user@example.com',
+        bodyPreview: 'Large meeting update',
+        bodyText: 'Large meeting update about the telemetry replay work',
+        sentDateTime: new Date('2026-05-20T12:00:00.000Z'),
+      },
+    ]);
+
+    const result = await TeamsArchiveService.advancedSearchMessages(user, {
+      chatId: graphChatId,
+      topic: 'telemetry replay',
+      senderScope: 'me',
+      chatType: 'meeting',
+      limit: 4,
+    });
+
+    expect(db.findTeamsArchiveMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: 'user-1',
+        graphChatId,
+        $or: expect.any(Array),
+        $and: expect.any(Array),
+      }),
+      expect.objectContaining({
+        limit: 12,
+      }),
+    );
+    expect(db.findTeamsArchiveConversations).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: 'user-1',
+        chatType: 'meeting',
+      }),
+      expect.anything(),
+    );
+    expect(result).toMatchObject({
+      retrievalMode: 'advanced_message_previews',
+      chatId: graphChatId,
+      graphChatId,
+      resultCount: 1,
+      trace: expect.objectContaining({
+        archiveResultCount: 1,
+      }),
+    });
+  });
+
   it('returns a bounded message window around the anchor message', async () => {
     db.findTeamsArchiveConversations
       .mockResolvedValueOnce([{ graphChatId: 'chat-window' }])

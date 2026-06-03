@@ -334,6 +334,10 @@ function toArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function looksLikeMongoObjectId(value) {
+  return /^[a-f0-9]{24}$/i.test(String(value || '').trim());
+}
+
 function buildParticipantIdentityKey(participant = {}) {
   const userId = String(participant?.userId || participant?.mentionedUserId || '')
     .trim()
@@ -1370,6 +1374,7 @@ async function buildMessageBodyEscalations(user, options = {}, results = []) {
 async function runArchiveAdvancedMessageSearch(user, options = {}) {
   const userId = user?.id || user?._id?.toString();
   const topic = String(options.topic || options.query || '').trim();
+  const chatId = String(options.chatId || '').trim();
   const senderScope = String(options.senderScope || 'any').trim();
   const chatType = String(options.chatType || 'any').trim();
   const sortBy = String(options.sortBy || 'recent').trim();
@@ -1386,8 +1391,40 @@ async function runArchiveAdvancedMessageSearch(user, options = {}) {
   const normalizedSenderScope = validSenderScopes.has(senderScope) ? senderScope : 'any';
   const normalizedChatType = validChatTypes.has(chatType) ? chatType : 'any';
   const participantClauses = buildParticipantConversationClauses(options.participants);
+  const resolvedGraphChatId = chatId
+    ? await resolveConversationGraphChatId(userId, chatId)
+    : undefined;
   const explicitConversationFilters =
-    normalizedChatType !== 'any' || participantClauses.length > 0;
+    !resolvedGraphChatId && (normalizedChatType !== 'any' || participantClauses.length > 0);
+
+  if (chatId && !resolvedGraphChatId) {
+    return {
+      retrievalMode: 'advanced_message_previews',
+      topic: topic || undefined,
+      chatId,
+      graphChatId: null,
+      senderScope: normalizedSenderScope,
+      chatType: normalizedChatType,
+      daysBack,
+      participants: toArray(options.participants).filter(Boolean),
+      guidance: 'No archived Teams chat was found for the requested chat id.',
+      resolvedConversation: undefined,
+      resultCount: 0,
+      results: [],
+      trace: {
+        archiveSearched: true,
+        archiveResultCount: 0,
+        conversationFiltersApplied: {
+          chatId: true,
+          chatType: normalizedChatType !== 'any',
+          participants: participantClauses.length > 0,
+          daysBack: Boolean(daysBack),
+        },
+        topicGateApplied: false,
+        matchedConversationCount: 0,
+      },
+    };
+  }
 
   let matchedConversations = [];
   let matchedConversationIds = [];
@@ -1447,7 +1484,11 @@ async function runArchiveAdvancedMessageSearch(user, options = {}) {
   const { clauses: topicClauses } = buildTopicSearchClauses(topic);
   const messageFilter = {
     user: userId,
-    ...(matchedConversationIds.length > 0 ? { graphChatId: { $in: matchedConversationIds } } : {}),
+    ...(resolvedGraphChatId
+      ? { graphChatId: resolvedGraphChatId }
+      : matchedConversationIds.length > 0
+        ? { graphChatId: { $in: matchedConversationIds } }
+        : {}),
     ...(daysBack ? { sentDateTime: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } } : {}),
     ...senderFilter,
     ...(topicClauses.length > 0 ? { $and: topicClauses } : {}),
@@ -1484,6 +1525,7 @@ async function runArchiveAdvancedMessageSearch(user, options = {}) {
     topic: topic || undefined,
     senderScope: normalizedSenderScope,
     chatType: normalizedChatType,
+    ...(resolvedGraphChatId ? { chatId, graphChatId: resolvedGraphChatId } : {}),
     daysBack,
     participants: toArray(options.participants).filter(Boolean),
     guidance:
@@ -1501,6 +1543,7 @@ async function runArchiveAdvancedMessageSearch(user, options = {}) {
       archiveSearched: true,
       archiveResultCount: messages.length,
       conversationFiltersApplied: {
+        chatId: Boolean(resolvedGraphChatId),
         chatType: normalizedChatType !== 'any',
         participants: participantClauses.length > 0,
         daysBack: Boolean(daysBack),
@@ -3237,6 +3280,10 @@ async function resolveConversationGraphChatId(userId, chatId) {
     return directMatches[0].graphChatId;
   }
 
+  if (!looksLikeMongoObjectId(normalizedChatId)) {
+    return null;
+  }
+
   const archivedMatches = await db.findTeamsArchiveConversations(
     { user: userId, _id: normalizedChatId },
     { limit: 1 },
@@ -3258,6 +3305,10 @@ async function resolveMessageRecord(userId, messageId) {
 
   if (graphMatches[0]) {
     return graphMatches[0];
+  }
+
+  if (!looksLikeMongoObjectId(normalizedMessageId)) {
+    return null;
   }
 
   const archivedMatches = await db.findTeamsArchiveMessages(
@@ -3825,6 +3876,8 @@ async function advancedSearchMessages(user, options = {}) {
   return {
     retrievalMode: 'advanced_message_previews',
     topic: topic || undefined,
+    ...(archiveResult?.chatId ? { chatId: archiveResult.chatId } : {}),
+    ...(archiveResult?.graphChatId ? { graphChatId: archiveResult.graphChatId } : {}),
     senderScope,
     chatType,
     daysBack,

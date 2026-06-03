@@ -1079,9 +1079,7 @@ describe('TeamsArchiveService', () => {
       expect.objectContaining({
         user: 'user-1',
         graphChatId: 'meeting-recent',
-        isSystemLikeMessage: { $ne: true },
-        isChunkable: true,
-        normalizedTextLength: { $gt: 0 },
+        $and: expect.any(Array),
       }),
       expect.objectContaining({
         sort: { sentDateTime: -1, createdAt: -1 },
@@ -1099,6 +1097,49 @@ describe('TeamsArchiveService', () => {
       'g-recent-2',
       'g-recent-1',
     ]);
+  });
+
+  it('includes canonical trace metadata for explicit graphChatId lookups', async () => {
+    const conversation = {
+      _id: 'conv-trace',
+      graphChatId: 'meeting-trace',
+      chatType: 'meeting',
+      topic: 'Traceable meeting',
+      lastMeaningfulMessageAt: new Date('2026-06-02T10:00:00.000Z'),
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([conversation])
+      .mockResolvedValueOnce([conversation]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'trace-msg',
+        graphMessageId: 'g-trace',
+        graphChatId: 'meeting-trace',
+        bodyPreview: 'Traceable update',
+        sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+        isChunkable: true,
+        normalizedTextLength: 16,
+        isSystemLikeMessage: false,
+      },
+    ]);
+    db.countTeamsArchiveMessages.mockResolvedValue(0);
+
+    const result = await TeamsArchiveService.conversationRecentMessages(user, {
+      chatId: 'meeting-trace',
+      priorGraphChatId: 'meeting-trace',
+      limit: 1,
+    });
+
+    expect(result.trace).toMatchObject({
+      inputChatId: 'meeting-trace',
+      resolvedGraphChatId: 'meeting-trace',
+      resolvedArchiveConversationId: 'conv-trace',
+      selectedBy: 'graphChatId',
+      priorGraphChatId: 'meeting-trace',
+      identityChanged: false,
+      candidateCount: 1,
+      candidateGraphChatIds: ['meeting-trace'],
+    });
   });
 
   it('uses prior graphChatId for follow-up dossier requests instead of rediscovering by title', async () => {
@@ -1154,6 +1195,65 @@ describe('TeamsArchiveService', () => {
     );
   });
 
+  it('uses prior graphChatId for sender follow-ups instead of switching to newer same-title meetings', async () => {
+    const priorConversation = {
+      _id: 'conv-prior-sender',
+      graphChatId: 'meeting-prior-sender',
+      chatType: 'meeting',
+      topic: 'IT Eng Standup',
+      lastMeaningfulMessageAt: new Date('2026-05-30T16:25:17.385Z'),
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([priorConversation])
+      .mockResolvedValueOnce([priorConversation]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'prior-sender-msg',
+        graphMessageId: 'g-prior-sender',
+        graphChatId: 'meeting-prior-sender',
+        fromUserId: 'sender-1',
+        fromDisplayName: 'Test User',
+        bodyPreview: 'Prior selected standup update',
+        sentDateTime: new Date('2026-05-30T16:25:17.385Z'),
+        isChunkable: true,
+        normalizedTextLength: 29,
+        isSystemLikeMessage: false,
+      },
+    ]);
+    db.countTeamsArchiveMessages.mockResolvedValue(1);
+
+    const result = await TeamsArchiveService.conversationSenderMessages(user, {
+      query: 'latest messages from it eng standup',
+      priorGraphChatId: 'meeting-prior-sender',
+      priorTopic: 'IT Eng Standup',
+      senderUserId: 'sender-1',
+      limit: 2,
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_sender_messages',
+      resolved: true,
+      graphChatId: 'meeting-prior-sender',
+      trace: {
+        selectedBy: 'priorGraphChatId',
+        priorGraphChatId: 'meeting-prior-sender',
+        resolvedGraphChatId: 'meeting-prior-sender',
+        identityChanged: false,
+      },
+      messages: [
+        expect.objectContaining({
+          graphMessageId: 'g-prior-sender',
+        }),
+      ],
+    });
+    expect(db.findTeamsArchiveConversations).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        topic: expect.any(RegExp),
+      }),
+      expect.anything(),
+    );
+  });
+
   it('warns instead of silently selecting title-only matches across recurring meetings', async () => {
     db.findTeamsArchiveConversations.mockResolvedValue([
       {
@@ -1186,6 +1286,48 @@ describe('TeamsArchiveService', () => {
         candidateCount: 2,
       },
     });
+  });
+
+  it('warns instead of silently selecting sender messages for ambiguous same-title topic lookups', async () => {
+    db.findTeamsArchiveConversations.mockResolvedValue([
+      {
+        _id: 'conv-it-a',
+        graphChatId: 'meeting-it-a',
+        chatType: 'meeting',
+        topic: 'IT Eng Standup',
+        lastMeaningfulMessageAt: new Date('2026-06-02T10:00:00.000Z'),
+      },
+      {
+        _id: 'conv-it-b',
+        graphChatId: 'meeting-it-b',
+        chatType: 'meeting',
+        topic: 'IT Eng Standup',
+        lastMeaningfulMessageAt: new Date('2026-05-30T10:00:00.000Z'),
+      },
+    ]);
+
+    const result = await TeamsArchiveService.conversationSenderMessages(user, {
+      topic: 'IT Eng Standup',
+      chatType: 'meeting',
+      senderUserId: 'sender-1',
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_sender_messages',
+      resolved: false,
+      trace: {
+        selectedBy: 'ambiguousTopicLookup',
+        identityWarning: expect.any(String),
+        candidateCount: 2,
+        candidateGraphChatIds: ['meeting-it-a', 'meeting-it-b'],
+      },
+      identityWarning: {
+        reason: 'ambiguous_topic_lookup',
+        candidateCount: 2,
+      },
+      messages: [],
+    });
+    expect(db.findTeamsArchiveMessages).not.toHaveBeenCalled();
   });
 
   it('resolves Mongo conversation ids for conversation_recent_messages', async () => {
@@ -1996,9 +2138,7 @@ describe('TeamsArchiveService', () => {
         user: 'user-1',
         graphChatId: 'chat-sender',
         $or: expect.any(Array),
-        isSystemLikeMessage: { $ne: true },
-        isChunkable: true,
-        normalizedTextLength: { $gt: 0 },
+        $and: expect.any(Array),
       }),
       expect.objectContaining({
         sort: { sentDateTime: -1, createdAt: -1 },
@@ -2020,6 +2160,271 @@ describe('TeamsArchiveService', () => {
           senderMatch: {
             matchedBy: 'fromUserId',
             confidence: 'high',
+          },
+        }),
+      ],
+    });
+  });
+
+  it('treats explicit senderUserId as person scope even when senderScope is omitted', async () => {
+    const conversation = {
+      _id: 'conv-explicit-sender',
+      graphChatId: 'chat-explicit-sender',
+      chatType: 'meeting',
+      topic: 'Explicit sender test',
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([conversation])
+      .mockResolvedValueOnce([conversation]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'explicit-sender-msg',
+        graphMessageId: 'g-explicit-sender',
+        graphChatId: 'chat-explicit-sender',
+        fromUserId: '0428da6a-d030-4547-bbbb-3ae6514fdf2b',
+        fromEmail: 'aadUser',
+        fromDisplayName: 'Praneet Kotah',
+        bodyPreview: 'Legacy identity update',
+        sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+      },
+    ]);
+    db.countTeamsArchiveMessages.mockResolvedValue(1);
+
+    const result = await TeamsArchiveService.conversationSenderMessages(user, {
+      chatId: 'chat-explicit-sender',
+      senderUserId: '0428da6a-d030-4547-bbbb-3ae6514fdf2b',
+      limit: 4,
+    });
+
+    expect(db.findTeamsArchiveMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: 'user-1',
+        graphChatId: 'chat-explicit-sender',
+        $or: [{ fromUserId: '0428da6a-d030-4547-bbbb-3ae6514fdf2b' }],
+        $and: expect.any(Array),
+      }),
+      expect.anything(),
+    );
+    expect(result).toMatchObject({
+      senderResolution: {
+        senderScope: 'person',
+        senderUserId: '0428da6a-d030-4547-bbbb-3ae6514fdf2b',
+        confidence: 'high',
+      },
+      messages: [
+        expect.objectContaining({
+          graphMessageId: 'g-explicit-sender',
+          senderMatch: {
+            matchedBy: 'fromUserId',
+            confidence: 'high',
+          },
+        }),
+      ],
+    });
+  });
+
+  it('includes legacy aadUser sender messages with bodyText/bodyPreview despite missing normalized fields', async () => {
+    const conversation = {
+      _id: 'conv-legacy-sender',
+      graphChatId: 'chat-legacy-sender',
+      chatType: 'meeting',
+      topic: 'Legacy sender test',
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([conversation])
+      .mockResolvedValueOnce([conversation]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'legacy-body-text',
+        graphMessageId: 'g-legacy-body-text',
+        graphChatId: 'chat-legacy-sender',
+        fromEmail: 'aadUser',
+        fromDisplayName: 'Test User',
+        bodyText: 'Legacy bodyText should still be searchable',
+        sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+      },
+      {
+        _id: 'legacy-preview',
+        graphMessageId: 'g-legacy-preview',
+        graphChatId: 'chat-legacy-sender',
+        fromEmail: 'aadUser',
+        fromDisplayName: 'Test User',
+        bodyPreview: 'Legacy bodyPreview should still be readable',
+        sentDateTime: new Date('2026-06-01T10:00:00.000Z'),
+      },
+    ]);
+    db.countTeamsArchiveMessages.mockResolvedValue(2);
+
+    const result = await TeamsArchiveService.conversationSenderMessages(user, {
+      chatId: 'chat-legacy-sender',
+      senderName: 'Test User',
+      limit: 4,
+    });
+
+    expect(db.findTeamsArchiveMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: 'user-1',
+        graphChatId: 'chat-legacy-sender',
+        $or: [{ fromDisplayName: 'Test User' }],
+        $and: expect.arrayContaining([
+          expect.objectContaining({
+            $or: expect.arrayContaining([
+              expect.objectContaining({ bodyText: expect.any(RegExp) }),
+              expect.objectContaining({ bodyPreview: expect.any(RegExp) }),
+            ]),
+          }),
+        ]),
+      }),
+      expect.anything(),
+    );
+    expect(result).toMatchObject({
+      senderResolution: {
+        senderScope: 'person',
+        senderName: 'Test User',
+        confidence: 'medium',
+      },
+      messages: [
+        expect.objectContaining({
+          graphMessageId: 'g-legacy-body-text',
+          senderMatch: {
+            matchedBy: 'fromDisplayName',
+            confidence: 'medium',
+          },
+        }),
+        expect.objectContaining({
+          graphMessageId: 'g-legacy-preview',
+          senderMatch: {
+            matchedBy: 'fromDisplayName',
+            confidence: 'medium',
+          },
+        }),
+      ],
+    });
+  });
+
+  it('returns zero-result sender diagnostics with observed senders and same-title alternatives', async () => {
+    const selectedConversation = {
+      _id: 'conv-zero-selected',
+      graphChatId: 'meeting-zero-selected',
+      chatType: 'meeting',
+      topic: 'IT Eng Standup',
+      syncStatus: 'complete',
+    };
+    const alternativeConversation = {
+      _id: 'conv-zero-alt',
+      graphChatId: 'meeting-zero-alt',
+      chatType: 'meeting',
+      topic: 'IT Eng Standup',
+      lastMeaningfulMessageAt: new Date('2026-05-30T16:25:17.385Z'),
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([selectedConversation])
+      .mockResolvedValueOnce([selectedConversation])
+      .mockResolvedValueOnce([selectedConversation, alternativeConversation]);
+    db.findTeamsArchiveMessages
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          _id: 'observed-sender-msg',
+          graphMessageId: 'g-observed-sender',
+          graphChatId: 'meeting-zero-selected',
+          fromUserId: 'other-sender',
+          fromEmail: 'other@example.com',
+          fromDisplayName: 'Other Sender',
+          bodyPreview: 'Someone else posted here',
+          sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+          isChunkable: true,
+          normalizedTextLength: 24,
+          isSystemLikeMessage: false,
+        },
+      ]);
+    db.countTeamsArchiveMessages
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(1);
+
+    const result = await TeamsArchiveService.conversationSenderMessages(user, {
+      chatId: 'meeting-zero-selected',
+      senderUserId: 'missing-sender',
+      limit: 4,
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_sender_messages',
+      resolved: true,
+      messages: [],
+      zeroResultDiagnostics: {
+        selectedConversation: {
+          graphChatId: 'meeting-zero-selected',
+        },
+        totalMessagesInConversation: 1,
+        humanReadableMessagesInConversation: 1,
+        sameTitleAlternativeGraphChatIds: ['meeting-zero-alt'],
+        likelyReasons: expect.arrayContaining([
+          'selected wrong recurring meeting instance',
+          'messages exist only in a different Teams chat/thread',
+        ]),
+        recommendedNextActions: expect.arrayContaining([
+          'Run sender_identity_report for this graphChatId and compare observed sender identities.',
+        ]),
+      },
+    });
+    expect(result.zeroResultDiagnostics.uniqueObservedSenders).toEqual([
+      expect.objectContaining({
+        fromUserId: 'other-sender',
+        fromEmail: 'other@example.com',
+        fromDisplayName: 'Other Sender',
+        count: 1,
+        sampleMessageIds: ['g-observed-sender'],
+      }),
+    ]);
+  });
+
+  it('falls back to display-name alias candidates when sender identity report finds no direct me matches', async () => {
+    db.findTeamsArchiveMessages
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          _id: 'alias-a',
+          graphMessageId: 'g-alias-a',
+          graphChatId: 'chat-alias',
+          fromUserId: '0428da6a-d030-4547-bbbb-3ae6514fdf2b',
+          fromEmail: 'aadUser',
+          fromDisplayName: 'Test User',
+          bodyPreview: 'Alias sample',
+          sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+        },
+      ]);
+    db.findTeamsArchiveConversations.mockResolvedValue([
+      {
+        _id: 'conv-alias',
+        graphChatId: 'chat-alias',
+        topic: 'Alias meeting',
+      },
+    ]);
+
+    const result = await TeamsArchiveService.senderIdentityReport(user, {
+      chatId: 'chat-alias',
+      senderScope: 'me',
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'sender_identity_report',
+      senderScope: 'me',
+      warnings: expect.arrayContaining([
+        'direct_me_match_returned_zero_used_alias_fallback',
+        'invalid_fromEmail_values_detected',
+      ]),
+      identityCandidates: [
+        expect.objectContaining({
+          fromUserId: '0428da6a-d030-4547-bbbb-3ae6514fdf2b',
+          fromEmail: 'aadUser',
+          fromDisplayName: 'Test User',
+          senderMatch: {
+            matchedBy: 'alias',
+            confidence: 'medium',
           },
         }),
       ],

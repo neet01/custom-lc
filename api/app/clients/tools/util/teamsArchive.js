@@ -48,7 +48,7 @@ const teamsArchiveJsonSchema = {
     priorGraphChatId: {
       type: 'string',
       description:
-        'Optional prior selectedConversation.graphChatId from earlier Teams tool output. Use this for follow-up continuity and identity-change warnings.',
+        'Optional prior selectedConversation.graphChatId from earlier Teams tool output. Always pass this for follow-up questions so same-title recurring meetings do not switch silently.',
     },
     priorTopic: {
       type: 'string',
@@ -565,7 +565,7 @@ function createTeamsArchiveTool({ req }) {
       {
         name: TEAMS_ARCHIVE_TOOL_NAME,
         description:
-          'Searches and retrieves archived Microsoft Teams chats. Use action="recent_meeting_chats" for recent meeting/standup requests because it ranks by lastMeaningfulMessageAt instead of Teams system activity. Use action="conversation_recent_messages" with selectedConversation.graphChatId for follow-ups like what is new/latest in that chat. Use action="conversation_sender_messages" for messages from me/a person in a selected chat. Use action="conversation_activity_diagnostics" to explain why a chat appears recent or risky. Use action="sender_identity_report" when sender matching is uncertain. Respect evidenceBudget and do not answer definitively when evidenceSufficient=false. Use graphChatId as the stable identity for recurring meetings; never treat title/topic alone as unique. If identityWarning is returned, ask for clarification.',
+          'Searches and retrieves archived Microsoft Teams chats. Always pass priorGraphChatId from selectedConversation for follow-up questions. Use action="recent_meeting_chats" for recent meeting/standup requests because it ranks by lastMeaningfulMessageAt instead of Teams system activity. Use action="conversation_recent_messages" with selectedConversation.graphChatId for follow-ups like what is new/latest in that chat. Use action="conversation_sender_messages" for messages from me/a person in a selected chat, and inspect zeroResultDiagnostics before saying no messages exist. Use action="conversation_activity_diagnostics" to explain why a chat appears recent or risky. Use action="sender_identity_report" when sender matching is uncertain. Respect evidenceBudget and do not answer definitively when evidenceSufficient=false. Use graphChatId as the stable identity for recurring meetings; never treat title/topic alone as unique. If identityChanged=true or identityWarning is returned, ask for clarification.',
         schema: teamsArchiveJsonSchema,
       },
   );

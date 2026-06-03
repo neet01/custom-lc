@@ -261,7 +261,7 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
     priorGraphChatId: {
       type: 'string',
       description:
-        'Optional prior selectedConversation.graphChatId from earlier Teams tool output for follow-up continuity and identity-change warnings.',
+        'Optional prior selectedConversation.graphChatId from earlier Teams tool output. Always pass this for follow-up questions so same-title recurring meetings do not switch silently.',
     },
     priorTopic: {
       type: 'string',
@@ -952,7 +952,7 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   teams_archive_search: {
     name: 'teams_archive_search',
     description:
-      'Search and retrieve archived Microsoft Teams chats. Use recent_meeting_chats for recent meeting requests, conversation_recent_messages with selectedConversation.graphChatId for follow-up latest/new-message requests, conversation_sender_messages for messages from me/a person, conversation_activity_diagnostics for recency/searchability explanations, sender_identity_report for sender matching uncertainty, and respect evidenceBudget before definitive answers.',
+      'Search and retrieve archived Microsoft Teams chats. Always pass priorGraphChatId from selectedConversation for follow-up questions. Use recent_meeting_chats for recent meeting requests, conversation_recent_messages with selectedConversation.graphChatId for follow-up latest/new-message requests, conversation_sender_messages for messages from me/a person and inspect zeroResultDiagnostics before saying no messages exist, conversation_activity_diagnostics for recency/searchability explanations, sender_identity_report for sender matching uncertainty, and respect evidenceBudget/identityChanged before definitive answers.',
     schema: teamsArchiveSchema,
     toolType: 'builtin',
   },

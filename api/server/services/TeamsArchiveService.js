@@ -1132,6 +1132,14 @@ function buildIdentityWarning(candidates = [], {
   };
 }
 
+function normalizeConversationTopic(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 function buildIdentityChangeWarning({ priorGraphChatId, priorTopic, selectedConversation }) {
   const normalizedPriorGraphChatId = String(priorGraphChatId || '').trim();
   if (!normalizedPriorGraphChatId || !selectedConversation?.graphChatId) {
@@ -1163,6 +1171,190 @@ function buildIdentityChangeWarning({ priorGraphChatId, priorTopic, selectedConv
     currentTopic: selectedConversation.topic || '',
     guidance:
       'This selection differs from the previous Teams conversation for a similar topic. Ask for clarification unless the user explicitly requested a different chat.',
+  };
+}
+
+function buildTeamsTrace({
+  inputChatId,
+  resolvedGraphChatId,
+  conversation,
+  selectedBy,
+  priorGraphChatId,
+  identityWarning,
+  identityChangeWarning,
+  candidates = [],
+} = {}) {
+  const candidateGraphChatIds = candidates
+    .map((candidate) => candidate?.graphChatId)
+    .filter(Boolean)
+    .slice(0, 20);
+
+  return {
+    inputChatId: inputChatId || undefined,
+    resolvedGraphChatId: resolvedGraphChatId || undefined,
+    resolvedArchiveConversationId: conversation?._id?.toString?.() || conversation?.id || undefined,
+    selectedBy: selectedBy || 'graphChatId',
+    priorGraphChatId: priorGraphChatId || undefined,
+    identityChanged: Boolean(identityChangeWarning?.identityChanged),
+    identityWarning:
+      identityChangeWarning?.guidance ||
+      identityWarning?.guidance ||
+      undefined,
+    candidateCount: candidates.length || identityWarning?.candidateCount || undefined,
+    candidateGraphChatIds:
+      candidateGraphChatIds.length > 0
+        ? candidateGraphChatIds
+        : identityWarning?.candidates?.map((candidate) => candidate.graphChatId).filter(Boolean),
+  };
+}
+
+async function resolveTeamsConversationIdentity(userId, options = {}) {
+  const inputChatId = String(options.chatId || '').trim();
+  const priorGraphChatId = String(options.priorGraphChatId || '').trim();
+  const topic = String(options.topic || options.query || '').trim();
+  const chatType = String(options.chatType || 'any').trim();
+
+  if (inputChatId) {
+    const resolvedGraphChatId = await resolveConversationGraphChatId(userId, inputChatId);
+    const conversations = resolvedGraphChatId
+      ? await db.findTeamsArchiveConversations(
+          { user: userId, graphChatId: resolvedGraphChatId },
+          { limit: 1 },
+        )
+      : [];
+    const conversation = conversations[0] || null;
+    const selectedConversation = buildSelectedConversation(conversation, {
+      selectionReason: 'chatId',
+      identityConfidence: 'high',
+    });
+    const identityChangeWarning = buildIdentityChangeWarning({
+      priorGraphChatId,
+      priorTopic: options.priorTopic,
+      selectedConversation,
+    });
+    const selectedBy = looksLikeMongoObjectId(inputChatId) ? 'mongoObjectId' : 'graphChatId';
+
+    return {
+      resolved: Boolean(resolvedGraphChatId && conversation),
+      inputChatId,
+      resolvedGraphChatId,
+      conversation,
+      selectedConversation,
+      selectedBy,
+      identityChangeWarning,
+      candidates: conversations,
+      trace: buildTeamsTrace({
+        inputChatId,
+        resolvedGraphChatId,
+        conversation,
+        selectedBy,
+        priorGraphChatId,
+        identityChangeWarning,
+        candidates: conversations,
+      }),
+    };
+  }
+
+  if (priorGraphChatId) {
+    const resolvedGraphChatId = await resolveConversationGraphChatId(userId, priorGraphChatId);
+    const conversations = resolvedGraphChatId
+      ? await db.findTeamsArchiveConversations(
+          { user: userId, graphChatId: resolvedGraphChatId },
+          { limit: 1 },
+        )
+      : [];
+    const conversation = conversations[0] || null;
+    const selectedConversation = buildSelectedConversation(conversation, {
+      selectionReason: 'prior_context',
+      identityConfidence: 'high',
+    });
+
+    return {
+      resolved: Boolean(resolvedGraphChatId && conversation),
+      inputChatId: '',
+      resolvedGraphChatId,
+      conversation,
+      selectedConversation,
+      selectedBy: 'priorGraphChatId',
+      candidates: conversations,
+      trace: buildTeamsTrace({
+        inputChatId: '',
+        resolvedGraphChatId,
+        conversation,
+        selectedBy: 'priorGraphChatId',
+        priorGraphChatId,
+        candidates: conversations,
+      }),
+    };
+  }
+
+  if (topic) {
+    const lookup = await findConversationCandidates(userId, {
+      ...options,
+      topic,
+      chatType,
+      candidateLimit: 25,
+    });
+    const normalizedTopic = normalizeConversationTopic(topic);
+    const exactCandidates = lookup.conversations.filter(
+      (conversation) => normalizeConversationTopic(conversation.topic) === normalizedTopic,
+    );
+    const candidates = exactCandidates.length > 0 ? exactCandidates : lookup.conversations;
+
+    if (candidates.length === 1) {
+      const conversation = candidates[0];
+      const selectedConversation = buildSelectedConversation(conversation, {
+        selectionReason: 'topic_lookup',
+        identityConfidence: exactCandidates.length === 1 ? 'medium' : 'low',
+      });
+      return {
+        resolved: true,
+        inputChatId: '',
+        resolvedGraphChatId: conversation.graphChatId,
+        conversation,
+        selectedConversation,
+        selectedBy: 'topicLookup',
+        candidates,
+        trace: buildTeamsTrace({
+          resolvedGraphChatId: conversation.graphChatId,
+          conversation,
+          selectedBy: 'topicLookup',
+          candidates,
+        }),
+      };
+    }
+
+    const identityWarning = buildIdentityWarning(candidates, {
+      topic,
+      reason: 'ambiguous_topic_lookup',
+    });
+
+    return {
+      resolved: false,
+      inputChatId: '',
+      resolvedGraphChatId: null,
+      conversation: null,
+      selectedConversation: null,
+      selectedBy: 'ambiguousTopicLookup',
+      candidates,
+      identityWarning,
+      trace: buildTeamsTrace({
+        selectedBy: 'ambiguousTopicLookup',
+        identityWarning,
+        candidates,
+      }),
+    };
+  }
+
+  return {
+    resolved: false,
+    inputChatId: '',
+    resolvedGraphChatId: null,
+    conversation: null,
+    selectedConversation: null,
+    selectedBy: 'topicLookup',
+    candidates: [],
+    trace: buildTeamsTrace({ selectedBy: 'topicLookup' }),
   };
 }
 
@@ -1268,9 +1460,33 @@ function buildHumanReadableMessageFilter({ includeSystem = false } = {}) {
   }
 
   return {
-    isSystemLikeMessage: { $ne: true },
-    isChunkable: true,
-    normalizedTextLength: { $gt: 0 },
+    $and: [
+      { isSystemLikeMessage: { $ne: true } },
+      {
+        $or: [
+          {
+            isChunkable: true,
+            normalizedTextLength: { $gt: 0 },
+          },
+          {
+            normalizedTextLength: { $exists: false },
+            bodyText: /\S/,
+          },
+          {
+            normalizedTextLength: { $exists: false },
+            bodyPreview: /\S/,
+          },
+          {
+            isChunkable: { $exists: false },
+            bodyText: /\S/,
+          },
+          {
+            isChunkable: { $exists: false },
+            bodyPreview: /\S/,
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -3791,15 +4007,30 @@ async function getConversationDossier(user, options = {}) {
 
   let conversation = null;
   let candidates = [];
+  let resolvedGraphChatIdForTrace = null;
+  let selectedByForTrace = chatId
+    ? looksLikeMongoObjectId(chatId)
+      ? 'mongoObjectId'
+      : priorFollowUpChatId && !options.chatId
+        ? 'priorGraphChatId'
+        : 'graphChatId'
+    : 'topicLookup';
 
   if (chatId) {
     const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+    resolvedGraphChatIdForTrace = resolvedGraphChatId;
     if (!resolvedGraphChatId) {
       return {
         retrievalMode: 'conversation_dossier',
         resolved: false,
         chatId,
         graphChatId: null,
+        trace: buildTeamsTrace({
+          inputChatId: chatId,
+          resolvedGraphChatId,
+          selectedBy: selectedByForTrace,
+          priorGraphChatId: options.priorGraphChatId,
+        }),
         guidance: 'No archived conversation was found for the requested chat id.',
         candidates: [],
       };
@@ -3827,6 +4058,10 @@ async function getConversationDossier(user, options = {}) {
         participants: toArray(options.participants).filter(Boolean),
         guidance:
           'No archived conversations matched these constraints. Broaden the participant, topic, or time filters.',
+        trace: buildTeamsTrace({
+          selectedBy: 'topicLookup',
+          candidates: [],
+        }),
         candidates: [],
       };
     }
@@ -3847,6 +4082,11 @@ async function getConversationDossier(user, options = {}) {
         guidance:
           'Multiple archived conversations matched. Pick one chatId from the candidates before asking for exhaustive retrieval.',
         ...(identityWarning ? { identityWarning } : {}),
+        trace: buildTeamsTrace({
+          selectedBy: 'ambiguousTopicLookup',
+          identityWarning,
+          candidates,
+        }),
         candidates: candidates.slice(0, 10).map((candidate) => mapConversationCandidate(candidate)),
       };
     }
@@ -3859,6 +4099,13 @@ async function getConversationDossier(user, options = {}) {
       retrievalMode: 'conversation_dossier',
       resolved: false,
       guidance: 'No archived conversation metadata was found for the requested constraints.',
+      trace: buildTeamsTrace({
+        inputChatId: chatId,
+        resolvedGraphChatId: resolvedGraphChatIdForTrace,
+        selectedBy: selectedByForTrace,
+        priorGraphChatId: options.priorGraphChatId,
+        candidates,
+      }),
       candidates: [],
     };
   }
@@ -3919,6 +4166,21 @@ async function getConversationDossier(user, options = {}) {
     chat: mapConversationCandidate(conversation),
     ...(selectedConversation ? { selectedConversation } : {}),
     ...(identityChangeWarning ? { identityWarning: identityChangeWarning } : {}),
+    ...(identityChangeWarning
+      ? {
+          identityChanged: true,
+          identityChangeWarning: 'Selected conversation differs from prior Teams conversation context',
+        }
+      : {}),
+    trace: buildTeamsTrace({
+      inputChatId: chatId,
+      resolvedGraphChatId: conversation.graphChatId,
+      conversation,
+      selectedBy: selectedByForTrace,
+      priorGraphChatId: options.priorGraphChatId,
+      identityChangeWarning,
+      candidates: candidates.length > 0 ? candidates : [conversation],
+    }),
     query: query || undefined,
     daysBack: scopedDaysBack,
     firstMessageAt,
@@ -4057,8 +4319,8 @@ async function listConversationMessages(user, chatId, options = {}) {
 async function conversationRecentMessages(user, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
-  const chatId = String(options.chatId || '').trim();
-  if (!chatId) {
+  const chatId = String(options.chatId || options.priorGraphChatId || '').trim();
+  if (!chatId && !(options.topic || options.query)) {
     throw new TeamsArchiveServiceError('Chat id is required for conversation_recent_messages', 400);
   }
 
@@ -4069,15 +4331,21 @@ async function conversationRecentMessages(user, options = {}) {
   const daysBack = options.daysBack
     ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
     : undefined;
-  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+  const identity = await resolveTeamsConversationIdentity(userId, {
+    ...options,
+    chatId: options.chatId,
+  });
+  const resolvedGraphChatId = identity.resolvedGraphChatId;
 
-  if (!resolvedGraphChatId) {
+  if (!identity.resolved || !resolvedGraphChatId) {
     return {
       retrievalMode: 'conversation_recent_messages',
       resolved: false,
       chatId,
       graphChatId: null,
       messages: [],
+      trace: identity.trace,
+      ...(identity.identityWarning ? { identityWarning: identity.identityWarning } : {}),
       guidance: 'No archived Teams chat was found for the requested chat id.',
     };
   }
@@ -4088,8 +4356,7 @@ async function conversationRecentMessages(user, options = {}) {
     graphChatId: resolvedGraphChatId,
     ...(since ? { sentDateTime: { $gte: since } } : {}),
   };
-  const [conversations, messages, systemMessages, emptyMessages, skippedMessages] = await Promise.all([
-    db.findTeamsArchiveConversations({ user: userId, graphChatId: resolvedGraphChatId }, { limit: 1 }),
+  const [messages, systemMessages, emptyMessages, skippedMessages] = await Promise.all([
     db.findTeamsArchiveMessages(
       {
         ...baseFilter,
@@ -4101,11 +4368,8 @@ async function conversationRecentMessages(user, options = {}) {
     db.countTeamsArchiveMessages({ ...baseFilter, normalizedTextLength: { $lte: 0 } }),
     db.countTeamsArchiveMessages({ ...baseFilter, isChunkable: false }),
   ]);
-  const conversation = conversations[0] || null;
-  const selectedConversation = buildSelectedConversation(conversation, {
-    selectionReason: 'chatId',
-    identityConfidence: 'high',
-  });
+  const conversation = identity.conversation;
+  const selectedConversation = identity.selectedConversation;
 
   return {
     retrievalMode: 'conversation_recent_messages',
@@ -4113,6 +4377,13 @@ async function conversationRecentMessages(user, options = {}) {
     chatId,
     graphChatId: resolvedGraphChatId,
     ...(selectedConversation ? { selectedConversation } : {}),
+    trace: identity.trace,
+    ...(identity.identityChangeWarning
+      ? {
+          identityChanged: true,
+          identityWarning: 'Selected conversation differs from prior Teams conversation context',
+        }
+      : {}),
     topic: conversation?.topic || '',
     chatType: conversation?.chatType || '',
     daysBack,
@@ -4148,29 +4419,44 @@ async function conversationRecentMessages(user, options = {}) {
 async function conversationSenderMessages(user, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
-  const priorFollowUpChatId = getPriorGraphChatIdForFollowUp(options);
-  const chatId = String(options.chatId || priorFollowUpChatId || '').trim();
-  if (!chatId) {
+  const chatId = String(options.chatId || options.priorGraphChatId || '').trim();
+  if (!chatId && !(options.topic || options.query)) {
     throw new TeamsArchiveServiceError('Chat id is required for conversation_sender_messages', 400);
   }
 
-  const senderScope = String(options.senderScope || 'me').trim();
-  const normalizedSenderScope = ['me', 'person', 'all'].includes(senderScope) ? senderScope : 'me';
+  const explicitPersonIdentity = Boolean(
+    String(options.senderUserId || options.senderEmail || options.senderName || '').trim(),
+  );
+  const senderScope = String(options.senderScope || (explicitPersonIdentity ? 'person' : 'me')).trim();
+  const normalizedSenderScope = ['me', 'person', 'all'].includes(senderScope)
+    ? senderScope
+    : explicitPersonIdentity
+      ? 'person'
+      : 'me';
   const includeSystem =
     options.includeSystem === true || String(options.includeSystem || '').toLowerCase() === 'true';
   const limit = clampInteger(options.limit, 8, { min: 1, max: 50 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
   const sortDirection = String(options.sort || options.sortBy || 'newest').toLowerCase() === 'oldest' ? 1 : -1;
-  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+  const identity = await resolveTeamsConversationIdentity(userId, {
+    ...options,
+    chatId: options.chatId,
+  });
+  const resolvedGraphChatId = identity.resolvedGraphChatId;
 
-  if (!resolvedGraphChatId) {
+  if (!identity.resolved || !resolvedGraphChatId) {
     return {
       retrievalMode: 'conversation_sender_messages',
       resolved: false,
       chatId,
       graphChatId: null,
       messages: [],
-      guidance: 'No archived Teams chat was found for the requested chat id.',
+      trace: identity.trace,
+      ...(identity.identityWarning ? { identityWarning: identity.identityWarning } : {}),
+      guidance:
+        identity.selectedBy === 'ambiguousTopicLookup'
+          ? 'Multiple Teams conversations matched this topic. Ask the user to pick one graphChatId before retrieving sender messages.'
+          : 'No archived Teams chat was found for the requested chat id.',
     };
   }
 
@@ -4186,9 +4472,8 @@ async function conversationSenderMessages(user, options = {}) {
     graphChatId: resolvedGraphChatId,
     ...senderFilter,
   };
-  const [conversations, messages, totalMatchingMessages, skippedSystemCount, skippedEmptyCount] =
+  const [messages, totalMatchingMessages, skippedSystemCount, skippedEmptyCount] =
     await Promise.all([
-      db.findTeamsArchiveConversations({ user: userId, graphChatId: resolvedGraphChatId }, { limit: 1 }),
       db.findTeamsArchiveMessages(
         {
           ...baseFilter,
@@ -4200,11 +4485,8 @@ async function conversationSenderMessages(user, options = {}) {
       db.countTeamsArchiveMessages({ ...baseFilter, isSystemLikeMessage: true }),
       db.countTeamsArchiveMessages({ ...baseFilter, normalizedTextLength: { $lte: 0 } }),
     ]);
-  const conversation = conversations[0] || null;
-  const selectedConversation = buildSelectedConversation(conversation, {
-    selectionReason: priorFollowUpChatId && !options.chatId ? 'prior_context' : 'chatId',
-    identityConfidence: 'high',
-  });
+  const conversation = identity.conversation;
+  const selectedConversation = identity.selectedConversation;
   const senderResolution = {
     senderScope: normalizedSenderScope,
     senderName: options.senderName || '',
@@ -4232,6 +4514,17 @@ async function conversationSenderMessages(user, options = {}) {
     }),
     senderMatch: messageSenderMatches(message, senderClauses),
   }));
+  const zeroResultDiagnostics =
+    mappedMessages.length === 0
+      ? await buildZeroResultSenderDiagnostics({
+          userId,
+          conversation,
+          selectedConversation,
+          senderResolution,
+          senderClauses,
+          totalMatchingMessages,
+        })
+      : undefined;
 
   return {
     retrievalMode: 'conversation_sender_messages',
@@ -4239,6 +4532,13 @@ async function conversationSenderMessages(user, options = {}) {
     chatId,
     graphChatId: resolvedGraphChatId,
     ...(selectedConversation ? { selectedConversation } : {}),
+    trace: identity.trace,
+    ...(identity.identityChangeWarning
+      ? {
+          identityChanged: true,
+          identityWarning: 'Selected conversation differs from prior Teams conversation context',
+        }
+      : {}),
     senderResolution,
     skippedSystemCount,
     skippedEmptyCount,
@@ -4250,6 +4550,7 @@ async function conversationSenderMessages(user, options = {}) {
       sort: sortDirection === -1 ? 'newest' : 'oldest',
       returnedMessageCount: mappedMessages.length,
     },
+    ...(zeroResultDiagnostics ? { zeroResultDiagnostics } : {}),
     evidenceBudget: buildEvidenceBudget(
       { ...options, action: 'conversation_sender_messages' },
       {
@@ -4315,8 +4616,8 @@ function buildActivityExplanation(conversation = {}, diagnosis = {}) {
 async function conversationActivityDiagnostics(user, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
-  const chatId = String(options.chatId || getPriorGraphChatIdForFollowUp(options) || '').trim();
-  if (!chatId) {
+  const chatId = String(options.chatId || options.priorGraphChatId || '').trim();
+  if (!chatId && !(options.topic || options.query)) {
     throw new TeamsArchiveServiceError('Chat id is required for conversation_activity_diagnostics', 400);
   }
 
@@ -4326,21 +4627,26 @@ async function conversationActivityDiagnostics(user, options = {}) {
   const includeSystem =
     options.includeSystem === true || String(options.includeSystem || '').toLowerCase() === 'true';
   const limit = clampInteger(options.limit, 5, { min: 1, max: 20 });
-  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+  const identity = await resolveTeamsConversationIdentity(userId, {
+    ...options,
+    chatId: options.chatId,
+  });
+  const resolvedGraphChatId = identity.resolvedGraphChatId;
 
-  if (!resolvedGraphChatId) {
+  if (!identity.resolved || !resolvedGraphChatId) {
     return {
       retrievalMode: 'conversation_activity_diagnostics',
       resolved: false,
       chatId,
       graphChatId: null,
+      trace: identity.trace,
+      ...(identity.identityWarning ? { identityWarning: identity.identityWarning } : {}),
       diagnosis: null,
       explanation: 'No archived Teams chat was found for the requested chat id.',
     };
   }
 
-  const [conversations, newestHumanMessages, newestSystemMessages] = await Promise.all([
-    db.findTeamsArchiveConversations({ user: userId, graphChatId: resolvedGraphChatId }, { limit: 1 }),
+  const [newestHumanMessages, newestSystemMessages] = await Promise.all([
     includeRecentMessages
       ? db.findTeamsArchiveMessages(
           {
@@ -4362,11 +4668,8 @@ async function conversationActivityDiagnostics(user, options = {}) {
         )
       : Promise.resolve([]),
   ]);
-  const conversation = conversations[0] || null;
-  const selectedConversation = buildSelectedConversation(conversation, {
-    selectionReason: 'chatId',
-    identityConfidence: 'high',
-  });
+  const conversation = identity.conversation;
+  const selectedConversation = identity.selectedConversation;
   const diagnosis = buildActivityDiagnosis(conversation || {});
 
   return {
@@ -4375,6 +4678,13 @@ async function conversationActivityDiagnostics(user, options = {}) {
     chatId,
     graphChatId: resolvedGraphChatId,
     ...(selectedConversation ? { selectedConversation } : {}),
+    trace: identity.trace,
+    ...(identity.identityChangeWarning
+      ? {
+          identityChanged: true,
+          identityWarning: 'Selected conversation differs from prior Teams conversation context',
+        }
+      : {}),
     raw: {
       lastMessageAt: conversation?.lastMessageAt || null,
       lastMeaningfulMessageAt: conversation?.lastMeaningfulMessageAt || null,
@@ -4412,6 +4722,44 @@ function buildSenderIdentityKey(message = {}) {
     String(message.fromEmail || '').trim().toLowerCase(),
     String(message.fromDisplayName || '').trim().toLowerCase(),
   ].join('|');
+}
+
+function normalizeIdentityText(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/@.*$/, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function getLikelyUserIdentityAliases(user = {}) {
+  return [
+    user?.name,
+    user?.username,
+    user?.email,
+    String(user?.email || '').split('@')[0],
+  ]
+    .map((value) => normalizeIdentityText(value))
+    .filter(Boolean);
+}
+
+function candidateMatchesUserAlias(candidate = {}, aliases = []) {
+  const displayName = normalizeIdentityText(candidate.fromDisplayName);
+  if (!displayName || aliases.length === 0) {
+    return false;
+  }
+
+  return aliases.some((alias) => {
+    if (!alias) {
+      return false;
+    }
+    const aliasTokens = alias.split(/\s+/).filter(Boolean);
+    return (
+      displayName === alias ||
+      displayName.includes(alias) ||
+      aliasTokens.length > 1 && aliasTokens.every((token) => displayName.includes(token))
+    );
+  });
 }
 
 function summarizeSenderIdentityMessages(messages = [], senderClauses = []) {
@@ -4461,12 +4809,126 @@ function buildRecommendedSenderFilters(identityCandidates = []) {
   };
 }
 
+async function buildObservedSenderDiagnostics(userId, graphChatId, { limit = 5000 } = {}) {
+  const messages = await db.findTeamsArchiveMessages(
+    { user: userId, graphChatId },
+    { limit, sort: { sentDateTime: -1, createdAt: -1 } },
+  );
+  const groups = new Map();
+  let humanReadableMessagesInConversation = 0;
+
+  for (const message of messages) {
+    if (
+      isMeaningfulArchiveMessage(message) ||
+      (!message.isSystemLikeMessage && (String(message.bodyText || '').trim() || String(message.bodyPreview || '').trim()))
+    ) {
+      humanReadableMessagesInConversation += 1;
+    }
+
+    const key = buildSenderIdentityKey(message);
+    const existing = groups.get(key) || {
+      fromUserId: message.fromUserId || '',
+      fromEmail: message.fromEmail || '',
+      fromDisplayName: message.fromDisplayName || '',
+      count: 0,
+      sampleMessageIds: [],
+    };
+    existing.count += 1;
+    if (existing.sampleMessageIds.length < 3 && message.graphMessageId) {
+      existing.sampleMessageIds.push(message.graphMessageId);
+    }
+    groups.set(key, existing);
+  }
+
+  return {
+    totalMessagesInConversation: messages.length,
+    humanReadableMessagesInConversation,
+    uniqueObservedSenders: [...groups.values()].sort((a, b) => b.count - a.count).slice(0, 20),
+  };
+}
+
+async function findSameTitleConversationAlternatives(userId, conversation = {}) {
+  const topic = String(conversation?.topic || '').trim();
+  if (!topic) {
+    return [];
+  }
+
+  const regex = buildSearchRegex(topic);
+  const candidates = await db.findTeamsArchiveConversations(
+    {
+      user: userId,
+      ...(conversation.chatType ? { chatType: conversation.chatType } : {}),
+      topic: regex,
+    },
+    { limit: 20, sort: { lastMeaningfulMessageAt: -1, lastMessageAt: -1, updatedAt: -1 } },
+  );
+  const normalizedTopic = normalizeConversationTopic(topic);
+  return candidates.filter(
+    (candidate) =>
+      candidate.graphChatId !== conversation.graphChatId &&
+      normalizeConversationTopic(candidate.topic) === normalizedTopic,
+  );
+}
+
+async function buildZeroResultSenderDiagnostics({
+  userId,
+  conversation,
+  selectedConversation,
+  senderResolution,
+  senderClauses,
+  totalMatchingMessages,
+} = {}) {
+  const observed = await buildObservedSenderDiagnostics(userId, conversation.graphChatId);
+  const alternatives = await findSameTitleConversationAlternatives(userId, conversation);
+  const likelyReasons = [];
+
+  if (alternatives.length > 0) {
+    likelyReasons.push('selected wrong recurring meeting instance');
+    likelyReasons.push('messages exist only in a different Teams chat/thread');
+  }
+  if (senderResolution?.confidence !== 'high' || senderClauses.length === 0) {
+    likelyReasons.push('sender identity mismatch');
+  }
+  if (observed.humanReadableMessagesInConversation > 0 && Number(totalMatchingMessages || 0) === 0) {
+    likelyReasons.push('no messages by that sender in archived data');
+  }
+  if (observed.totalMessagesInConversation > 0 && observed.humanReadableMessagesInConversation === 0) {
+    likelyReasons.push('archive has only legacy messages without normalized fields');
+  }
+  if (conversation.syncStatus && conversation.syncStatus !== 'complete') {
+    likelyReasons.push('sync coverage incomplete');
+  }
+
+  return {
+    selectedConversation,
+    senderResolution,
+    totalMessagesInConversation: observed.totalMessagesInConversation,
+    humanReadableMessagesInConversation: observed.humanReadableMessagesInConversation,
+    uniqueObservedSenders: observed.uniqueObservedSenders,
+    sameTitleAlternativeGraphChatIds: alternatives.map((candidate) => candidate.graphChatId),
+    likelyReasons: likelyReasons.length > 0 ? likelyReasons : ['no messages by that sender in archived data'],
+    recommendedNextActions: [
+      'Run sender_identity_report for this graphChatId and compare observed sender identities.',
+      'If sameTitleAlternativeGraphChatIds is non-empty, ask the user to pick the exact graphChatId.',
+      'Retry conversation_sender_messages with senderUserId from the highest-confidence identity candidate.',
+      'Run conversation_activity_diagnostics to inspect sync coverage and human-readable message counts.',
+    ],
+  };
+}
+
 async function senderIdentityReport(user, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
   const senderScope = String(options.senderScope || 'me').trim();
   const normalizedSenderScope = ['me', 'person'].includes(senderScope) ? senderScope : 'me';
-  const chatId = String(options.chatId || getPriorGraphChatIdForFollowUp(options) || '').trim();
+  const hasConversationHint = Boolean(options.chatId || options.priorGraphChatId || options.topic || options.query);
+  const identity = hasConversationHint
+    ? await resolveTeamsConversationIdentity(userId, {
+        ...options,
+        chatId: options.chatId,
+      })
+    : null;
+  const chatId = String(options.chatId || options.priorGraphChatId || '').trim();
   const senderClauses =
     normalizedSenderScope === 'me'
       ? getUserSenderClauses(user)
@@ -4475,10 +4937,28 @@ async function senderIdentityReport(user, options = {}) {
           senderEmail: options.personEmail || options.senderEmail,
           senderUserId: options.senderUserId,
         });
-  let resolvedGraphChatId = null;
-  if (chatId) {
-    resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+  if (identity && !identity.resolved) {
+    return {
+      retrievalMode: 'sender_identity_report',
+      senderScope: normalizedSenderScope,
+      currentUserIdentity: {
+        id: userId,
+        openidId: user?.openidId || '',
+        email: user?.email || '',
+        name: user?.name || '',
+        username: user?.username || '',
+      },
+      chatId: chatId || undefined,
+      graphChatId: identity.resolvedGraphChatId || undefined,
+      trace: identity.trace,
+      ...(identity.identityWarning ? { identityWarning: identity.identityWarning } : {}),
+      identityCandidates: [],
+      recommendedSenderFilters: {},
+      confidence: 'low',
+      warnings: ['conversation_identity_not_resolved'],
+    };
   }
+  const resolvedGraphChatId = identity?.resolvedGraphChatId || null;
 
   const personRegexes =
     normalizedSenderScope === 'person'
@@ -4500,13 +4980,44 @@ async function senderIdentityReport(user, options = {}) {
           }
         : {}),
   };
-  const messages = await db.findTeamsArchiveMessages(filter, {
+  let messages = await db.findTeamsArchiveMessages(filter, {
     limit: 5000,
     sort: { sentDateTime: -1, createdAt: -1 },
   });
-  const identityCandidates = summarizeSenderIdentityMessages(messages, senderClauses);
+  let usedAliasFallback = false;
+  let identityCandidates = summarizeSenderIdentityMessages(messages, senderClauses);
+
+  if (
+    identityCandidates.length === 0 &&
+    normalizedSenderScope === 'me' &&
+    resolvedGraphChatId
+  ) {
+    usedAliasFallback = true;
+    messages = await db.findTeamsArchiveMessages(
+      {
+        user: userId,
+        graphChatId: resolvedGraphChatId,
+      },
+      {
+        limit: 5000,
+        sort: { sentDateTime: -1, createdAt: -1 },
+      },
+    );
+    const aliases = getLikelyUserIdentityAliases(user);
+    identityCandidates = summarizeSenderIdentityMessages(messages, senderClauses)
+      .filter((candidate) => candidateMatchesUserAlias(candidate, aliases))
+      .map((candidate) => ({
+        ...candidate,
+        senderMatch: {
+          matchedBy: 'alias',
+          confidence: candidate.fromUserId ? 'medium' : 'low',
+        },
+      }));
+  }
+
   const recommendedSenderFilters = buildRecommendedSenderFilters(identityCandidates);
   const warnings = [
+    ...(usedAliasFallback ? ['direct_me_match_returned_zero_used_alias_fallback'] : []),
     ...(identityCandidates.some((candidate) => candidate.invalidEmail)
       ? ['invalid_fromEmail_values_detected']
       : []),
@@ -4528,6 +5039,8 @@ async function senderIdentityReport(user, options = {}) {
     },
     chatId: chatId || undefined,
     graphChatId: resolvedGraphChatId || undefined,
+    ...(identity?.selectedConversation ? { selectedConversation: identity.selectedConversation } : {}),
+    ...(identity?.trace ? { trace: identity.trace } : {}),
     identityCandidates,
     recommendedSenderFilters,
     confidence:
@@ -5145,16 +5658,22 @@ async function advancedSearchMessages(user, options = {}) {
 async function summarizeConversation(user, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
-  const chatId = String(options.chatId || '').trim();
-  if (!chatId) {
+  const chatId = String(options.chatId || options.priorGraphChatId || '').trim();
+  if (!chatId && !(options.topic || options.query)) {
     throw new TeamsArchiveServiceError('Chat id is required', 400);
   }
 
-  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
-  if (!resolvedGraphChatId) {
+  const identity = await resolveTeamsConversationIdentity(userId, {
+    ...options,
+    chatId: options.chatId,
+  });
+  const resolvedGraphChatId = identity.resolvedGraphChatId;
+  if (!identity.resolved || !resolvedGraphChatId) {
     return {
       chatId,
       graphChatId: null,
+      trace: identity.trace,
+      ...(identity.identityWarning ? { identityWarning: identity.identityWarning } : {}),
       summary: 'No archived conversation was found for the requested chat.',
       highlights: [],
     };
@@ -5167,9 +5686,7 @@ async function summarizeConversation(user, options = {}) {
     : undefined;
   const highlightLimit = clampInteger(options.limit, 4, { min: 1, max: 6 });
 
-  const [conversations, messages] = await Promise.all([
-    db.findTeamsArchiveConversations({ user: userId, graphChatId: resolvedGraphChatId }, { limit: 1 }),
-    db.findTeamsArchiveMessages(
+  const messages = await db.findTeamsArchiveMessages(
       {
         user: userId,
         graphChatId: resolvedGraphChatId,
@@ -5178,10 +5695,9 @@ async function summarizeConversation(user, options = {}) {
           : {}),
       },
       { limit: 5000, sort: { sentDateTime: 1, createdAt: 1 } },
-    ),
-  ]);
+    );
 
-  const conversation = conversations[0] || null;
+  const conversation = identity.conversation;
   const scopedMessages = queryRegex
     ? messages.filter((message) => messageMatchesRegex(message, queryRegex))
     : messages;
@@ -5207,16 +5723,20 @@ async function summarizeConversation(user, options = {}) {
     conversationWarnings.noMeaningfulMessages ||
     conversationWarnings.systemOnlyRecentActivity;
   const confidence = lowEvidence ? 'low' : scopedMessages.length > 0 ? 'medium' : 'medium';
-  const selectedConversation = buildSelectedConversation(conversation, {
-    selectionReason: 'chatId',
-    identityConfidence: 'high',
-  });
+  const selectedConversation = identity.selectedConversation;
 
   return {
     retrievalMode: 'conversation_summary',
     chatId,
     graphChatId: resolvedGraphChatId,
     ...(selectedConversation ? { selectedConversation } : {}),
+    trace: identity.trace,
+    ...(identity.identityChangeWarning
+      ? {
+          identityChanged: true,
+          identityWarning: 'Selected conversation differs from prior Teams conversation context',
+        }
+      : {}),
     topic: conversation?.topic || '',
     chatType: conversation?.chatType || '',
     participants: mapCompactParticipants(conversation?.participants || []),

@@ -15,15 +15,20 @@ const teamsArchiveJsonSchema = {
         'search_messages',
         'advanced_search_messages',
         'recent_messages',
+        'recent_meeting_chats',
         'list_conversations',
         'conversation_dossier',
         'get_messages',
+        'conversation_recent_messages',
+        'conversation_sender_messages',
+        'conversation_activity_diagnostics',
+        'sender_identity_report',
         'get_message_body',
         'get_messages_window',
         'summarize_conversation',
       ],
       description:
-        'Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages for broad lexical archive discovery and quick preview retrieval, advanced_search_messages for recall-safe union retrieval across enterprise memory and the raw Teams archive with sender scope, chat type, participants, and recency filters, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, conversation_dossier for exhaustive archive-backed retrieval of one resolved chat, get_messages for compact thread previews, get_message_body to retrieve the full archived text for one exact message, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
+        'Use status to check archive readiness, sync_archive to ingest Teams chat history, recent_meeting_chats for recent meeting chat requests, conversation_recent_messages for what is new/latest in one selected chat, conversation_sender_messages for messages from me/a person in one chat, conversation_activity_diagnostics to explain recency/searchability, sender_identity_report when sender matching is uncertain, search_messages for broad lexical discovery, advanced_search_messages for recall-safe union retrieval, recent_messages for messages sent by the signed-in user, list_conversations for disambiguation, conversation_dossier for exhaustive archive-backed retrieval, get_message_body for exact full text, get_messages_window for local context, and summarize_conversation for evidence-labeled summaries.',
     },
     query: {
       type: 'string',
@@ -38,7 +43,17 @@ const teamsArchiveJsonSchema = {
     chatId: {
       type: 'string',
       description:
-        'For conversation_dossier, get_messages, get_messages_window, summarize_conversation, or search_messages: the archived Teams chat id to scope the request to.',
+        'Stable Teams conversation identity. For single-conversation actions pass selectedConversation.graphChatId from the previous result whenever available. Do not rediscover recurring meetings by title if a selectedConversation exists.',
+    },
+    priorGraphChatId: {
+      type: 'string',
+      description:
+        'Optional prior selectedConversation.graphChatId from earlier Teams tool output. Use this for follow-up continuity and identity-change warnings.',
+    },
+    priorTopic: {
+      type: 'string',
+      description:
+        'Optional prior selectedConversation.topic from earlier Teams tool output. Use with priorGraphChatId to detect same-title recurring meeting switches.',
     },
     messageId: {
       type: 'string',
@@ -81,9 +96,34 @@ const teamsArchiveJsonSchema = {
     },
     senderScope: {
       type: 'string',
-      enum: ['any', 'me', 'others'],
+      enum: ['any', 'me', 'others', 'person', 'all'],
       description:
-        'For advanced_search_messages: whether to search messages from anyone, only the signed-in user, or everyone except the signed-in user.',
+        'For advanced_search_messages use any/me/others. For conversation_sender_messages and sender_identity_report use me/person/all as supported by the action.',
+    },
+    senderName: {
+      type: 'string',
+      description:
+        'For conversation_sender_messages or sender_identity_report with senderScope=person: sender display name to match.',
+    },
+    senderEmail: {
+      type: 'string',
+      description:
+        'For conversation_sender_messages or sender_identity_report with senderScope=person: sender email to match.',
+    },
+    senderUserId: {
+      type: 'string',
+      description:
+        'For conversation_sender_messages or sender_identity_report with senderScope=person: Teams/Entra sender user id to match.',
+    },
+    personName: {
+      type: 'string',
+      description:
+        'For sender_identity_report with senderScope=person: person display name to inspect.',
+    },
+    personEmail: {
+      type: 'string',
+      description:
+        'For sender_identity_report with senderScope=person: person email to inspect.',
     },
     chatType: {
       type: 'string',
@@ -103,6 +143,22 @@ const teamsArchiveJsonSchema = {
       enum: ['recent', 'oldest'],
       description:
         'For advanced_search_messages: whether to return the newest matches first or the oldest matches first.',
+    },
+    includeSystem: {
+      type: 'boolean',
+      description:
+        'For conversation_recent_messages: include Teams system/empty activity. Defaults to false so latest/new means human-readable messages.',
+    },
+    includeRecentMessages: {
+      type: 'boolean',
+      description:
+        'For conversation_activity_diagnostics: include newest human-readable message previews in the diagnostic output.',
+    },
+    sort: {
+      type: 'string',
+      enum: ['newest', 'oldest'],
+      description:
+        'For conversation_sender_messages: newest or oldest message ordering.',
     },
     aroundMessageId: {
       type: 'string',
@@ -157,10 +213,15 @@ function clampActionLimit(action, limit) {
   if (!Number.isFinite(parsed)) {
     switch (action) {
       case 'list_conversations':
+      case 'recent_meeting_chats':
         return 3;
       case 'conversation_dossier':
         return 4;
       case 'get_messages':
+      case 'conversation_recent_messages':
+      case 'conversation_sender_messages':
+      case 'conversation_activity_diagnostics':
+      case 'sender_identity_report':
       case 'get_message_body':
       case 'get_messages_window':
       case 'summarize_conversation':
@@ -177,10 +238,15 @@ function clampActionLimit(action, limit) {
   const normalized = Math.max(1, Math.trunc(parsed));
   switch (action) {
     case 'list_conversations':
+    case 'recent_meeting_chats':
       return Math.min(normalized, 5);
     case 'conversation_dossier':
       return Math.min(normalized, 6);
     case 'get_messages':
+    case 'conversation_recent_messages':
+    case 'conversation_sender_messages':
+    case 'conversation_activity_diagnostics':
+    case 'sender_identity_report':
     case 'get_message_body':
     case 'get_messages_window':
     case 'summarize_conversation':
@@ -211,12 +277,22 @@ function createTeamsArchiveTool({ req }) {
       messagesPerChat,
       daysBack,
       senderScope,
+      senderName,
+      senderEmail,
+      senderUserId,
+      personName,
+      personEmail,
       chatType,
       participants,
       sortBy,
       aroundMessageId,
       before,
       after,
+      includeSystem,
+      includeRecentMessages,
+      sort,
+      priorGraphChatId,
+      priorTopic,
     }) => {
       const user = req?.user;
 
@@ -237,12 +313,22 @@ function createTeamsArchiveTool({ req }) {
         messagesPerChat,
         daysBack,
         senderScope,
+        senderName,
+        senderEmail,
+        senderUserId,
+        personName,
+        personEmail,
         chatType,
         participants,
         sortBy,
         aroundMessageId,
         before,
         after,
+        includeSystem,
+        includeRecentMessages,
+        sort,
+        priorGraphChatId,
+        priorTopic,
       };
       const actionSignature = buildActionSignature(action, actionPayload);
       actionCounts.set(action, (actionCounts.get(action) || 0) + 1);
@@ -312,6 +398,8 @@ function createTeamsArchiveTool({ req }) {
             chatType,
             participants,
             sortBy,
+            priorGraphChatId,
+            priorTopic,
           }),
         );
       }
@@ -321,6 +409,18 @@ function createTeamsArchiveTool({ req }) {
           await TeamsArchiveService.recentMessages(user, {
             query,
             limit: resolvedLimit,
+            daysBack,
+          }),
+        );
+      }
+
+      if (action === 'recent_meeting_chats') {
+        return formatJsonResult(
+          await TeamsArchiveService.recentMeetingChats(user, {
+            query,
+            topic,
+            limit: resolvedLimit,
+            offset,
             daysBack,
           }),
         );
@@ -350,6 +450,8 @@ function createTeamsArchiveTool({ req }) {
             daysBack,
             chatType,
             participants,
+            priorGraphChatId,
+            priorTopic,
           }),
         );
       }
@@ -359,6 +461,65 @@ function createTeamsArchiveTool({ req }) {
           await TeamsArchiveService.listConversationMessages(user, chatId, {
             limit: resolvedLimit,
             offset,
+          }),
+        );
+      }
+
+      if (action === 'conversation_recent_messages') {
+        return formatJsonResult(
+          await TeamsArchiveService.conversationRecentMessages(user, {
+            chatId,
+            limit: resolvedLimit,
+            offset,
+            daysBack,
+            includeSystem,
+          }),
+        );
+      }
+
+      if (action === 'conversation_sender_messages') {
+        return formatJsonResult(
+          await TeamsArchiveService.conversationSenderMessages(user, {
+            chatId,
+            senderScope,
+            senderName,
+            senderEmail,
+            senderUserId,
+            limit: resolvedLimit,
+            offset,
+            includeSystem,
+            sort,
+            priorGraphChatId,
+            priorTopic,
+          }),
+        );
+      }
+
+      if (action === 'conversation_activity_diagnostics') {
+        return formatJsonResult(
+          await TeamsArchiveService.conversationActivityDiagnostics(user, {
+            chatId,
+            includeRecentMessages,
+            includeSystem,
+            limit: resolvedLimit,
+            priorGraphChatId,
+            priorTopic,
+          }),
+        );
+      }
+
+      if (action === 'sender_identity_report') {
+        return formatJsonResult(
+          await TeamsArchiveService.senderIdentityReport(user, {
+            chatId,
+            senderScope,
+            senderName,
+            senderEmail,
+            senderUserId,
+            personName,
+            personEmail,
+            priorGraphChatId,
+            priorTopic,
           }),
         );
       }
@@ -393,6 +554,8 @@ function createTeamsArchiveTool({ req }) {
             topic,
             daysBack,
             limit: resolvedLimit,
+            priorGraphChatId,
+            priorTopic,
           }),
         );
       }
@@ -402,7 +565,7 @@ function createTeamsArchiveTool({ req }) {
       {
         name: TEAMS_ARCHIVE_TOOL_NAME,
         description:
-          'Searches and retrieves archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. Use action="search_messages" for the safest broad lexical archive discovery when the user is exploring a topic and you do not yet know the exact chat. Use action="advanced_search_messages" for recall-safe union retrieval across enterprise memory and the raw archive with sender scope, participant, chat-type, and recency filters. For exact or completeness-sensitive requests like all messages from my one-on-one with a person, or requests for decisions, action items, full context, or exact wording, prefer action="conversation_dossier" once the chat is resolved. If a preview is truncated and exact wording matters, use action="get_message_body" with one message id. Only use list_conversations when the exact chat is ambiguous and you need a candidate list. Avoid answering completeness-sensitive questions from previews alone when full-body or dossier retrieval is available.',
+          'Searches and retrieves archived Microsoft Teams chats. Use action="recent_meeting_chats" for recent meeting/standup requests because it ranks by lastMeaningfulMessageAt instead of Teams system activity. Use action="conversation_recent_messages" with selectedConversation.graphChatId for follow-ups like what is new/latest in that chat. Use action="conversation_sender_messages" for messages from me/a person in a selected chat. Use action="conversation_activity_diagnostics" to explain why a chat appears recent or risky. Use action="sender_identity_report" when sender matching is uncertain. Respect evidenceBudget and do not answer definitively when evidenceSufficient=false. Use graphChatId as the stable identity for recurring meetings; never treat title/topic alone as unique. If identityWarning is returned, ask for clarification.',
         schema: teamsArchiveJsonSchema,
       },
   );

@@ -35,6 +35,7 @@ const DEFAULT_DISCOVERY_CONCURRENCY = 4;
 const DEFAULT_MEMBER_ENRICHMENT_MODE = 'adaptive';
 const DEFAULT_MEMBER_ENRICHMENT_FAILURE_THRESHOLD = 8;
 const DEFAULT_CONVERSATION_DOSSIER_MAX_MESSAGES = 20000;
+const DEFAULT_RECENCY_BACKFILL_MAX_MESSAGES = 100000;
 const HEARTBEAT_MIN_INTERVAL_MS = 30 * 1000;
 const HEARTBEAT_CHAT_INTERVAL = 5;
 
@@ -1014,9 +1015,17 @@ function mapCompactConversation(conversation) {
     participants: mapCompactParticipants(conversation.participants || []),
     webUrl: conversation.webUrl || '',
     lastMessageAt: conversation.lastMessageAt,
+    lastHumanMessageAt: conversation.lastHumanMessageAt || null,
+    lastMeaningfulMessageAt: conversation.lastMeaningfulMessageAt || null,
+    lastSystemMessageAt: conversation.lastSystemMessageAt || null,
     lastSyncedAt: conversation.lastSyncedAt,
     sourceUpdatedAt: conversation.sourceUpdatedAt,
     messageCount: conversation.messageCount || 0,
+    humanMessageCount: conversation.humanMessageCount || 0,
+    systemMessageCount: conversation.systemMessageCount || 0,
+    emptyMessageCount: conversation.emptyMessageCount || 0,
+    meaningfulMessageCount: conversation.meaningfulMessageCount || 0,
+    warnings: buildConversationWarningFlags(conversation),
   };
 }
 
@@ -1029,11 +1038,325 @@ function mapConversationCandidate(conversation) {
     participants: mapCompactParticipants(conversation.participants || [], 8),
     firstMessageAt: conversation.firstMessageAt || null,
     lastMessageAt: conversation.lastMessageAt || null,
+    lastHumanMessageAt: conversation.lastHumanMessageAt || null,
+    lastMeaningfulMessageAt: conversation.lastMeaningfulMessageAt || null,
+    lastSystemMessageAt: conversation.lastSystemMessageAt || null,
     lastSyncedAt: conversation.lastSyncedAt || null,
     messageCount: conversation.messageCount || 0,
+    humanMessageCount: conversation.humanMessageCount || 0,
+    systemMessageCount: conversation.systemMessageCount || 0,
+    emptyMessageCount: conversation.emptyMessageCount || 0,
+    meaningfulMessageCount: conversation.meaningfulMessageCount || 0,
+    participantMetadataDegraded: Boolean(conversation.participantDegraded),
+    warnings: buildConversationWarningFlags(conversation),
     syncStatus: conversation.syncStatus || '',
     webUrl: conversation.webUrl || '',
   };
+}
+
+function isMeaningfulArchiveMessage(message = {}) {
+  return (
+    message.isSystemLikeMessage !== true &&
+    message.isChunkable === true &&
+    Number(message.normalizedTextLength || 0) > 0
+  );
+}
+
+function isEmptyArchiveMessage(message = {}) {
+  return (
+    Number(message.normalizedTextLength || 0) <= 0 ||
+    message.skipChunkReason === 'empty_normalized_text' ||
+    (message.isChunkable === false && !message.isSystemLikeMessage)
+  );
+}
+
+function buildConversationWarningFlags(conversation = {}) {
+  const lastMeaningful = toDate(conversation.lastMeaningfulMessageAt);
+  const lastRaw = toDate(conversation.lastMessageAt);
+  const lastSystem = toDate(conversation.lastSystemMessageAt);
+  const meaningfulCount = Number(conversation.meaningfulMessageCount || 0);
+  const messageCount = Number(conversation.messageCount || 0);
+
+  return {
+    systemOnlyRecentActivity:
+      Boolean(lastSystem && lastRaw && lastSystem.getTime() === lastRaw.getTime()) &&
+      (!lastMeaningful || lastSystem.getTime() > lastMeaningful.getTime()),
+    sparseConversation: meaningfulCount > 0 && meaningfulCount <= 3,
+    noMeaningfulMessages: meaningfulCount === 0 && messageCount > 0,
+    participantMetadataDegraded: Boolean(conversation.participantDegraded),
+  };
+}
+
+function buildSelectedConversation(conversation, {
+  selectionReason = 'graphChatId',
+  identityConfidence = 'high',
+} = {}) {
+  if (!conversation?.graphChatId) {
+    return null;
+  }
+
+  return {
+    archiveConversationId: conversation._id?.toString?.() || conversation.id || '',
+    graphChatId: conversation.graphChatId,
+    topic: conversation.topic || '',
+    chatType: conversation.chatType || '',
+    lastMessageAt: conversation.lastMessageAt || null,
+    lastMeaningfulMessageAt: conversation.lastMeaningfulMessageAt || null,
+    selectionReason,
+    identityConfidence,
+  };
+}
+
+function buildIdentityWarning(candidates = [], {
+  topic = '',
+  reason = 'multiple_conversations_match_title',
+} = {}) {
+  if (!Array.isArray(candidates) || candidates.length <= 1) {
+    return null;
+  }
+
+  return {
+    reason,
+    topic: topic || undefined,
+    candidateCount: candidates.length,
+    guidance:
+      'Multiple Teams conversations match this title/topic. Treat graphChatId as the stable identity and ask the user to choose before answering as if one chat is selected.',
+    candidates: candidates.slice(0, 10).map((candidate) => ({
+      archiveConversationId: candidate._id?.toString?.() || candidate.id || '',
+      graphChatId: candidate.graphChatId,
+      topic: candidate.topic || '',
+      chatType: candidate.chatType || '',
+      lastMessageAt: candidate.lastMessageAt || null,
+      lastMeaningfulMessageAt: candidate.lastMeaningfulMessageAt || null,
+    })),
+  };
+}
+
+function buildIdentityChangeWarning({ priorGraphChatId, priorTopic, selectedConversation }) {
+  const normalizedPriorGraphChatId = String(priorGraphChatId || '').trim();
+  if (!normalizedPriorGraphChatId || !selectedConversation?.graphChatId) {
+    return null;
+  }
+
+  if (normalizedPriorGraphChatId === selectedConversation.graphChatId) {
+    return null;
+  }
+
+  const priorTopicText = String(priorTopic || '').trim().toLowerCase();
+  const selectedTopicText = String(selectedConversation.topic || '').trim().toLowerCase();
+  const similarTopic =
+    priorTopicText &&
+    selectedTopicText &&
+    (priorTopicText === selectedTopicText ||
+      priorTopicText.includes(selectedTopicText) ||
+      selectedTopicText.includes(priorTopicText));
+
+  if (!similarTopic) {
+    return null;
+  }
+
+  return {
+    identityChanged: true,
+    previousGraphChatId: normalizedPriorGraphChatId,
+    currentGraphChatId: selectedConversation.graphChatId,
+    previousTopic: priorTopic || '',
+    currentTopic: selectedConversation.topic || '',
+    guidance:
+      'This selection differs from the previous Teams conversation for a similar topic. Ask for clarification unless the user explicitly requested a different chat.',
+  };
+}
+
+function isSameOrFollowUpTopic({ query, topic, priorTopic }) {
+  const text = [query, topic].map((value) => String(value || '').trim()).filter(Boolean).join(' ');
+  const normalizedText = text.toLowerCase();
+  const normalizedPriorTopic = String(priorTopic || '').trim().toLowerCase();
+
+  if (!normalizedText) {
+    return true;
+  }
+
+  if (
+    /\b(it|that|this|same|selected|previous|new|latest|changed|updates?|action items?|summarize)\b/i.test(
+      normalizedText,
+    )
+  ) {
+    return true;
+  }
+
+  if (!normalizedPriorTopic) {
+    return false;
+  }
+
+  return (
+    normalizedText.includes(normalizedPriorTopic) ||
+    normalizedPriorTopic.includes(normalizedText)
+  );
+}
+
+function getPriorGraphChatIdForFollowUp(options = {}) {
+  const priorGraphChatId = String(options.priorGraphChatId || '').trim();
+  if (!priorGraphChatId || String(options.chatId || '').trim()) {
+    return '';
+  }
+
+  return isSameOrFollowUpTopic({
+    query: options.query,
+    topic: options.topic,
+    priorTopic: options.priorTopic,
+  })
+    ? priorGraphChatId
+    : '';
+}
+
+function isCompletenessSensitiveText(value = '') {
+  return /\b(all|everything|entire|complete|completeness|exact|exactly|verbatim|wording|full context|new messages?|what changed|changed|latest|action items?|decisions?)\b/i.test(
+    String(value || ''),
+  );
+}
+
+function buildEvidenceBudget(options = {}, evidence = {}) {
+  const requestedCompleteness = Boolean(
+    options.requestedCompleteness ||
+      isCompletenessSensitiveText(
+        [options.query, options.topic, options.action].filter(Boolean).join(' '),
+      ),
+  );
+  const fullBodiesReturned = Number(evidence.fullBodiesReturned || 0);
+  const humanReadableReturned = Number(evidence.humanReadableReturned || 0);
+  const previewOnlyReturned = Number(evidence.previewOnlyReturned || 0);
+  const conversationsScoped = Number(evidence.conversationsScoped || 0);
+  const totalMessagesConsidered = Number(evidence.totalMessagesConsidered || 0);
+  const insufficiencyReasons = [];
+
+  if (requestedCompleteness && conversationsScoped !== 1) {
+    insufficiencyReasons.push('conversation_not_uniquely_scoped');
+  }
+  if (requestedCompleteness && totalMessagesConsidered === 0) {
+    insufficiencyReasons.push('no_messages_considered');
+  }
+  if (requestedCompleteness && fullBodiesReturned === 0 && humanReadableReturned === 0 && previewOnlyReturned > 0) {
+    insufficiencyReasons.push('preview_only_evidence');
+  }
+  if (requestedCompleteness && evidence.identityWarning) {
+    insufficiencyReasons.push('ambiguous_conversation_identity');
+  }
+
+  const evidenceSufficient =
+    !requestedCompleteness ||
+    (insufficiencyReasons.length === 0 &&
+      conversationsScoped === 1 &&
+      totalMessagesConsidered > 0);
+
+  return {
+    requestedCompleteness,
+    fullBodiesReturned,
+    humanReadableReturned,
+    previewOnlyReturned,
+    conversationsScoped,
+    totalMessagesConsidered,
+    evidenceSufficient,
+    insufficiencyReasons,
+    guidance: evidenceSufficient
+      ? 'Evidence is sufficient for the requested retrieval scope.'
+      : 'Do not provide a definitive summary. Ask the user to select a conversation or run conversation_recent_messages/conversation_dossier for stronger evidence.',
+  };
+}
+
+function buildHumanReadableMessageFilter({ includeSystem = false } = {}) {
+  if (includeSystem) {
+    return {};
+  }
+
+  return {
+    isSystemLikeMessage: { $ne: true },
+    isChunkable: true,
+    normalizedTextLength: { $gt: 0 },
+  };
+}
+
+function messageSenderMatches(message = {}, clauses = []) {
+  const fromUserId = String(message.fromUserId || '').trim();
+  const fromEmail = String(message.fromEmail || '').trim().toLowerCase();
+  const fromDisplayName = String(message.fromDisplayName || '').trim().toLowerCase();
+
+  for (const clause of clauses) {
+    if (clause.fromUserId && String(clause.fromUserId).trim() === fromUserId) {
+      return { matchedBy: 'fromUserId', confidence: 'high' };
+    }
+    if (clause.fromEmail && String(clause.fromEmail).trim().toLowerCase() === fromEmail) {
+      return { matchedBy: 'fromEmail', confidence: fromEmail === 'aaduser' ? 'low' : 'high' };
+    }
+    if (
+      clause.fromDisplayName &&
+      String(clause.fromDisplayName).trim().toLowerCase() === fromDisplayName
+    ) {
+      return { matchedBy: 'fromDisplayName', confidence: 'medium' };
+    }
+  }
+
+  return { matchedBy: 'unknown', confidence: 'low' };
+}
+
+function buildPersonSenderClauses({ senderName, senderEmail, senderUserId } = {}) {
+  const clauses = [];
+  const normalizedUserId = String(senderUserId || '').trim();
+  const normalizedEmail = String(senderEmail || '').trim();
+  const normalizedName = String(senderName || '').trim();
+
+  if (normalizedUserId) {
+    clauses.push({ fromUserId: normalizedUserId });
+  }
+  if (normalizedEmail) {
+    clauses.push({ fromEmail: normalizedEmail }, { fromEmail: normalizedEmail.toLowerCase() });
+  }
+  if (normalizedName) {
+    clauses.push({ fromDisplayName: normalizedName });
+  }
+
+  return clauses;
+}
+
+function summarizeMessageSearchability(messages = []) {
+  const stats = {
+    humanMessageCount: 0,
+    meaningfulMessageCount: 0,
+    systemMessageCount: 0,
+    emptyMessageCount: 0,
+    lastHumanMessageAt: null,
+    lastMeaningfulMessageAt: null,
+    lastSystemMessageAt: null,
+  };
+
+  for (const message of messages) {
+    const sentAt = toDate(message?.sentDateTime) || toDate(message?.createdAt);
+    const isMeaningful = isMeaningfulArchiveMessage(message);
+    const isSystem = message?.isSystemLikeMessage === true;
+    const isEmpty = isEmptyArchiveMessage(message);
+
+    if (isMeaningful) {
+      stats.humanMessageCount += 1;
+      stats.meaningfulMessageCount += 1;
+      if (!stats.lastHumanMessageAt || sentAt > stats.lastHumanMessageAt) {
+        stats.lastHumanMessageAt = sentAt;
+      }
+      if (!stats.lastMeaningfulMessageAt || sentAt > stats.lastMeaningfulMessageAt) {
+        stats.lastMeaningfulMessageAt = sentAt;
+      }
+    }
+
+    if (isSystem) {
+      stats.systemMessageCount += 1;
+      if (!stats.lastSystemMessageAt || sentAt > stats.lastSystemMessageAt) {
+        stats.lastSystemMessageAt = sentAt;
+      }
+    }
+
+    if (isEmpty) {
+      stats.emptyMessageCount += 1;
+    }
+  }
+
+  return stats;
 }
 
 function mapCompactMessageResult(message, conversation, options = {}) {
@@ -1374,7 +1697,8 @@ async function buildMessageBodyEscalations(user, options = {}, results = []) {
 async function runArchiveAdvancedMessageSearch(user, options = {}) {
   const userId = user?.id || user?._id?.toString();
   const topic = String(options.topic || options.query || '').trim();
-  const chatId = String(options.chatId || '').trim();
+  const priorFollowUpChatId = getPriorGraphChatIdForFollowUp(options);
+  const chatId = String(options.chatId || priorFollowUpChatId || '').trim();
   const senderScope = String(options.senderScope || 'any').trim();
   const chatType = String(options.chatType || 'any').trim();
   const sortBy = String(options.sortBy || 'recent').trim();
@@ -1519,6 +1843,23 @@ async function runArchiveAdvancedMessageSearch(user, options = {}) {
           ? mapConversationCandidate(conversationMap.get(conversationIds[0]))
           : undefined
         : undefined;
+  const selectedConversation =
+    resolvedConversation?.graphChatId
+      ? {
+          archiveConversationId: resolvedConversation.id || '',
+          graphChatId: resolvedConversation.graphChatId,
+          topic: resolvedConversation.topic || '',
+          chatType: resolvedConversation.chatType || '',
+          lastMessageAt: resolvedConversation.lastMessageAt || null,
+          lastMeaningfulMessageAt: resolvedConversation.lastMeaningfulMessageAt || null,
+          selectionReason: resolvedGraphChatId
+            ? priorFollowUpChatId && !options.chatId
+              ? 'prior_context'
+              : 'chatId'
+            : 'single_result',
+          identityConfidence: resolvedGraphChatId ? 'high' : 'medium',
+        }
+      : null;
 
   return {
     retrievalMode: 'advanced_message_previews',
@@ -1533,7 +1874,15 @@ async function runArchiveAdvancedMessageSearch(user, options = {}) {
         ? 'These previews are scoped to one resolved conversation. If completeness matters, use conversation_dossier or summarize_conversation before expanding with get_messages_window.'
         : 'These are compact previews optimized for topic discovery. If a single conversation stands out, use summarize_conversation before expanding with get_messages_window.',
     ...(resolvedConversation ? { resolvedConversation } : {}),
+    ...(selectedConversation ? { selectedConversation } : {}),
     resultCount: messages.length,
+    evidenceBudget: buildEvidenceBudget(options, {
+      fullBodiesReturned: 0,
+      humanReadableReturned: messages.filter((message) => isMeaningfulArchiveMessage(message)).length,
+      previewOnlyReturned: messages.length,
+      conversationsScoped: resolvedGraphChatId ? 1 : conversationIds.length,
+      totalMessagesConsidered: messages.length,
+    }),
     results: messages.map((message) =>
       mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {
         excerptLimit: 260,
@@ -1575,7 +1924,7 @@ function buildConversationLookupFilter(userId, options = {}) {
       user: userId,
       ...(normalizedChatType !== 'any' ? { chatType: normalizedChatType } : {}),
       ...(daysBack
-        ? { lastMessageAt: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } }
+        ? { lastMeaningfulMessageAt: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } }
         : {}),
       ...((participantClauses.length > 0 || topicRegex)
         ? {
@@ -1597,7 +1946,7 @@ async function findConversationCandidates(userId, options = {}) {
   let conversations = await db.findTeamsArchiveConversations(lookup.filter, {
     limit,
     offset: 0,
-    sort: { lastMessageAt: -1, updatedAt: -1 },
+    sort: { lastMeaningfulMessageAt: -1, lastMessageAt: -1, updatedAt: -1 },
   });
 
   if (conversations.length === 0 && lookup.participantClauses.length > 0) {
@@ -1649,7 +1998,7 @@ async function findConversationCandidates(userId, options = {}) {
           ...(lookup.normalizedChatType !== 'any' ? { chatType: lookup.normalizedChatType } : {}),
           ...(lookup.daysBack
             ? {
-                lastMessageAt: {
+                lastMeaningfulMessageAt: {
                   $gte: new Date(Date.now() - lookup.daysBack * 24 * 60 * 60 * 1000),
                 },
               }
@@ -1664,7 +2013,7 @@ async function findConversationCandidates(userId, options = {}) {
           {
             limit,
             offset: 0,
-            sort: { lastMessageAt: -1, updatedAt: -1 },
+            sort: { lastMeaningfulMessageAt: -1, lastMessageAt: -1, updatedAt: -1 },
           },
         );
       }
@@ -2118,6 +2467,9 @@ async function getStatus(user) {
     searchableGroupConversationCount,
     searchableMeetingConversationCount,
     participantDegradedConversationCount,
+    staleOrIncompleteConversationCount,
+    zeroMeaningfulMessageConversationCount,
+    systemOnlyRecentConversationCount,
   ] = await Promise.all([
     userId ? db.countTeamsArchiveConversations({ user: userId }) : 0,
     userId ? db.countTeamsArchiveMessages({ user: userId }) : 0,
@@ -2176,6 +2528,34 @@ async function getStatus(user) {
         })
       : 0,
     userId ? db.countTeamsArchiveConversations({ user: userId, participantDegraded: true }) : 0,
+    userId
+      ? db.countTeamsArchiveConversations({
+          user: userId,
+          $or: [
+            { syncStatus: { $in: ['failed', 'pending', 'running'] } },
+            { syncCursor: { $exists: true, $nin: [null, ''] } },
+            { messageCount: 0, lastMessageAt: { $exists: true, $ne: null } },
+          ],
+        })
+      : 0,
+    userId
+      ? db.countTeamsArchiveConversations({
+          user: userId,
+          messageCount: { $gt: 0 },
+          meaningfulMessageCount: { $in: [0, null] },
+        })
+      : 0,
+    userId
+      ? db.countTeamsArchiveConversations({
+          user: userId,
+          lastSystemMessageAt: { $exists: true, $ne: null },
+          $or: [
+            { lastMeaningfulMessageAt: { $exists: false } },
+            { lastMeaningfulMessageAt: null },
+            { meaningfulMessageCount: 0 },
+          ],
+        })
+      : 0,
   ]);
 
   const normalizedBackfillStatus = backfillState
@@ -2285,6 +2665,9 @@ async function getStatus(user) {
         meeting: searchableMeetingConversationCount || 0,
       },
       participantDegradedConversationCount: participantDegradedConversationCount || 0,
+      staleOrIncompleteConversations: staleOrIncompleteConversationCount || 0,
+      zeroMeaningfulMessageConversations: zeroMeaningfulMessageConversationCount || 0,
+      systemOnlyRecentConversations: systemOnlyRecentConversationCount || 0,
     },
   };
 }
@@ -2875,6 +3258,18 @@ async function syncUserArchive(user, options = {}) {
         user: userId,
         graphChatId: conversation.graphChatId,
       });
+      const archivedMessagesForStats = await db.findTeamsArchiveMessages(
+        {
+          user: userId,
+          graphChatId: conversation.graphChatId,
+        },
+        {
+          limit: DEFAULT_CONVERSATION_DOSSIER_MAX_MESSAGES,
+          offset: 0,
+          sort: { sentDateTime: -1, createdAt: -1 },
+        },
+      );
+      const searchabilityStats = summarizeMessageSearchability(archivedMessagesForStats);
       const isConversationComplete = !conversationFailed && (incrementalRefresh || !nextMessageCursor);
       const enrichedParticipants = mergeConversationParticipants({
         graphParticipants: toArray(conversation?.participants).filter(
@@ -2896,6 +3291,13 @@ async function syncUserArchive(user, options = {}) {
         lastSyncedAt: new Date(),
         lastMessageAt: latestMessageAt || conversation?.lastMessageAt,
         messageCount: messageCountForConversation,
+        lastHumanMessageAt: searchabilityStats.lastHumanMessageAt,
+        lastMeaningfulMessageAt: searchabilityStats.lastMeaningfulMessageAt,
+        lastSystemMessageAt: searchabilityStats.lastSystemMessageAt,
+        humanMessageCount: searchabilityStats.humanMessageCount,
+        meaningfulMessageCount: searchabilityStats.meaningfulMessageCount,
+        systemMessageCount: searchabilityStats.systemMessageCount,
+        emptyMessageCount: searchabilityStats.emptyMessageCount,
         participants: enrichedParticipants.participants,
         participantMetadataSource: enrichedParticipants.participantMetadataSource,
         participantConfidence: enrichedParticipants.participantConfidence,
@@ -2914,6 +3316,9 @@ async function syncUserArchive(user, options = {}) {
         chatType: conversationRecord?.chatType || conversation.chatType || '',
         messageCount: conversationRecord?.messageCount || messageCountForConversation || 0,
         lastMessageAt: conversationRecord?.lastMessageAt || latestMessageAt || conversation.lastMessageAt,
+        lastMeaningfulMessageAt: conversationRecord?.lastMeaningfulMessageAt || searchabilityStats.lastMeaningfulMessageAt,
+        meaningfulMessageCount:
+          conversationRecord?.meaningfulMessageCount || searchabilityStats.meaningfulMessageCount,
         syncStatus:
           conversationRecord?.syncStatus ||
           (conversationFailed ? 'failed' : isConversationComplete ? 'complete' : 'pending'),
@@ -3107,8 +3512,19 @@ async function listConversations(user, options = {}) {
 
   const conversations = await db.findTeamsArchiveConversations(
     conversationFilter,
-    { limit, offset, sort: { lastMessageAt: -1, updatedAt: -1 } },
+    { limit, offset, sort: { lastMeaningfulMessageAt: -1, lastMessageAt: -1, updatedAt: -1 } },
   );
+  const selectedConversation =
+    conversations.length === 1
+      ? buildSelectedConversation(conversations[0], {
+          selectionReason: topic || participantClauses.length > 0 ? 'filtered_single_match' : 'single_result',
+          identityConfidence: topic ? 'medium' : 'high',
+        })
+      : null;
+  const identityWarning = buildIdentityWarning(conversations, {
+    topic,
+    reason: topic ? 'multiple_conversations_match_title_or_topic' : 'multiple_conversations_match_filters',
+  });
 
   return {
     retrievalMode: 'conversation_list',
@@ -3120,14 +3536,252 @@ async function listConversations(user, options = {}) {
       participantClauses.length > 0 || normalizedChatType !== 'any' || topic
         ? 'These are scoped conversations. For one exact chat, prefer summarize_conversation first, then get_messages or get_messages_window if you need message-level detail.'
         : 'These are archived conversations. Narrow to one exact chat before expanding messages.',
+    ...(selectedConversation ? { selectedConversation } : {}),
+    ...(identityWarning ? { identityWarning } : {}),
     conversations: conversations.map((conversation) => mapCompactConversation(conversation)),
+  };
+}
+
+async function computeConversationRecencyFromArchive(userId, graphChatId, options = {}) {
+  const limit = clampInteger(
+    options.limit,
+    DEFAULT_RECENCY_BACKFILL_MAX_MESSAGES,
+    { min: 1, max: DEFAULT_RECENCY_BACKFILL_MAX_MESSAGES },
+  );
+  const [totalMessageCount, messages] = await Promise.all([
+    db.countTeamsArchiveMessages({ user: userId, graphChatId }),
+    db.findTeamsArchiveMessages(
+      { user: userId, graphChatId },
+      {
+        limit,
+        offset: 0,
+        sort: { sentDateTime: -1, createdAt: -1 },
+      },
+    ),
+  ]);
+  const stats = summarizeMessageSearchability(messages);
+  const newestRawMessage = messages.find((message) => toDate(message.sentDateTime) || toDate(message.createdAt));
+
+  return {
+    ...stats,
+    totalMessageCount,
+    loadedMessageCount: messages.length,
+    truncated: totalMessageCount > messages.length,
+    lastMessageAt:
+      toDate(newestRawMessage?.sentDateTime) ||
+      toDate(newestRawMessage?.createdAt) ||
+      null,
+  };
+}
+
+function buildRecencyBackfillUpdate(stats = {}) {
+  return {
+    lastHumanMessageAt: stats.lastHumanMessageAt,
+    lastMeaningfulMessageAt: stats.lastMeaningfulMessageAt,
+    lastSystemMessageAt: stats.lastSystemMessageAt,
+    humanMessageCount: stats.humanMessageCount,
+    meaningfulMessageCount: stats.meaningfulMessageCount,
+    systemMessageCount: stats.systemMessageCount,
+    emptyMessageCount: stats.emptyMessageCount,
+    messageCount: stats.totalMessageCount,
+    ...(stats.lastMessageAt ? { lastMessageAt: stats.lastMessageAt } : {}),
+  };
+}
+
+function pickRecencyFields(conversation = {}) {
+  return {
+    lastMessageAt: conversation.lastMessageAt || null,
+    lastHumanMessageAt: conversation.lastHumanMessageAt || null,
+    lastMeaningfulMessageAt: conversation.lastMeaningfulMessageAt || null,
+    lastSystemMessageAt: conversation.lastSystemMessageAt || null,
+    humanMessageCount: conversation.humanMessageCount || 0,
+    meaningfulMessageCount: conversation.meaningfulMessageCount || 0,
+    systemMessageCount: conversation.systemMessageCount || 0,
+    emptyMessageCount: conversation.emptyMessageCount || 0,
+    messageCount: conversation.messageCount || 0,
+  };
+}
+
+function recencyFieldsChanged(oldFields = {}, newFields = {}) {
+  return Object.keys(newFields).some((key) => {
+    const oldValue = oldFields[key];
+    const newValue = newFields[key];
+    if (oldValue instanceof Date || newValue instanceof Date) {
+      return (toDate(oldValue)?.getTime?.() || 0) !== (toDate(newValue)?.getTime?.() || 0);
+    }
+    return oldValue !== newValue;
+  });
+}
+
+async function backfillConversationRecency(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  if (!userId) {
+    throw new TeamsArchiveServiceError('User id is required for recency backfill', 400);
+  }
+
+  const chatId = String(options.chatId || '').trim();
+  const apply = options.apply === true;
+  const dryRun = !apply;
+  let conversations = [];
+
+  if (chatId) {
+    const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+    if (!resolvedGraphChatId) {
+      return {
+        retrievalMode: 'conversation_recency_backfill',
+        dryRun,
+        apply,
+        chatId,
+        processedConversationCount: 0,
+        changedConversationCount: 0,
+        conversations: [],
+        guidance: 'No archived Teams conversation was found for the requested chat id.',
+      };
+    }
+    conversations = await db.findTeamsArchiveConversations(
+      { user: userId, graphChatId: resolvedGraphChatId },
+      { limit: 1 },
+    );
+  } else {
+    conversations = await db.findTeamsArchiveConversations(
+      { user: userId },
+      {
+        limit: clampInteger(options.limit, 10000, { min: 1, max: 100000 }),
+        offset: clampInteger(options.offset, 0, { min: 0, max: 100000 }),
+        sort: { updatedAt: -1 },
+      },
+    );
+  }
+
+  const results = [];
+  for (const conversation of conversations) {
+    const stats = await computeConversationRecencyFromArchive(userId, conversation.graphChatId);
+    const oldRecency = pickRecencyFields(conversation);
+    const newRecency = buildRecencyBackfillUpdate(stats);
+    const wouldChange = recencyFieldsChanged(oldRecency, newRecency);
+
+    if (apply && wouldChange) {
+      await db.updateTeamsArchiveConversation(
+        conversation._id?.toString?.() || conversation.id,
+        newRecency,
+      );
+    }
+
+    results.push({
+      topic: conversation.topic || '',
+      graphChatId: conversation.graphChatId,
+      archiveConversationId: conversation._id?.toString?.() || conversation.id || '',
+      oldRecency,
+      newRecency,
+      totalMessageCount: stats.totalMessageCount,
+      loadedMessageCount: stats.loadedMessageCount,
+      truncated: stats.truncated,
+      wouldChange,
+      didChange: apply && wouldChange,
+    });
+  }
+
+  return {
+    retrievalMode: 'conversation_recency_backfill',
+    dryRun,
+    apply,
+    processedConversationCount: results.length,
+    changedConversationCount: results.filter((result) => result.wouldChange).length,
+    updatedConversationCount: results.filter((result) => result.didChange).length,
+    conversations: results,
+  };
+}
+
+async function recentMeetingChats(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const limit = clampInteger(options.limit, 5, { min: 1, max: 10 });
+  const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
+  const daysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : undefined;
+  const topic = String(options.topic || options.query || '').trim();
+  const topicRegex = topic ? buildSearchRegex(topic) : null;
+  const since = daysBack ? new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) : null;
+
+  const conversations = await db.findTeamsArchiveConversations(
+    {
+      user: userId,
+      chatType: 'meeting',
+      ...(since ? { lastMeaningfulMessageAt: { $gte: since } } : {}),
+      ...(topicRegex ? { topic: topicRegex } : {}),
+    },
+    {
+      limit,
+      offset,
+      sort: { lastMeaningfulMessageAt: -1, lastMessageAt: -1, updatedAt: -1 },
+    },
+  );
+
+  const graphChatIds = conversations.map((conversation) => conversation.graphChatId).filter(Boolean);
+  const previewMessages = graphChatIds.length
+    ? await db.findTeamsArchiveMessages(
+        {
+          user: userId,
+          graphChatId: { $in: graphChatIds },
+          ...buildHumanReadableMessageFilter(),
+        },
+        {
+          limit: Math.max(limit * 3, graphChatIds.length),
+          offset: 0,
+          sort: { sentDateTime: -1, createdAt: -1 },
+        },
+      )
+    : [];
+  const previewByChatId = new Map();
+  for (const message of previewMessages) {
+    const existing = previewByChatId.get(message.graphChatId) || [];
+    if (existing.length < 3) {
+      existing.push(message);
+      previewByChatId.set(message.graphChatId, existing);
+    }
+  }
+
+  const selectedConversation =
+    conversations.length === 1
+      ? buildSelectedConversation(conversations[0], {
+          selectionReason: 'recent_meeting_single_result',
+          identityConfidence: topic ? 'medium' : 'high',
+        })
+      : null;
+  const identityWarning = buildIdentityWarning(conversations, {
+    topic,
+    reason: topic ? 'multiple_recent_meetings_match_title_or_topic' : 'multiple_recent_meetings',
+  });
+
+  return {
+    retrievalMode: 'recent_meeting_chats',
+    chatType: 'meeting',
+    topic: topic || undefined,
+    daysBack,
+    guidance:
+      'Meeting chats are ranked by lastMeaningfulMessageAt, not raw Teams system activity. Use selectedConversation.graphChatId for follow-up questions, and ask for clarification when identityWarning is present.',
+    ...(selectedConversation ? { selectedConversation } : {}),
+    ...(identityWarning ? { identityWarning } : {}),
+    resultCount: conversations.length,
+    conversations: conversations.map((conversation) => ({
+      ...mapCompactConversation(conversation),
+      newestHumanReadableMessages: (previewByChatId.get(conversation.graphChatId) || []).map((message) =>
+        mapCompactMessageResult(message, conversation, {
+          includeReplyToId: true,
+          excerptLimit: 240,
+        }),
+      ),
+    })),
   };
 }
 
 async function getConversationDossier(user, options = {}) {
   assertEnabled();
   const userId = user?.id || user?._id?.toString();
-  const chatId = String(options.chatId || '').trim();
+  const priorFollowUpChatId = getPriorGraphChatIdForFollowUp(options);
+  const chatId = String(options.chatId || priorFollowUpChatId || '').trim();
   const query = String(options.query || options.topic || '').trim();
   const queryRegex = query ? buildSearchRegex(query) : null;
   const previewLimit = clampInteger(options.limit, 4, { min: 1, max: 6 });
@@ -3178,6 +3832,10 @@ async function getConversationDossier(user, options = {}) {
     }
 
     if (candidates.length > 1) {
+      const identityWarning = buildIdentityWarning(candidates, {
+        topic: lookup.topic || query,
+        reason: 'multiple_conversations_match_title_or_filters',
+      });
       return {
         retrievalMode: 'conversation_dossier',
         resolved: false,
@@ -3188,6 +3846,7 @@ async function getConversationDossier(user, options = {}) {
         candidateCount: candidates.length,
         guidance:
           'Multiple archived conversations matched. Pick one chatId from the candidates before asking for exhaustive retrieval.',
+        ...(identityWarning ? { identityWarning } : {}),
         candidates: candidates.slice(0, 10).map((candidate) => mapConversationCandidate(candidate)),
       };
     }
@@ -3230,6 +3889,19 @@ async function getConversationDossier(user, options = {}) {
   const lastMatchedAt = matchedMessages[matchedMessages.length - 1]?.sentDateTime || null;
   const monthlyCoverage = summarizeCoverageByMonth(messages, queryRegex);
   const loadedAllMessages = totalMessagesInScope <= messages.length;
+  const selectedConversation = buildSelectedConversation(conversation, {
+    selectionReason: chatId
+      ? priorFollowUpChatId && !options.chatId
+        ? 'prior_context'
+        : 'chatId'
+      : 'single_candidate',
+    identityConfidence: chatId ? 'high' : 'medium',
+  });
+  const identityChangeWarning = buildIdentityChangeWarning({
+    priorGraphChatId: options.priorGraphChatId,
+    priorTopic: options.priorTopic,
+    selectedConversation,
+  });
 
   return {
     retrievalMode: 'conversation_dossier',
@@ -3245,6 +3917,8 @@ async function getConversationDossier(user, options = {}) {
     guidance:
       'This dossier is built directly from the archived Teams messages for one resolved chat. Use it when completeness matters more than quick previews.',
     chat: mapConversationCandidate(conversation),
+    ...(selectedConversation ? { selectedConversation } : {}),
+    ...(identityChangeWarning ? { identityWarning: identityChangeWarning } : {}),
     query: query || undefined,
     daysBack: scopedDaysBack,
     firstMessageAt,
@@ -3255,6 +3929,13 @@ async function getConversationDossier(user, options = {}) {
     topSenders: summarizeSenderCounts(messages),
     matchedTopSenders: summarizeSenderCounts(matchedMessages),
     monthlyCoverage,
+    evidenceBudget: buildEvidenceBudget(options, {
+      fullBodiesReturned: messages.length,
+      humanReadableReturned: matchedMessages.length || messages.length,
+      previewOnlyReturned: 0,
+      conversationsScoped: 1,
+      totalMessagesConsidered: totalMessagesInScope,
+    }),
     highlights: mapDossierHighlights(matchedPreviewSource.slice(0, previewLimit), conversation, previewLimit),
     oldestMatches: mapDossierHighlights(matchedMessages.slice(0, previewLimit), conversation, previewLimit),
     newestMatches: mapDossierHighlights(
@@ -3348,11 +4029,16 @@ async function listConversationMessages(user, chatId, options = {}) {
     { limit: 1 },
   );
   const conversation = conversations[0] || null;
+  const selectedConversation = buildSelectedConversation(conversation, {
+    selectionReason: 'chatId',
+    identityConfidence: 'high',
+  });
 
   return {
     retrievalMode: 'thread_previews',
     chatId,
     graphChatId: resolvedGraphChatId,
+    ...(selectedConversation ? { selectedConversation } : {}),
     topic: conversation?.topic || '',
     chatType: conversation?.chatType || '',
     participants: mapCompactParticipants(conversation?.participants || []),
@@ -3365,6 +4051,492 @@ async function listConversationMessages(user, chatId, options = {}) {
         excerptLimit: 320,
       }),
     ),
+  };
+}
+
+async function conversationRecentMessages(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const chatId = String(options.chatId || '').trim();
+  if (!chatId) {
+    throw new TeamsArchiveServiceError('Chat id is required for conversation_recent_messages', 400);
+  }
+
+  const limit = clampInteger(options.limit, 6, { min: 1, max: 20 });
+  const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
+  const includeSystem =
+    options.includeSystem === true || String(options.includeSystem || '').toLowerCase() === 'true';
+  const daysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : undefined;
+  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+
+  if (!resolvedGraphChatId) {
+    return {
+      retrievalMode: 'conversation_recent_messages',
+      resolved: false,
+      chatId,
+      graphChatId: null,
+      messages: [],
+      guidance: 'No archived Teams chat was found for the requested chat id.',
+    };
+  }
+
+  const since = daysBack ? new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) : null;
+  const baseFilter = {
+    user: userId,
+    graphChatId: resolvedGraphChatId,
+    ...(since ? { sentDateTime: { $gte: since } } : {}),
+  };
+  const [conversations, messages, systemMessages, emptyMessages, skippedMessages] = await Promise.all([
+    db.findTeamsArchiveConversations({ user: userId, graphChatId: resolvedGraphChatId }, { limit: 1 }),
+    db.findTeamsArchiveMessages(
+      {
+        ...baseFilter,
+        ...buildHumanReadableMessageFilter({ includeSystem }),
+      },
+      { limit, offset, sort: { sentDateTime: -1, createdAt: -1 } },
+    ),
+    db.countTeamsArchiveMessages({ ...baseFilter, isSystemLikeMessage: true }),
+    db.countTeamsArchiveMessages({ ...baseFilter, normalizedTextLength: { $lte: 0 } }),
+    db.countTeamsArchiveMessages({ ...baseFilter, isChunkable: false }),
+  ]);
+  const conversation = conversations[0] || null;
+  const selectedConversation = buildSelectedConversation(conversation, {
+    selectionReason: 'chatId',
+    identityConfidence: 'high',
+  });
+
+  return {
+    retrievalMode: 'conversation_recent_messages',
+    resolved: true,
+    chatId,
+    graphChatId: resolvedGraphChatId,
+    ...(selectedConversation ? { selectedConversation } : {}),
+    topic: conversation?.topic || '',
+    chatType: conversation?.chatType || '',
+    daysBack,
+    includeSystem,
+    guidance:
+      'These are newest messages first from one resolved Teams conversation. By default system/empty messages are excluded so “new” reflects human-readable activity.',
+    counts: {
+      returned: messages.length,
+      systemMessages,
+      emptyMessages,
+      skippedMessages,
+    },
+    evidenceBudget: buildEvidenceBudget(
+      { ...options, action: 'conversation_recent_messages' },
+      {
+        fullBodiesReturned: 0,
+        humanReadableReturned: messages.length,
+        previewOnlyReturned: messages.length,
+        conversationsScoped: 1,
+        totalMessagesConsidered: messages.length,
+      },
+    ),
+    messages: messages.map((message) =>
+      mapCompactMessageResult(message, conversation, {
+        includeReplyToId: true,
+        includeImportance: true,
+        excerptLimit: 420,
+      }),
+    ),
+  };
+}
+
+async function conversationSenderMessages(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const priorFollowUpChatId = getPriorGraphChatIdForFollowUp(options);
+  const chatId = String(options.chatId || priorFollowUpChatId || '').trim();
+  if (!chatId) {
+    throw new TeamsArchiveServiceError('Chat id is required for conversation_sender_messages', 400);
+  }
+
+  const senderScope = String(options.senderScope || 'me').trim();
+  const normalizedSenderScope = ['me', 'person', 'all'].includes(senderScope) ? senderScope : 'me';
+  const includeSystem =
+    options.includeSystem === true || String(options.includeSystem || '').toLowerCase() === 'true';
+  const limit = clampInteger(options.limit, 8, { min: 1, max: 50 });
+  const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
+  const sortDirection = String(options.sort || options.sortBy || 'newest').toLowerCase() === 'oldest' ? 1 : -1;
+  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+
+  if (!resolvedGraphChatId) {
+    return {
+      retrievalMode: 'conversation_sender_messages',
+      resolved: false,
+      chatId,
+      graphChatId: null,
+      messages: [],
+      guidance: 'No archived Teams chat was found for the requested chat id.',
+    };
+  }
+
+  const senderClauses =
+    normalizedSenderScope === 'me'
+      ? getUserSenderClauses(user)
+      : normalizedSenderScope === 'person'
+        ? buildPersonSenderClauses(options)
+        : [];
+  const senderFilter = senderClauses.length > 0 ? { $or: senderClauses } : {};
+  const baseFilter = {
+    user: userId,
+    graphChatId: resolvedGraphChatId,
+    ...senderFilter,
+  };
+  const [conversations, messages, totalMatchingMessages, skippedSystemCount, skippedEmptyCount] =
+    await Promise.all([
+      db.findTeamsArchiveConversations({ user: userId, graphChatId: resolvedGraphChatId }, { limit: 1 }),
+      db.findTeamsArchiveMessages(
+        {
+          ...baseFilter,
+          ...buildHumanReadableMessageFilter({ includeSystem }),
+        },
+        { limit, offset, sort: { sentDateTime: sortDirection, createdAt: sortDirection } },
+      ),
+      db.countTeamsArchiveMessages(baseFilter),
+      db.countTeamsArchiveMessages({ ...baseFilter, isSystemLikeMessage: true }),
+      db.countTeamsArchiveMessages({ ...baseFilter, normalizedTextLength: { $lte: 0 } }),
+    ]);
+  const conversation = conversations[0] || null;
+  const selectedConversation = buildSelectedConversation(conversation, {
+    selectionReason: priorFollowUpChatId && !options.chatId ? 'prior_context' : 'chatId',
+    identityConfidence: 'high',
+  });
+  const senderResolution = {
+    senderScope: normalizedSenderScope,
+    senderName: options.senderName || '',
+    senderEmail: options.senderEmail || '',
+    senderUserId: options.senderUserId || '',
+    clauseCount: senderClauses.length,
+    confidence:
+      normalizedSenderScope === 'all'
+        ? 'high'
+        : senderClauses.some((clause) => clause.fromUserId || clause.fromEmail)
+          ? 'high'
+          : senderClauses.length > 0
+            ? 'medium'
+            : 'low',
+    warnings:
+      normalizedSenderScope !== 'all' && senderClauses.length === 0
+        ? ['sender_identity_could_not_be_resolved']
+        : [],
+  };
+  const mappedMessages = messages.map((message) => ({
+    ...mapCompactMessageResult(message, conversation, {
+      includeReplyToId: true,
+      includeImportance: true,
+      excerptLimit: 420,
+    }),
+    senderMatch: messageSenderMatches(message, senderClauses),
+  }));
+
+  return {
+    retrievalMode: 'conversation_sender_messages',
+    resolved: true,
+    chatId,
+    graphChatId: resolvedGraphChatId,
+    ...(selectedConversation ? { selectedConversation } : {}),
+    senderResolution,
+    skippedSystemCount,
+    skippedEmptyCount,
+    totalMatchingMessages,
+    retrievalTrace: {
+      senderScope: normalizedSenderScope,
+      senderFilterApplied: senderClauses.length > 0,
+      includeSystem,
+      sort: sortDirection === -1 ? 'newest' : 'oldest',
+      returnedMessageCount: mappedMessages.length,
+    },
+    evidenceBudget: buildEvidenceBudget(
+      { ...options, action: 'conversation_sender_messages' },
+      {
+        fullBodiesReturned: 0,
+        previewOnlyReturned: mappedMessages.length,
+        conversationsScoped: 1,
+        totalMessagesConsidered: totalMatchingMessages,
+      },
+    ),
+    messages: mappedMessages,
+  };
+}
+
+function buildActivityDiagnosis(conversation = {}) {
+  const warnings = buildConversationWarningFlags(conversation);
+  const lastMeaningful = toDate(conversation.lastMeaningfulMessageAt);
+  const lastRaw = toDate(conversation.lastMessageAt);
+  const lastSync = toDate(conversation.lastMessageSyncAt);
+  const sourceUpdated = toDate(conversation.sourceUpdatedAt);
+  const messageCount = Number(conversation.messageCount || 0);
+  const meaningfulCount = Number(conversation.meaningfulMessageCount || 0);
+  const possiblyIncompleteSync =
+    ['failed', 'pending', 'running'].includes(String(conversation.syncStatus || '')) ||
+    Boolean(conversation.syncCursor) ||
+    (messageCount === 0 && Boolean(lastRaw)) ||
+    Boolean(lastSync && sourceUpdated && lastSync.getTime() + 5 * 60 * 1000 < sourceUpdated.getTime());
+  const truncatedHistoryRisk =
+    Boolean(conversation.syncCursor) ||
+    messageCount >= getTeamsArchiveConfig().defaultMessagesPerChat;
+  const zeroChunkRisk =
+    (messageCount > 0 && meaningfulCount === 0) ||
+    warnings.noMeaningfulMessages;
+
+  return {
+    recentBecauseOfHumanActivity: Boolean(lastMeaningful && lastRaw && lastMeaningful.getTime() === lastRaw.getTime()),
+    recentBecauseOfSystemActivity: warnings.systemOnlyRecentActivity,
+    sparseConversation: warnings.sparseConversation,
+    noMeaningfulMessages: warnings.noMeaningfulMessages,
+    participantMetadataDegraded: warnings.participantMetadataDegraded,
+    possiblyIncompleteSync,
+    zeroChunkRisk,
+    truncatedHistoryRisk,
+  };
+}
+
+function buildActivityExplanation(conversation = {}, diagnosis = {}) {
+  const topic = conversation.topic || 'this Teams chat';
+  if (diagnosis.recentBecauseOfSystemActivity) {
+    return `${topic} appears recent because raw Teams activity is newer than the latest meaningful human-readable message. Treat recency as system-driven unless the human message previews support otherwise.`;
+  }
+  if (diagnosis.recentBecauseOfHumanActivity) {
+    return `${topic} appears recent because the latest raw Teams activity matches the latest meaningful human-readable message.`;
+  }
+  if (diagnosis.noMeaningfulMessages) {
+    return `${topic} has archived records but no meaningful human-readable messages. Do not summarize it as an active discussion without more evidence.`;
+  }
+  if (diagnosis.possiblyIncompleteSync) {
+    return `${topic} may have incomplete archive coverage due to sync status, paging cursor, or stale message sync timestamps.`;
+  }
+  return `${topic} has archived Teams metadata and message diagnostics available. Use the timestamps and flags before describing it as recent or complete.`;
+}
+
+async function conversationActivityDiagnostics(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const chatId = String(options.chatId || getPriorGraphChatIdForFollowUp(options) || '').trim();
+  if (!chatId) {
+    throw new TeamsArchiveServiceError('Chat id is required for conversation_activity_diagnostics', 400);
+  }
+
+  const includeRecentMessages =
+    options.includeRecentMessages === true ||
+    String(options.includeRecentMessages || '').toLowerCase() === 'true';
+  const includeSystem =
+    options.includeSystem === true || String(options.includeSystem || '').toLowerCase() === 'true';
+  const limit = clampInteger(options.limit, 5, { min: 1, max: 20 });
+  const resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+
+  if (!resolvedGraphChatId) {
+    return {
+      retrievalMode: 'conversation_activity_diagnostics',
+      resolved: false,
+      chatId,
+      graphChatId: null,
+      diagnosis: null,
+      explanation: 'No archived Teams chat was found for the requested chat id.',
+    };
+  }
+
+  const [conversations, newestHumanMessages, newestSystemMessages] = await Promise.all([
+    db.findTeamsArchiveConversations({ user: userId, graphChatId: resolvedGraphChatId }, { limit: 1 }),
+    includeRecentMessages
+      ? db.findTeamsArchiveMessages(
+          {
+            user: userId,
+            graphChatId: resolvedGraphChatId,
+            ...buildHumanReadableMessageFilter(),
+          },
+          { limit, sort: { sentDateTime: -1, createdAt: -1 } },
+        )
+      : Promise.resolve([]),
+    includeSystem
+      ? db.findTeamsArchiveMessages(
+          {
+            user: userId,
+            graphChatId: resolvedGraphChatId,
+            isSystemLikeMessage: true,
+          },
+          { limit, sort: { sentDateTime: -1, createdAt: -1 } },
+        )
+      : Promise.resolve([]),
+  ]);
+  const conversation = conversations[0] || null;
+  const selectedConversation = buildSelectedConversation(conversation, {
+    selectionReason: 'chatId',
+    identityConfidence: 'high',
+  });
+  const diagnosis = buildActivityDiagnosis(conversation || {});
+
+  return {
+    retrievalMode: 'conversation_activity_diagnostics',
+    resolved: true,
+    chatId,
+    graphChatId: resolvedGraphChatId,
+    ...(selectedConversation ? { selectedConversation } : {}),
+    raw: {
+      lastMessageAt: conversation?.lastMessageAt || null,
+      lastMeaningfulMessageAt: conversation?.lastMeaningfulMessageAt || null,
+      lastHumanMessageAt: conversation?.lastHumanMessageAt || null,
+      lastSystemMessageAt: conversation?.lastSystemMessageAt || null,
+      lastSyncedAt: conversation?.lastSyncedAt || null,
+      lastMessageSyncAt: conversation?.lastMessageSyncAt || null,
+      sourceUpdatedAt: conversation?.sourceUpdatedAt || null,
+      messageCount: conversation?.messageCount || 0,
+      humanMessageCount: conversation?.humanMessageCount || 0,
+      meaningfulMessageCount: conversation?.meaningfulMessageCount || 0,
+      systemMessageCount: conversation?.systemMessageCount || 0,
+      emptyMessageCount: conversation?.emptyMessageCount || 0,
+      participantDegraded: Boolean(conversation?.participantDegraded),
+      participantMetadataSource: conversation?.participantMetadataSource || 'unknown',
+      participantConfidence: conversation?.participantConfidence || 'low',
+      participants: mapCompactParticipants(conversation?.participants || [], 12),
+      syncStatus: conversation?.syncStatus || '',
+      syncCursorPresent: Boolean(conversation?.syncCursor),
+    },
+    diagnosis,
+    explanation: buildActivityExplanation(conversation || {}, diagnosis),
+    newestHumanReadableMessages: newestHumanMessages.map((message) =>
+      mapCompactMessageResult(message, conversation, { includeReplyToId: true, excerptLimit: 320 }),
+    ),
+    newestSystemMessages: newestSystemMessages.map((message) =>
+      mapCompactMessageResult(message, conversation, { includeReplyToId: true, excerptLimit: 320 }),
+    ),
+  };
+}
+
+function buildSenderIdentityKey(message = {}) {
+  return [
+    String(message.fromUserId || '').trim(),
+    String(message.fromEmail || '').trim().toLowerCase(),
+    String(message.fromDisplayName || '').trim().toLowerCase(),
+  ].join('|');
+}
+
+function summarizeSenderIdentityMessages(messages = [], senderClauses = []) {
+  const groups = new Map();
+  for (const message of messages) {
+    const key = buildSenderIdentityKey(message);
+    const existing = groups.get(key) || {
+      fromUserId: message.fromUserId || '',
+      fromEmail: message.fromEmail || '',
+      fromDisplayName: message.fromDisplayName || '',
+      count: 0,
+      invalidEmail: false,
+      senderMatch: messageSenderMatches(message, senderClauses),
+      examples: [],
+    };
+
+    existing.count += 1;
+    existing.invalidEmail =
+      existing.invalidEmail || String(message.fromEmail || '').trim().toLowerCase() === 'aaduser';
+    if (existing.examples.length < 3) {
+      existing.examples.push({
+        id: message._id?.toString?.() || message.id || '',
+        graphMessageId: message.graphMessageId || '',
+        graphChatId: message.graphChatId || '',
+        sentDateTime: message.sentDateTime || null,
+        excerpt: truncateText(message.bodyPreview || message.summary || message.bodyText || '', 180),
+      });
+    }
+
+    groups.set(key, existing);
+  }
+
+  return [...groups.values()].sort((a, b) => b.count - a.count);
+}
+
+function buildRecommendedSenderFilters(identityCandidates = []) {
+  const highConfidence = identityCandidates.find(
+    (candidate) => candidate.fromUserId || (candidate.fromEmail && !candidate.invalidEmail),
+  );
+  const fallback = identityCandidates[0] || {};
+
+  return {
+    fromUserId: highConfidence?.fromUserId || '',
+    fromEmail: highConfidence?.invalidEmail ? '' : highConfidence?.fromEmail || '',
+    fromDisplayName: fallback?.fromDisplayName || '',
+    useDisplayNameOnlyAsFallback: Boolean(!highConfidence?.fromUserId && !highConfidence?.fromEmail && fallback?.fromDisplayName),
+  };
+}
+
+async function senderIdentityReport(user, options = {}) {
+  assertEnabled();
+  const userId = user?.id || user?._id?.toString();
+  const senderScope = String(options.senderScope || 'me').trim();
+  const normalizedSenderScope = ['me', 'person'].includes(senderScope) ? senderScope : 'me';
+  const chatId = String(options.chatId || getPriorGraphChatIdForFollowUp(options) || '').trim();
+  const senderClauses =
+    normalizedSenderScope === 'me'
+      ? getUserSenderClauses(user)
+      : buildPersonSenderClauses({
+          senderName: options.personName || options.senderName,
+          senderEmail: options.personEmail || options.senderEmail,
+          senderUserId: options.senderUserId,
+        });
+  let resolvedGraphChatId = null;
+  if (chatId) {
+    resolvedGraphChatId = await resolveConversationGraphChatId(userId, chatId);
+  }
+
+  const personRegexes =
+    normalizedSenderScope === 'person'
+      ? [options.personName || options.senderName, options.personEmail || options.senderEmail]
+          .map((value) => buildSearchRegex(String(value || '').trim()))
+          .filter(Boolean)
+      : [];
+  const filter = {
+    user: userId,
+    ...(resolvedGraphChatId ? { graphChatId: resolvedGraphChatId } : {}),
+    ...(senderClauses.length > 0
+      ? { $or: senderClauses }
+      : personRegexes.length > 0
+        ? {
+            $or: personRegexes.flatMap((regex) => [
+              { fromDisplayName: regex },
+              { fromEmail: regex },
+            ]),
+          }
+        : {}),
+  };
+  const messages = await db.findTeamsArchiveMessages(filter, {
+    limit: 5000,
+    sort: { sentDateTime: -1, createdAt: -1 },
+  });
+  const identityCandidates = summarizeSenderIdentityMessages(messages, senderClauses);
+  const recommendedSenderFilters = buildRecommendedSenderFilters(identityCandidates);
+  const warnings = [
+    ...(identityCandidates.some((candidate) => candidate.invalidEmail)
+      ? ['invalid_fromEmail_values_detected']
+      : []),
+    ...(identityCandidates.length === 0 ? ['no_sender_identities_observed_for_scope'] : []),
+    ...(recommendedSenderFilters.useDisplayNameOnlyAsFallback
+      ? ['display_name_only_matching_is_lower_confidence']
+      : []),
+  ];
+
+  return {
+    retrievalMode: 'sender_identity_report',
+    senderScope: normalizedSenderScope,
+    currentUserIdentity: {
+      id: userId,
+      openidId: user?.openidId || '',
+      email: user?.email || '',
+      name: user?.name || '',
+      username: user?.username || '',
+    },
+    chatId: chatId || undefined,
+    graphChatId: resolvedGraphChatId || undefined,
+    identityCandidates,
+    recommendedSenderFilters,
+    confidence:
+      recommendedSenderFilters.fromUserId || recommendedSenderFilters.fromEmail
+        ? 'high'
+        : recommendedSenderFilters.fromDisplayName
+          ? 'medium'
+          : 'low',
+    warnings,
   };
 }
 
@@ -3412,12 +4584,17 @@ async function getMessageBody(user, options = {}) {
   const conversation = conversations[0] || null;
   const fullText = String(message.bodyText || '');
   const previewText = String(message.bodyPreview || '');
+  const selectedConversation = buildSelectedConversation(conversation, {
+    selectionReason: 'message_graphChatId',
+    identityConfidence: 'high',
+  });
 
   return {
     retrievalMode: 'message_body',
     resolved: true,
     guidance:
       'This returns the full archived message text for one specific message. Use it when a preview was truncated and exact wording matters.',
+    ...(selectedConversation ? { selectedConversation } : {}),
     message: {
       id: message._id?.toString?.() || message.id,
       graphMessageId: message.graphMessageId,
@@ -3497,6 +4674,10 @@ async function getMessagesWindow(user, options = {}) {
     { limit: 1 },
   );
   const conversation = conversations[0] || null;
+  const selectedConversation = buildSelectedConversation(conversation, {
+    selectionReason: 'chatId',
+    identityConfidence: 'high',
+  });
 
   if (!anchorMessage) {
     const recentMessages = await db.findTeamsArchiveMessages(
@@ -3508,6 +4689,7 @@ async function getMessagesWindow(user, options = {}) {
       retrievalMode: 'message_window',
       chatId,
       graphChatId: resolvedGraphChatId,
+      ...(selectedConversation ? { selectedConversation } : {}),
       topic: conversation?.topic || '',
       chatType: conversation?.chatType || '',
       participants: mapCompactParticipants(conversation?.participants || []),
@@ -3560,6 +4742,7 @@ async function getMessagesWindow(user, options = {}) {
     retrievalMode: 'message_window',
     chatId,
     graphChatId: resolvedGraphChatId,
+    ...(selectedConversation ? { selectedConversation } : {}),
     topic: conversation?.topic || '',
     chatType: conversation?.chatType || '',
     participants: mapCompactParticipants(conversation?.participants || []),
@@ -3643,6 +4826,13 @@ async function searchMessages(user, options = {}) {
     guidance:
       'These are compact message previews. If one chat is clearly relevant, prefer summarize_conversation first, then get_messages_window if you need local context.',
     resultCount: messages.length,
+    evidenceBudget: buildEvidenceBudget(options, {
+      fullBodiesReturned: 0,
+      humanReadableReturned: messages.filter((message) => isMeaningfulArchiveMessage(message)).length,
+      previewOnlyReturned: messages.length,
+      conversationsScoped: resolvedGraphChatId ? 1 : conversationIds.length,
+      totalMessagesConsidered: messages.length,
+    }),
     results: messages.map((message) =>
       mapCompactMessageResult(message, conversationMap.get(message.graphChatId), {
         excerptLimit: 260,
@@ -3755,6 +4945,16 @@ async function recentMessages(user, options = {}) {
     query: query || undefined,
     guidance:
       'These are compact previews of recent messages sent by the signed-in user. Use get_messages_window for local context around one result.',
+    evidenceBudget: buildEvidenceBudget(
+      { ...options, action: 'recent_messages' },
+      {
+        fullBodiesReturned: 0,
+        humanReadableReturned: archiveResults.length,
+        previewOnlyReturned: finalResults.length,
+        conversationsScoped: conversationIds.length === 1 ? 1 : conversationIds.length,
+        totalMessagesConsidered: archiveResults.length,
+      },
+    ),
     trace: {
       detectedIntent: intent,
       filtersApplied: {
@@ -3834,6 +5034,25 @@ async function advancedSearchMessages(user, options = {}) {
     finalResults,
     archiveResult.resolvedConversation,
   );
+  const selectedConversation =
+    archiveResult.selectedConversation ||
+    (resolvedConversation?.graphChatId
+      ? {
+          archiveConversationId: resolvedConversation.id || '',
+          graphChatId: resolvedConversation.graphChatId,
+          topic: resolvedConversation.topic || '',
+          chatType: resolvedConversation.chatType || '',
+          lastMessageAt: resolvedConversation.lastMessageAt || null,
+          lastMeaningfulMessageAt: resolvedConversation.lastMeaningfulMessageAt || null,
+          selectionReason: options.chatId ? 'chatId' : 'single_result',
+          identityConfidence: options.chatId ? 'high' : 'medium',
+        }
+      : null);
+  const identityChangeWarning = buildIdentityChangeWarning({
+    priorGraphChatId: options.priorGraphChatId,
+    priorTopic: options.priorTopic,
+    selectedConversation,
+  });
 
   let conversationDossier = null;
   let conversationDossierRan = false;
@@ -3887,8 +5106,19 @@ async function advancedSearchMessages(user, options = {}) {
         ? 'These results were gathered with recall-safe union retrieval. When completeness matters, rely on the conversation dossier and full-body expansions before answering.'
         : 'These results were gathered with recall-safe union retrieval across enterprise memory and the raw Teams archive. Use the dossier or full-body expansions before answering completeness-sensitive questions.',
     ...(resolvedConversation ? { resolvedConversation } : {}),
+    ...(selectedConversation ? { selectedConversation } : {}),
+    ...(identityChangeWarning ? { identityWarning: identityChangeWarning } : {}),
     ...(conversationDossierRan ? { conversationDossier } : {}),
     ...(fullBodies.length > 0 ? { fullBodies } : {}),
+    evidenceBudget: buildEvidenceBudget(options, {
+      fullBodiesReturned: fullBodies.length,
+      humanReadableReturned: finalResults.length,
+      previewOnlyReturned: finalResults.length,
+      conversationsScoped: selectedConversation ? 1 : 0,
+      totalMessagesConsidered:
+        conversationDossier?.completeness?.totalMessagesInScope || archiveResults.length || finalResults.length,
+      identityWarning: Boolean(identityChangeWarning),
+    }),
     trace: {
       detectedIntent: intent,
       filtersApplied: {
@@ -3960,11 +5190,33 @@ async function summarizeConversation(user, options = {}) {
   const topSenders = summarizeSenderCounts(scopedMessages.length > 0 ? scopedMessages : messages);
   const firstMessageAt = messages[0]?.sentDateTime || null;
   const lastMessageAt = messages[messages.length - 1]?.sentDateTime || null;
+  const scopedStats = summarizeMessageSearchability(scopedMessages.length > 0 ? scopedMessages : messages);
+  const conversationWarnings = buildConversationWarningFlags({
+    ...conversation,
+    messageCount: messages.length,
+    meaningfulMessageCount: scopedStats.meaningfulMessageCount,
+    systemMessageCount: scopedStats.systemMessageCount,
+    emptyMessageCount: scopedStats.emptyMessageCount,
+    lastMeaningfulMessageAt: scopedStats.lastMeaningfulMessageAt,
+    lastHumanMessageAt: scopedStats.lastHumanMessageAt,
+    lastSystemMessageAt: scopedStats.lastSystemMessageAt,
+  });
+  const lowEvidence =
+    messages.length < 5 ||
+    scopedStats.meaningfulMessageCount < 3 ||
+    conversationWarnings.noMeaningfulMessages ||
+    conversationWarnings.systemOnlyRecentActivity;
+  const confidence = lowEvidence ? 'low' : scopedMessages.length > 0 ? 'medium' : 'medium';
+  const selectedConversation = buildSelectedConversation(conversation, {
+    selectionReason: 'chatId',
+    identityConfidence: 'high',
+  });
 
   return {
     retrievalMode: 'conversation_summary',
     chatId,
     graphChatId: resolvedGraphChatId,
+    ...(selectedConversation ? { selectedConversation } : {}),
     topic: conversation?.topic || '',
     chatType: conversation?.chatType || '',
     participants: mapCompactParticipants(conversation?.participants || []),
@@ -3974,7 +5226,39 @@ async function summarizeConversation(user, options = {}) {
     matchedMessages: scopedMessages.length,
     firstMessageAt,
     lastMessageAt,
+    lastMeaningfulMessageAt: scopedStats.lastMeaningfulMessageAt || conversation?.lastMeaningfulMessageAt || null,
+    rawLastMessageAt: lastMessageAt,
     topSenders,
+    trust: {
+      confidence,
+      evidence: [
+        {
+          statement: `Summary is based on ${scopedMessages.length || messages.length} human-readable/message records loaded from this resolved Teams chat.`,
+          sourceMessageIds: highlights.map((message) => message.graphMessageId).filter(Boolean),
+        },
+        {
+          statement: `The chat identity is graphChatId=${resolvedGraphChatId}.`,
+          sourceMessageIds: [],
+        },
+      ],
+      inferences: [],
+      unknowns: [
+        ...(lowEvidence
+          ? [
+              'Conversation purpose, importance, and cadence are not inferred from the title alone.',
+              'Low message count, unknown senders, empty messages, or system-heavy activity may limit summary quality.',
+            ]
+          : ['Meeting purpose and importance are only supported where message evidence exists.']),
+      ],
+      warnings: conversationWarnings,
+    },
+    evidenceBudget: buildEvidenceBudget(options, {
+      fullBodiesReturned: 0,
+      humanReadableReturned: scopedMessages.length || messages.length,
+      previewOnlyReturned: highlights.length,
+      conversationsScoped: 1,
+      totalMessagesConsidered: messages.length,
+    }),
     summary: summarizeConversationText({
       topic: conversation?.topic,
       chatType: conversation?.chatType,
@@ -4003,9 +5287,15 @@ module.exports = {
   cancelRunningSync,
   getSyncStartAvailability,
   syncUserArchive,
+  backfillConversationRecency,
   listConversations,
+  recentMeetingChats,
   getConversationDossier,
   listConversationMessages,
+  conversationRecentMessages,
+  conversationSenderMessages,
+  conversationActivityDiagnostics,
+  senderIdentityReport,
   getMessageBody,
   getMessagesWindow,
   searchMessages,

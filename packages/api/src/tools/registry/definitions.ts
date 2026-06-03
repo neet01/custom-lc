@@ -228,15 +228,20 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
         'search_messages',
         'advanced_search_messages',
         'recent_messages',
+        'recent_meeting_chats',
         'list_conversations',
         'conversation_dossier',
         'get_messages',
+        'conversation_recent_messages',
+        'conversation_sender_messages',
+        'conversation_activity_diagnostics',
+        'sender_identity_report',
         'get_message_body',
         'get_messages_window',
         'summarize_conversation',
       ],
       description:
-        'Teams archive action. Use status to check archive readiness, sync_archive to ingest Teams chat history, search_messages for broad lexical archive discovery and quick preview retrieval, advanced_search_messages for recall-safe union retrieval across enterprise memory and the raw Teams archive with sender scope, chat type, participants, and recency, recent_messages to find messages the signed-in user sent recently, list_conversations to inspect available archived chats, conversation_dossier for exhaustive archive-backed retrieval of one resolved chat, get_messages for compact thread previews, get_message_body to retrieve the full archived text for one exact message, get_messages_window to pull a bounded context window around a message or topic hit, and summarize_conversation to answer high-level questions without loading the whole thread.',
+        'Teams archive action. Use recent_meeting_chats for recent meeting/standup requests because it ranks by meaningful human-readable activity, conversation_recent_messages for latest/new messages in one selected chat, conversation_sender_messages for messages from me/a person in one selected chat, conversation_activity_diagnostics to explain recency/searchability, sender_identity_report when sender matching is uncertain, search_messages for broad lexical discovery, advanced_search_messages for recall-safe union retrieval, list_conversations for disambiguation, conversation_dossier for exhaustive retrieval, get_message_body for exact full text, get_messages_window for local context, and summarize_conversation for evidence-labeled summaries.',
     },
     query: {
       type: 'string',
@@ -251,7 +256,17 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
     chatId: {
       type: 'string',
       description:
-        'For conversation_dossier, get_messages, get_messages_window, summarize_conversation, or search_messages: the archived Teams chat id to scope the request to.',
+        'Stable Teams conversation identity. For single-conversation actions pass selectedConversation.graphChatId from the previous result whenever available. Do not rediscover recurring meetings by title when selectedConversation exists.',
+    },
+    priorGraphChatId: {
+      type: 'string',
+      description:
+        'Optional prior selectedConversation.graphChatId from earlier Teams tool output for follow-up continuity and identity-change warnings.',
+    },
+    priorTopic: {
+      type: 'string',
+      description:
+        'Optional prior selectedConversation.topic from earlier Teams tool output for same-title recurring meeting switch detection.',
     },
     messageId: {
       type: 'string',
@@ -293,9 +308,34 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
     },
     senderScope: {
       type: 'string',
-      enum: ['any', 'me', 'others'],
+      enum: ['any', 'me', 'others', 'person', 'all'],
       description:
-        'For advanced_search_messages: whether to search messages from anyone, only the signed-in user, or everyone except the signed-in user.',
+        'For advanced_search_messages use any/me/others. For conversation_sender_messages and sender_identity_report use me/person/all as supported by the action.',
+    },
+    senderName: {
+      type: 'string',
+      description:
+        'For conversation_sender_messages or sender_identity_report with senderScope=person: sender display name to match.',
+    },
+    senderEmail: {
+      type: 'string',
+      description:
+        'For conversation_sender_messages or sender_identity_report with senderScope=person: sender email to match.',
+    },
+    senderUserId: {
+      type: 'string',
+      description:
+        'For conversation_sender_messages or sender_identity_report with senderScope=person: Teams/Entra sender user id to match.',
+    },
+    personName: {
+      type: 'string',
+      description:
+        'For sender_identity_report with senderScope=person: person display name to inspect.',
+    },
+    personEmail: {
+      type: 'string',
+      description:
+        'For sender_identity_report with senderScope=person: person email to inspect.',
     },
     chatType: {
       type: 'string',
@@ -315,6 +355,21 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
       enum: ['recent', 'oldest'],
       description:
         'For advanced_search_messages: whether to return the newest matches first or the oldest matches first.',
+    },
+    includeSystem: {
+      type: 'boolean',
+      description:
+        'For conversation_recent_messages: include Teams system/empty activity. Defaults to false so latest/new means human-readable messages.',
+    },
+    includeRecentMessages: {
+      type: 'boolean',
+      description:
+        'For conversation_activity_diagnostics: include newest human-readable message previews in the diagnostic output.',
+    },
+    sort: {
+      type: 'string',
+      enum: ['newest', 'oldest'],
+      description: 'For conversation_sender_messages: newest or oldest message ordering.',
     },
     aroundMessageId: {
       type: 'string',
@@ -897,7 +952,7 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   teams_archive_search: {
     name: 'teams_archive_search',
     description:
-      'Search and retrieve archived Microsoft Teams chats that were previously ingested into Cortex. Use search_messages for safer broad lexical discovery, advanced_search_messages for recall-safe union retrieval, conversation_dossier for completeness-sensitive conversation analysis, and get_message_body when previews are insufficient.',
+      'Search and retrieve archived Microsoft Teams chats. Use recent_meeting_chats for recent meeting requests, conversation_recent_messages with selectedConversation.graphChatId for follow-up latest/new-message requests, conversation_sender_messages for messages from me/a person, conversation_activity_diagnostics for recency/searchability explanations, sender_identity_report for sender matching uncertainty, and respect evidenceBudget before definitive answers.',
     schema: teamsArchiveSchema,
     toolType: 'builtin',
   },

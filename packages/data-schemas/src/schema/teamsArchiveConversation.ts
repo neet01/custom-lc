@@ -24,9 +24,16 @@ export interface ITeamsArchiveConversation extends Document {
   syncCompletedAt?: Date;
   lastMessageSyncAt?: Date;
   lastMessageAt?: Date;
+  lastHumanMessageAt?: Date;
+  lastMeaningfulMessageAt?: Date;
+  lastSystemMessageAt?: Date;
   lastSyncedAt?: Date;
   sourceUpdatedAt?: Date;
   messageCount?: number;
+  humanMessageCount?: number;
+  systemMessageCount?: number;
+  emptyMessageCount?: number;
+  meaningfulMessageCount?: number;
   participantMetadataSource?: 'graph' | 'inferred_from_messages' | 'inferred_from_mentions' | 'mixed' | 'unknown';
   participantConfidence?: 'high' | 'medium' | 'low';
   participantDegraded?: boolean;
@@ -123,6 +130,18 @@ const teamsArchiveConversationSchema = new Schema<ITeamsArchiveConversation>(
       type: Date,
       index: true,
     },
+    lastHumanMessageAt: {
+      type: Date,
+      index: true,
+    },
+    lastMeaningfulMessageAt: {
+      type: Date,
+      index: true,
+    },
+    lastSystemMessageAt: {
+      type: Date,
+      index: true,
+    },
     lastSyncedAt: {
       type: Date,
       index: true,
@@ -134,6 +153,26 @@ const teamsArchiveConversationSchema = new Schema<ITeamsArchiveConversation>(
     messageCount: {
       type: Number,
       default: 0,
+    },
+    humanMessageCount: {
+      type: Number,
+      default: 0,
+      index: true,
+    },
+    systemMessageCount: {
+      type: Number,
+      default: 0,
+      index: true,
+    },
+    emptyMessageCount: {
+      type: Number,
+      default: 0,
+      index: true,
+    },
+    meaningfulMessageCount: {
+      type: Number,
+      default: 0,
+      index: true,
     },
     participantMetadataSource: {
       type: String,
@@ -167,6 +206,8 @@ const teamsArchiveConversationSchema = new Schema<ITeamsArchiveConversation>(
 
 teamsArchiveConversationSchema.index({ user: 1, graphChatId: 1 }, { unique: true });
 teamsArchiveConversationSchema.index({ user: 1, lastMessageAt: -1 });
+teamsArchiveConversationSchema.index({ user: 1, chatType: 1, lastMeaningfulMessageAt: -1, lastMessageAt: -1 });
+teamsArchiveConversationSchema.index({ user: 1, lastMeaningfulMessageAt: -1, updatedAt: -1 });
 teamsArchiveConversationSchema.index({ user: 1, syncStatus: 1, sourceUpdatedAt: -1, updatedAt: -1 });
 teamsArchiveConversationSchema.index({ user: 1, sourceLastMessageAt: -1, updatedAt: -1 });
 teamsArchiveConversationSchema.index({ user: 1, participantDegraded: 1, updatedAt: -1 });

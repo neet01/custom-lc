@@ -150,6 +150,9 @@ describe('TeamsArchiveService', () => {
       if (filter?.participantDegraded) {
         return Promise.resolve(18);
       }
+      if (filter?.$or || filter?.meaningfulMessageCount) {
+        return Promise.resolve(0);
+      }
       return Promise.resolve(1022);
     });
     db.countTeamsArchiveMessages.mockResolvedValue(66517);
@@ -281,6 +284,9 @@ describe('TeamsArchiveService', () => {
         meeting: 176,
       },
       participantDegradedConversationCount: 18,
+      staleOrIncompleteConversations: 0,
+      zeroMeaningfulMessageConversations: 0,
+      systemOnlyRecentConversations: 0,
     });
   });
 
@@ -931,7 +937,7 @@ describe('TeamsArchiveService', () => {
       expect.objectContaining({
         user: 'user-1',
         chatType: 'oneOnOne',
-        lastMessageAt: expect.any(Object),
+        lastMeaningfulMessageAt: expect.any(Object),
         $and: expect.any(Array),
       }),
       expect.objectContaining({
@@ -951,6 +957,275 @@ describe('TeamsArchiveService', () => {
       graphChatId: 'chat-10',
       chatType: 'oneOnOne',
       topic: 'Quarterly review',
+    });
+  });
+
+  it('ranks recent meeting chats by meaningful activity and flags system-only recency', async () => {
+    const meaningfulRecent = {
+      _id: 'conv-meaningful',
+      graphChatId: 'meeting-meaningful',
+      chatType: 'meeting',
+      topic: 'Enterprise IT Stand Up',
+      lastMessageAt: new Date('2026-06-02T10:00:00.000Z'),
+      lastMeaningfulMessageAt: new Date('2026-06-02T09:55:00.000Z'),
+      lastSystemMessageAt: new Date('2026-06-02T10:00:00.000Z'),
+      messageCount: 20,
+      meaningfulMessageCount: 12,
+      systemMessageCount: 2,
+      emptyMessageCount: 1,
+    };
+    const systemOnlyRecent = {
+      _id: 'conv-system',
+      graphChatId: 'meeting-system',
+      chatType: 'meeting',
+      topic: 'Enterprise IT Stand Up',
+      lastMessageAt: new Date('2026-06-03T10:00:00.000Z'),
+      lastMeaningfulMessageAt: null,
+      lastSystemMessageAt: new Date('2026-06-03T10:00:00.000Z'),
+      messageCount: 4,
+      meaningfulMessageCount: 0,
+      systemMessageCount: 4,
+      emptyMessageCount: 0,
+    };
+    db.findTeamsArchiveConversations.mockResolvedValue([meaningfulRecent, systemOnlyRecent]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'msg-meaningful',
+        graphMessageId: 'g-meaningful',
+        graphChatId: 'meeting-meaningful',
+        fromDisplayName: 'Test User',
+        bodyPreview: 'Latest human update',
+        sentDateTime: new Date('2026-06-02T09:55:00.000Z'),
+        isChunkable: true,
+        normalizedTextLength: 19,
+        isSystemLikeMessage: false,
+      },
+    ]);
+
+    const result = await TeamsArchiveService.recentMeetingChats(user, {
+      topic: 'Enterprise IT Stand Up',
+      limit: 5,
+    });
+
+    expect(db.findTeamsArchiveConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: 'user-1',
+        chatType: 'meeting',
+        topic: expect.any(RegExp),
+      }),
+      expect.objectContaining({
+        sort: { lastMeaningfulMessageAt: -1, lastMessageAt: -1, updatedAt: -1 },
+      }),
+    );
+    expect(result).toMatchObject({
+      retrievalMode: 'recent_meeting_chats',
+      identityWarning: {
+        candidateCount: 2,
+      },
+    });
+    expect(result.conversations.map((conversation) => conversation.graphChatId)).toEqual([
+      'meeting-meaningful',
+      'meeting-system',
+    ]);
+    expect(result.conversations[1].warnings).toMatchObject({
+      systemOnlyRecentActivity: true,
+      noMeaningfulMessages: true,
+    });
+  });
+
+  it('returns newest human-readable messages first for one resolved conversation', async () => {
+    const conversation = {
+      _id: 'conv-recent',
+      graphChatId: 'meeting-recent',
+      chatType: 'meeting',
+      topic: 'Enterprise IT Stand Up',
+      lastMeaningfulMessageAt: new Date('2026-06-02T10:00:00.000Z'),
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([conversation])
+      .mockResolvedValueOnce([conversation]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'recent-2',
+        graphMessageId: 'g-recent-2',
+        graphChatId: 'meeting-recent',
+        fromDisplayName: 'Test User',
+        bodyPreview: 'Newest readable update',
+        sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+        isChunkable: true,
+        normalizedTextLength: 22,
+        isSystemLikeMessage: false,
+      },
+      {
+        _id: 'recent-1',
+        graphMessageId: 'g-recent-1',
+        graphChatId: 'meeting-recent',
+        fromDisplayName: 'Lead',
+        bodyPreview: 'Older readable update',
+        sentDateTime: new Date('2026-06-02T09:00:00.000Z'),
+        isChunkable: true,
+        normalizedTextLength: 21,
+        isSystemLikeMessage: false,
+      },
+    ]);
+    db.countTeamsArchiveMessages.mockResolvedValue(0);
+
+    const result = await TeamsArchiveService.conversationRecentMessages(user, {
+      chatId: 'meeting-recent',
+      limit: 2,
+    });
+
+    expect(db.findTeamsArchiveMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: 'user-1',
+        graphChatId: 'meeting-recent',
+        isSystemLikeMessage: { $ne: true },
+        isChunkable: true,
+        normalizedTextLength: { $gt: 0 },
+      }),
+      expect.objectContaining({
+        sort: { sentDateTime: -1, createdAt: -1 },
+      }),
+    );
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_recent_messages',
+      resolved: true,
+      selectedConversation: {
+        graphChatId: 'meeting-recent',
+        selectionReason: 'chatId',
+      },
+    });
+    expect(result.messages.map((message) => message.graphMessageId)).toEqual([
+      'g-recent-2',
+      'g-recent-1',
+    ]);
+  });
+
+  it('uses prior graphChatId for follow-up dossier requests instead of rediscovering by title', async () => {
+    const priorConversation = {
+      _id: 'conv-prior',
+      graphChatId: 'meeting-prior',
+      chatType: 'meeting',
+      topic: 'Enterprise IT Stand Up',
+      lastMeaningfulMessageAt: new Date('2026-06-02T10:00:00.000Z'),
+      messageCount: 1,
+      meaningfulMessageCount: 1,
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([priorConversation])
+      .mockResolvedValueOnce([priorConversation]);
+    db.countTeamsArchiveMessages.mockResolvedValue(1);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'prior-msg',
+        graphMessageId: 'g-prior',
+        graphChatId: 'meeting-prior',
+        fromDisplayName: 'Test User',
+        bodyPreview: 'New message in the selected standup',
+        bodyText: 'New message in the selected standup',
+        sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+        isChunkable: true,
+        normalizedTextLength: 35,
+        isSystemLikeMessage: false,
+      },
+    ]);
+
+    const result = await TeamsArchiveService.getConversationDossier(user, {
+      query: 'what messages are new?',
+      priorGraphChatId: 'meeting-prior',
+      priorTopic: 'Enterprise IT Stand Up',
+      limit: 2,
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_dossier',
+      resolved: true,
+      selectedConversation: {
+        graphChatId: 'meeting-prior',
+        selectionReason: 'prior_context',
+        identityConfidence: 'high',
+      },
+    });
+    expect(db.findTeamsArchiveConversations).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        topic: expect.any(RegExp),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('warns instead of silently selecting title-only matches across recurring meetings', async () => {
+    db.findTeamsArchiveConversations.mockResolvedValue([
+      {
+        _id: 'conv-series-a',
+        graphChatId: 'meeting-series-a',
+        chatType: 'meeting',
+        topic: 'Enterprise IT Stand Up',
+        lastMeaningfulMessageAt: new Date('2026-06-02T10:00:00.000Z'),
+      },
+      {
+        _id: 'conv-series-b',
+        graphChatId: 'meeting-series-b',
+        chatType: 'meeting',
+        topic: 'Enterprise IT Stand Up',
+        lastMeaningfulMessageAt: new Date('2026-05-29T10:00:00.000Z'),
+      },
+    ]);
+
+    const result = await TeamsArchiveService.getConversationDossier(user, {
+      topic: 'Enterprise IT Stand Up',
+      chatType: 'meeting',
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_dossier',
+      resolved: false,
+      candidateCount: 2,
+      identityWarning: {
+        reason: 'multiple_conversations_match_title_or_filters',
+        candidateCount: 2,
+      },
+    });
+  });
+
+  it('resolves Mongo conversation ids for conversation_recent_messages', async () => {
+    const conversation = {
+      _id: '507f1f77bcf86cd799439011',
+      graphChatId: 'meeting-from-mongo-id',
+      chatType: 'meeting',
+      topic: 'ObjectId resolution',
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([conversation])
+      .mockResolvedValueOnce([conversation]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'mongo-msg',
+        graphMessageId: 'g-mongo',
+        graphChatId: 'meeting-from-mongo-id',
+        bodyPreview: 'Resolved through Mongo id',
+        sentDateTime: new Date('2026-06-01T10:00:00.000Z'),
+        isChunkable: true,
+        normalizedTextLength: 25,
+        isSystemLikeMessage: false,
+      },
+    ]);
+    db.countTeamsArchiveMessages.mockResolvedValue(0);
+
+    const result = await TeamsArchiveService.conversationRecentMessages(user, {
+      chatId: '507f1f77bcf86cd799439011',
+      limit: 1,
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_recent_messages',
+      resolved: true,
+      graphChatId: 'meeting-from-mongo-id',
+      selectedConversation: {
+        archiveConversationId: '507f1f77bcf86cd799439011',
+        graphChatId: 'meeting-from-mongo-id',
+      },
     });
   });
 
@@ -1510,11 +1785,21 @@ describe('TeamsArchiveService', () => {
       query: 'kubectl',
       totalMessages: 2,
       matchedMessages: 1,
+      selectedConversation: {
+        graphChatId: 'chat-summary',
+      },
+      trust: {
+        confidence: 'low',
+        evidence: expect.any(Array),
+        inferences: [],
+        unknowns: expect.any(Array),
+      },
     });
     expect(result.highlights).toHaveLength(1);
     expect(result.highlights[0]).toMatchObject({
       graphMessageId: 'sum-g-2',
     });
+    expect(result.trust.evidence[0].sourceMessageIds).toEqual(['sum-g-2']);
   });
 
   it('returns the full archived message body when a preview was truncated', async () => {
@@ -1572,5 +1857,291 @@ describe('TeamsArchiveService', () => {
       },
     });
     expect(result.message.bodyTextLength).toBeGreaterThan(result.message.previewLength);
+  });
+
+  it('dry-runs conversation recency backfill without updating records', async () => {
+    const conversation = {
+      _id: 'conv-backfill',
+      graphChatId: 'chat-backfill',
+      topic: 'Backfill test',
+      lastMessageAt: null,
+      messageCount: 0,
+    };
+    db.findTeamsArchiveConversations.mockResolvedValue([conversation]);
+    db.countTeamsArchiveMessages.mockResolvedValue(3);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        graphChatId: 'chat-backfill',
+        sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+        isSystemLikeMessage: true,
+        isChunkable: false,
+        normalizedTextLength: 0,
+        skipChunkReason: 'system_like_message',
+      },
+      {
+        graphChatId: 'chat-backfill',
+        sentDateTime: new Date('2026-06-02T09:00:00.000Z'),
+        isSystemLikeMessage: false,
+        isChunkable: true,
+        normalizedTextLength: 24,
+      },
+      {
+        graphChatId: 'chat-backfill',
+        sentDateTime: new Date('2026-06-02T08:00:00.000Z'),
+        isSystemLikeMessage: false,
+        isChunkable: false,
+        normalizedTextLength: 0,
+        skipChunkReason: 'empty_normalized_text',
+      },
+    ]);
+
+    const result = await TeamsArchiveService.backfillConversationRecency(user, {
+      apply: false,
+    });
+
+    expect(db.updateTeamsArchiveConversation).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_recency_backfill',
+      dryRun: true,
+      processedConversationCount: 1,
+      changedConversationCount: 1,
+      updatedConversationCount: 0,
+    });
+    expect(result.conversations[0].newRecency).toMatchObject({
+      meaningfulMessageCount: 1,
+      humanMessageCount: 1,
+      systemMessageCount: 1,
+      emptyMessageCount: 2,
+      messageCount: 3,
+    });
+  });
+
+  it('applies conversation recency backfill for one graph chat id', async () => {
+    const conversation = {
+      _id: 'conv-backfill-apply',
+      graphChatId: 'chat-backfill-apply',
+      topic: 'Backfill apply test',
+      lastMessageAt: null,
+      messageCount: 0,
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([conversation])
+      .mockResolvedValueOnce([conversation]);
+    db.countTeamsArchiveMessages.mockResolvedValue(1);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        graphChatId: 'chat-backfill-apply',
+        sentDateTime: new Date('2026-06-02T09:00:00.000Z'),
+        isSystemLikeMessage: false,
+        isChunkable: true,
+        normalizedTextLength: 24,
+      },
+    ]);
+
+    const result = await TeamsArchiveService.backfillConversationRecency(user, {
+      chatId: 'chat-backfill-apply',
+      apply: true,
+    });
+
+    expect(db.updateTeamsArchiveConversation).toHaveBeenCalledWith(
+      'conv-backfill-apply',
+      expect.objectContaining({
+        lastMeaningfulMessageAt: new Date('2026-06-02T09:00:00.000Z'),
+        meaningfulMessageCount: 1,
+        messageCount: 1,
+      }),
+    );
+    expect(result).toMatchObject({
+      processedConversationCount: 1,
+      updatedConversationCount: 1,
+    });
+  });
+
+  it('returns sender-scoped messages from the signed-in user with match trace', async () => {
+    const conversation = {
+      _id: 'conv-sender',
+      graphChatId: 'chat-sender',
+      chatType: 'meeting',
+      topic: 'Sender test',
+      lastMeaningfulMessageAt: new Date('2026-06-02T10:00:00.000Z'),
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([conversation])
+      .mockResolvedValueOnce([conversation]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'sender-msg',
+        graphMessageId: 'g-sender',
+        graphChatId: 'chat-sender',
+        fromUserId: 'entra-user-1',
+        fromEmail: 'user@example.com',
+        fromDisplayName: 'Test User',
+        bodyPreview: 'My latest update',
+        sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+        isChunkable: true,
+        normalizedTextLength: 16,
+        isSystemLikeMessage: false,
+      },
+    ]);
+    db.countTeamsArchiveMessages.mockResolvedValue(1);
+
+    const result = await TeamsArchiveService.conversationSenderMessages(user, {
+      chatId: 'chat-sender',
+      senderScope: 'me',
+      limit: 4,
+    });
+
+    expect(db.findTeamsArchiveMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: 'user-1',
+        graphChatId: 'chat-sender',
+        $or: expect.any(Array),
+        isSystemLikeMessage: { $ne: true },
+        isChunkable: true,
+        normalizedTextLength: { $gt: 0 },
+      }),
+      expect.objectContaining({
+        sort: { sentDateTime: -1, createdAt: -1 },
+      }),
+    );
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_sender_messages',
+      resolved: true,
+      senderResolution: {
+        senderScope: 'me',
+        confidence: 'high',
+      },
+      retrievalTrace: {
+        senderFilterApplied: true,
+      },
+      messages: [
+        expect.objectContaining({
+          graphMessageId: 'g-sender',
+          senderMatch: {
+            matchedBy: 'fromUserId',
+            confidence: 'high',
+          },
+        }),
+      ],
+    });
+  });
+
+  it('explains system-only recent activity in conversation diagnostics', async () => {
+    const conversation = {
+      _id: 'conv-diagnostics',
+      graphChatId: 'chat-diagnostics',
+      chatType: 'meeting',
+      topic: 'Diagnostics meeting',
+      lastMessageAt: new Date('2026-06-03T10:00:00.000Z'),
+      lastMeaningfulMessageAt: null,
+      lastSystemMessageAt: new Date('2026-06-03T10:00:00.000Z'),
+      messageCount: 8,
+      meaningfulMessageCount: 0,
+      systemMessageCount: 8,
+      emptyMessageCount: 0,
+      participantDegraded: true,
+      syncStatus: 'complete',
+    };
+    db.findTeamsArchiveConversations
+      .mockResolvedValueOnce([conversation])
+      .mockResolvedValueOnce([conversation]);
+
+    const result = await TeamsArchiveService.conversationActivityDiagnostics(user, {
+      chatId: 'chat-diagnostics',
+      includeRecentMessages: true,
+      includeSystem: true,
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'conversation_activity_diagnostics',
+      resolved: true,
+      diagnosis: {
+        recentBecauseOfSystemActivity: true,
+        noMeaningfulMessages: true,
+        participantMetadataDegraded: true,
+        zeroChunkRisk: true,
+      },
+    });
+    expect(result.explanation).toContain('system-driven');
+  });
+
+  it('reports sender identity candidates and invalid aadUser email values', async () => {
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'identity-a',
+        graphMessageId: 'g-identity-a',
+        graphChatId: 'chat-identity',
+        fromUserId: 'aad-user-1',
+        fromEmail: 'aadUser',
+        fromDisplayName: 'Test User',
+        bodyPreview: 'Identity sample',
+        sentDateTime: new Date('2026-06-02T10:00:00.000Z'),
+      },
+      {
+        _id: 'identity-b',
+        graphMessageId: 'g-identity-b',
+        graphChatId: 'chat-identity',
+        fromUserId: 'entra-user-1',
+        fromEmail: 'user@example.com',
+        fromDisplayName: 'Test User',
+        bodyPreview: 'Identity sample 2',
+        sentDateTime: new Date('2026-06-01T10:00:00.000Z'),
+      },
+    ]);
+
+    const result = await TeamsArchiveService.senderIdentityReport(user, {
+      senderScope: 'me',
+    });
+
+    expect(result).toMatchObject({
+      retrievalMode: 'sender_identity_report',
+      senderScope: 'me',
+      confidence: 'high',
+      warnings: expect.arrayContaining(['invalid_fromEmail_values_detected']),
+    });
+    expect(result.identityCandidates).toHaveLength(2);
+    expect(result.recommendedSenderFilters).toMatchObject({
+      fromUserId: expect.any(String),
+    });
+  });
+
+  it('marks broad completeness-sensitive preview retrieval as insufficient evidence', async () => {
+    db.findTeamsArchiveConversations.mockResolvedValue([]);
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        _id: 'broad-a',
+        graphMessageId: 'g-broad-a',
+        graphChatId: 'chat-a',
+        bodyPreview: 'Action item preview',
+        bodyText: 'Action item preview',
+        sentDateTime: new Date('2026-06-01T10:00:00.000Z'),
+        isChunkable: true,
+        normalizedTextLength: 19,
+        isSystemLikeMessage: false,
+      },
+      {
+        _id: 'broad-b',
+        graphMessageId: 'g-broad-b',
+        graphChatId: 'chat-b',
+        bodyPreview: 'Decision preview',
+        bodyText: 'Decision preview',
+        sentDateTime: new Date('2026-06-01T11:00:00.000Z'),
+        isChunkable: true,
+        normalizedTextLength: 16,
+        isSystemLikeMessage: false,
+      },
+    ]);
+
+    const result = await TeamsArchiveService.searchMessages(user, {
+      query: 'all action items and decisions',
+      limit: 2,
+    });
+
+    expect(result.evidenceBudget).toMatchObject({
+      requestedCompleteness: true,
+      conversationsScoped: 2,
+      evidenceSufficient: false,
+      insufficiencyReasons: expect.arrayContaining(['conversation_not_uniquely_scoped']),
+    });
   });
 });

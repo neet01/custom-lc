@@ -111,6 +111,10 @@ function isTextSearchEnabled() {
   return /^(true|1|yes|on)$/i.test(String(process.env.TEAMS_ARCHIVE_TEXT_SEARCH_ENABLED || '').trim());
 }
 
+function isSlackTextSearchEnabled() {
+  return !/^(false|0|no|off)$/i.test(String(process.env.SLACK_ARCHIVE_TEXT_SEARCH_ENABLED || '').trim());
+}
+
 function buildTextSearchString(value) {
   const terms = buildTopicTerms(value);
   if (terms.length > 0) {
@@ -159,8 +163,41 @@ function mapCompactParticipants(participants = [], max = 4) {
     .map((participant) => ({
       displayName: participant?.displayName || '',
       email: participant?.email || '',
+      slackUserId: participant?.slackUserId || '',
     }))
-    .filter((participant) => participant.displayName || participant.email);
+    .filter((participant) => participant.displayName || participant.email || participant.slackUserId);
+}
+
+function getSlackSenderClauses(user) {
+  const normalizedName = String(user?.name || '').trim();
+  const normalizedUsername = String(user?.username || '').trim();
+
+  return [
+    ...(normalizedName ? [{ 'metadata.displayName': normalizedName }] : []),
+    ...(normalizedUsername ? [{ 'metadata.username': normalizedUsername }] : []),
+  ];
+}
+
+function buildSlackParticipantConversationClauses(participants = []) {
+  return toArray(participants)
+    .map((participant) => String(participant || '').trim())
+    .filter(Boolean)
+    .slice(0, 10)
+    .map((participant) => {
+      const regex = buildSearchRegex(participant);
+      return {
+        $or: [
+          { name: regex },
+          { topic: regex },
+          { purpose: regex },
+          { 'participants.displayName': regex },
+          { 'participants.realName': regex },
+          { 'participants.username': regex },
+          { 'participants.email': regex },
+          { 'participants.slackUserId': participant },
+        ],
+      };
+    });
 }
 
 async function searchTeamsMemoryChunks(user, options = {}) {
@@ -336,6 +373,195 @@ async function searchTeamsMemoryChunks(user, options = {}) {
   };
 }
 
+async function searchSlackMemoryChunks(user, options = {}) {
+  if (typeof db.findEnterpriseMemoryChunks !== 'function') {
+    return null;
+  }
+
+  const userId = user?.id || user?._id?.toString();
+  const topic = String(options.topic || options.query || '').trim();
+  const conversationId = String(
+    options.conversationId || options.channelId || options.slackConversationId || '',
+  ).trim();
+  const senderScope = String(options.senderScope || 'any').trim();
+  const senderUserId = String(options.senderUserId || options.slackUserId || '').trim();
+  const conversationType = String(options.conversationType || options.channelType || 'any').trim();
+  const sortBy = String(options.sortBy || 'relevance').trim();
+  const limit = clampInteger(options.limit, 8, { max: 12 });
+  const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
+  const daysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : undefined;
+
+  const validSenderScopes = new Set(['any', 'me', 'others']);
+  const validConversationTypes = new Set(['any', 'public_channel', 'private_channel', 'im', 'mpim']);
+  const normalizedSenderScope = validSenderScopes.has(senderScope) ? senderScope : 'any';
+  const normalizedConversationType = validConversationTypes.has(conversationType)
+    ? conversationType
+    : 'any';
+
+  const participantClauses = buildSlackParticipantConversationClauses(options.participants);
+  const { clauses: topicChunkClauses } = buildChunkSearchClauses(topic);
+
+  let matchedConversationIds = conversationId ? [conversationId] : [];
+  const shouldPrefilterConversations =
+    !conversationId && (normalizedConversationType !== 'any' || participantClauses.length > 0);
+
+  if (shouldPrefilterConversations) {
+    const conversationFilter = {
+      user: userId,
+      ...(normalizedConversationType !== 'any' ? { conversationType: normalizedConversationType } : {}),
+      ...(participantClauses.length > 0 ? { $and: participantClauses } : {}),
+    };
+
+    const matchedConversations = await db.findSlackArchiveConversations(conversationFilter, {
+      limit: 1000,
+    });
+    matchedConversationIds = matchedConversations
+      .map((conversation) => conversation.slackConversationId)
+      .filter(Boolean);
+
+    if (matchedConversationIds.length === 0) {
+      return {
+        retrievalMode: 'enterprise_memory',
+        source: 'slack',
+        topic: topic || undefined,
+        senderScope: normalizedSenderScope,
+        conversationType: normalizedConversationType,
+        daysBack,
+        participants: toArray(options.participants).filter(Boolean),
+        guidance:
+          'No matching Slack memory chunks were found. Broaden the participants, channel type, or timeframe.',
+        trace: {
+          backend: 'enterprise_memory',
+          searchBackend: 'text',
+          textSearchEnabled: isSlackTextSearchEnabled(),
+          conversationPrefilterApplied: true,
+          conversationIdScoped: false,
+          matchedConversationCount: 0,
+        },
+        resultCount: 0,
+        results: [],
+      };
+    }
+  }
+
+  const senderClauses = senderUserId
+    ? [{ 'metadata.slackUserId': senderUserId }]
+    : getSlackSenderClauses(user);
+  const baseChunkFilter = {
+    user: userId,
+    source: 'slack',
+    sourceRecordType: 'slack_message',
+    ...(matchedConversationIds.length > 0
+      ? { sourceParentRecordId: { $in: matchedConversationIds } }
+      : {}),
+    ...(daysBack ? { sourceTimestamp: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } } : {}),
+    ...(senderUserId
+      ? { 'metadata.slackUserId': senderUserId }
+      : normalizedSenderScope === 'me'
+        ? senderClauses.length > 0
+          ? { $or: senderClauses }
+          : {}
+        : normalizedSenderScope === 'others'
+          ? senderClauses.length > 0
+            ? { $nor: senderClauses }
+            : {}
+          : {}),
+  };
+
+  const textSearchString = buildTextSearchString(topic);
+  const textSearchEnabled = isSlackTextSearchEnabled();
+  const recencySort =
+    sortBy === 'oldest' ? { sourceTimestamp: 1, orderIndex: 1 } : { sourceTimestamp: -1, orderIndex: -1 };
+  const regexChunkFilter = {
+    ...baseChunkFilter,
+    ...(topicChunkClauses.length > 0 ? { $and: topicChunkClauses } : {}),
+  };
+
+  let chunks = [];
+  let searchBackend = 'none';
+  let textSearchFellBack = false;
+
+  if (textSearchEnabled && textSearchString) {
+    const textChunkFilter = { ...baseChunkFilter, $text: { $search: textSearchString } };
+    chunks = await db.findEnterpriseMemoryChunks(textChunkFilter, {
+      limit,
+      offset,
+      sort: sortBy === 'oldest' ? { sourceTimestamp: 1 } : { sourceTimestamp: -1 },
+      textScore: sortBy !== 'oldest' && sortBy !== 'recent',
+    });
+    searchBackend = 'text';
+
+    if (chunks.length === 0 && topicChunkClauses.length > 0) {
+      chunks = await db.findEnterpriseMemoryChunks(regexChunkFilter, { limit, offset, sort: recencySort });
+      searchBackend = 'regex';
+      textSearchFellBack = true;
+    }
+  } else if (topicChunkClauses.length > 0) {
+    chunks = await db.findEnterpriseMemoryChunks(regexChunkFilter, { limit, offset, sort: recencySort });
+    searchBackend = 'regex';
+  } else {
+    chunks = await db.findEnterpriseMemoryChunks(baseChunkFilter, { limit, offset, sort: recencySort });
+    searchBackend = 'recency';
+  }
+
+  const conversationIds = [...new Set(chunks.map((chunk) => chunk.sourceParentRecordId).filter(Boolean))];
+  const conversations = conversationIds.length
+    ? await db.findSlackArchiveConversations(
+        { user: userId, slackConversationId: { $in: conversationIds } },
+        { limit: Math.max(conversationIds.length, 1) },
+      )
+    : [];
+  const conversationMap = new Map(
+    conversations.map((conversation) => [conversation.slackConversationId, conversation]),
+  );
+
+  return {
+    retrievalMode: 'enterprise_memory',
+    source: 'slack',
+    topic: topic || undefined,
+    ...(conversationId ? { conversationId } : {}),
+    senderScope: normalizedSenderScope,
+    ...(senderUserId ? { senderUserId } : {}),
+    conversationType: normalizedConversationType,
+    daysBack,
+    participants: toArray(options.participants).filter(Boolean),
+    guidance:
+      'These are indexed Slack enterprise-memory results. Prefer these for semantic/hybrid discovery; use get_messages for exact thread/channel context after selecting a conversation.',
+    trace: {
+      backend: 'enterprise_memory',
+      searchBackend,
+      textSearchEnabled,
+      textSearchFellBack,
+      conversationPrefilterApplied: shouldPrefilterConversations,
+      conversationIdScoped: Boolean(conversationId),
+      matchedConversationCount: matchedConversationIds.length,
+    },
+    resultCount: chunks.length,
+    results: chunks.map((chunk) => {
+      const conversation = conversationMap.get(chunk.sourceParentRecordId);
+      return {
+        id: chunk._id?.toString?.() || chunk.id,
+        slackMessageTs: chunk.sourceRecordId,
+        slackConversationId: chunk.sourceParentRecordId,
+        conversationId: chunk.sourceParentRecordId,
+        conversationName: conversation?.name || '',
+        topic: conversation?.topic || '',
+        conversationType: conversation?.conversationType || chunk?.metadata?.conversationType || '',
+        participants: mapCompactParticipants(conversation?.participants || []),
+        fromDisplayName: chunk?.metadata?.displayName || chunk?.metadata?.username || '',
+        slackUserId: chunk?.metadata?.slackUserId || '',
+        threadTs: chunk?.metadata?.threadTs || '',
+        summary: truncateText(chunk.summary || '', 180),
+        excerpt: truncateText(chunk.summary || chunk.text || '', 320),
+        sentAt: chunk.sourceTimestamp,
+      };
+    }),
+  };
+}
+
 module.exports = {
   searchTeamsMemoryChunks,
+  searchSlackMemoryChunks,
 };

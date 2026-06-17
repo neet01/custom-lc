@@ -1,10 +1,11 @@
 jest.mock('~/models', () => ({
   findEnterpriseMemoryChunks: jest.fn(),
   findTeamsArchiveConversations: jest.fn(),
+  findSlackArchiveConversations: jest.fn(),
 }));
 
 const db = require('~/models');
-const { searchTeamsMemoryChunks } = require('./retrieval');
+const { searchTeamsMemoryChunks, searchSlackMemoryChunks } = require('./retrieval');
 
 describe('EnterpriseMemory retrieval', () => {
   const user = {
@@ -18,12 +19,15 @@ describe('EnterpriseMemory retrieval', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     delete process.env.TEAMS_ARCHIVE_TEXT_SEARCH_ENABLED;
+    delete process.env.SLACK_ARCHIVE_TEXT_SEARCH_ENABLED;
     db.findEnterpriseMemoryChunks.mockResolvedValue([]);
     db.findTeamsArchiveConversations.mockResolvedValue([]);
+    db.findSlackArchiveConversations.mockResolvedValue([]);
   });
 
   afterEach(() => {
     delete process.env.TEAMS_ARCHIVE_TEXT_SEARCH_ENABLED;
+    delete process.env.SLACK_ARCHIVE_TEXT_SEARCH_ENABLED;
   });
 
   it('does not prefilter conversations by topic before chunk search for broad topic queries', async () => {
@@ -187,5 +191,140 @@ describe('EnterpriseMemory retrieval', () => {
     expect(fallbackFilter.$and).toEqual(expect.any(Array));
     expect(result.trace).toMatchObject({ searchBackend: 'regex', textSearchFellBack: true });
     expect(result.resultCount).toBe(1);
+  });
+
+  it('uses the Slack enterprise memory text index by default', async () => {
+    db.findEnterpriseMemoryChunks.mockResolvedValue([
+      {
+        _id: 'slack-chunk-text',
+        sourceRecordId: '1714521600.000100',
+        sourceParentRecordId: 'COPS',
+        summary: 'Budget approval update',
+        text: 'Budget approval update from the ops channel',
+        sourceTimestamp: new Date('2026-05-20T12:00:00.000Z'),
+        metadata: {
+          displayName: 'Test User',
+          slackUserId: 'U123',
+          conversationType: 'public_channel',
+        },
+      },
+    ]);
+    db.findSlackArchiveConversations.mockResolvedValue([
+      {
+        slackConversationId: 'COPS',
+        name: 'ops',
+        topic: 'Operations',
+        conversationType: 'public_channel',
+        participants: [{ slackUserId: 'U123', displayName: 'Test User' }],
+      },
+    ]);
+
+    const result = await searchSlackMemoryChunks(user, {
+      topic: 'budget approval',
+      limit: 4,
+    });
+
+    expect(db.findEnterpriseMemoryChunks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: 'user-1',
+        source: 'slack',
+        sourceRecordType: 'slack_message',
+        $text: { $search: 'budget approval' },
+      }),
+      expect.objectContaining({
+        limit: 4,
+        textScore: true,
+      }),
+    );
+    expect(db.findSlackArchiveConversations).toHaveBeenCalledWith(
+      {
+        user: 'user-1',
+        slackConversationId: { $in: ['COPS'] },
+      },
+      { limit: 1 },
+    );
+    expect(result).toMatchObject({
+      retrievalMode: 'enterprise_memory',
+      source: 'slack',
+      resultCount: 1,
+      trace: {
+        searchBackend: 'text',
+        textSearchEnabled: true,
+        textSearchFellBack: false,
+      },
+      results: [
+        expect.objectContaining({
+          slackConversationId: 'COPS',
+          conversationName: 'ops',
+          fromDisplayName: 'Test User',
+        }),
+      ],
+    });
+  });
+
+  it('prefilters Slack conversations before indexed search when participants are provided', async () => {
+    db.findSlackArchiveConversations
+      .mockResolvedValueOnce([
+        {
+          slackConversationId: 'DTEAM',
+          conversationType: 'im',
+          participants: [{ displayName: 'Taylor', slackUserId: 'U456' }],
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          slackConversationId: 'DTEAM',
+          conversationType: 'im',
+          participants: [{ displayName: 'Taylor', slackUserId: 'U456' }],
+        },
+      ]);
+    db.findEnterpriseMemoryChunks.mockResolvedValue([
+      {
+        _id: 'slack-chunk-scoped',
+        sourceRecordId: '1714521600.000200',
+        sourceParentRecordId: 'DTEAM',
+        summary: 'Launch checklist',
+        text: 'Launch checklist discussion',
+        sourceTimestamp: new Date('2026-05-21T12:00:00.000Z'),
+        metadata: {
+          displayName: 'Taylor',
+          slackUserId: 'U456',
+          conversationType: 'im',
+        },
+      },
+    ]);
+
+    const result = await searchSlackMemoryChunks(user, {
+      topic: 'launch checklist',
+      conversationType: 'im',
+      participants: ['Taylor'],
+      limit: 3,
+    });
+
+    expect(db.findSlackArchiveConversations).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        user: 'user-1',
+        conversationType: 'im',
+        $and: expect.any(Array),
+      }),
+      { limit: 1000 },
+    );
+    expect(db.findEnterpriseMemoryChunks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'slack',
+        sourceRecordType: 'slack_message',
+        sourceParentRecordId: { $in: ['DTEAM'] },
+        $text: { $search: 'launch checklist' },
+      }),
+      expect.objectContaining({
+        limit: 3,
+      }),
+    );
+    expect(result.trace).toMatchObject({
+      searchBackend: 'text',
+      conversationPrefilterApplied: true,
+      matchedConversationCount: 1,
+    });
   });
 });

@@ -139,13 +139,21 @@ router.get('/conversations/:conversationId/messages', async (req, res) => {
 
 router.get('/search', async (req, res) => {
   try {
-    const result = await SlackArchiveService.searchMessages(req.user, {
+    const searchOptions = {
       query: req.query.q,
+      topic: req.query.topic,
       conversationId: req.query.conversationId,
+      conversationType: req.query.conversationType,
       senderUserId: req.query.senderUserId,
+      senderScope: req.query.senderScope,
+      daysBack: req.query.daysBack,
       limit: req.query.limit,
       offset: req.query.offset,
-    });
+    };
+    const result =
+      req.query.mode === 'advanced' || req.query.action === 'advanced_search_messages'
+        ? await SlackArchiveService.advancedSearchMessages(req.user, searchOptions)
+        : await SlackArchiveService.searchMessages(req.user, searchOptions);
     res.json(result);
   } catch (error) {
     handleSlackArchiveError(res, error);

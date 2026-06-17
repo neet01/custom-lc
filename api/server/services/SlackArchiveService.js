@@ -6,9 +6,11 @@ const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { isArchiveFeatureAllowed } = require('~/server/services/ArchiveFeatureAccess');
 
 let projectSlackArchiveSyncToMemory = null;
+let searchSlackMemoryChunks = null;
 
 try {
   ({ projectSlackArchiveSyncToMemory } = require('~/server/services/EnterpriseMemory/slackProjection'));
+  ({ searchSlackMemoryChunks } = require('~/server/services/EnterpriseMemory/retrieval'));
 } catch (error) {
   if (error?.code !== 'MODULE_NOT_FOUND') {
     throw error;
@@ -1598,6 +1600,77 @@ async function searchMessages(user, options = {}) {
   };
 }
 
+async function advancedSearchMessages(user, options = {}) {
+  await assertArchiveAccess(user);
+  const query = String(options.topic || options.query || options.q || '').trim();
+  if (!query) {
+    throw new SlackArchiveServiceError('A Slack archive search topic or query is required.', 400);
+  }
+
+  const limit = clampPositiveInt(options.limit, Math.min(getSlackArchiveConfig().searchLimit, 8), {
+    max: 12,
+  });
+  const offset = clampPositiveInt(options.offset, 0, { min: 0, max: 100000 });
+  let memoryResults = null;
+  let memorySearchError = null;
+
+  if (typeof searchSlackMemoryChunks === 'function') {
+    try {
+      memoryResults = await searchSlackMemoryChunks(user, {
+        ...options,
+        topic: query,
+        limit,
+        offset,
+      });
+    } catch (error) {
+      memorySearchError = error;
+      logger.warn('[SlackArchiveService] Indexed Slack memory retrieval failed, falling back', {
+        userId: getUserId(user),
+        error: error?.message || error,
+      });
+    }
+  }
+
+  const memoryResultCount = Array.isArray(memoryResults?.results) ? memoryResults.results.length : 0;
+  if (memoryResultCount > 0) {
+    return {
+      ...memoryResults,
+      retrievalMode: 'advanced_indexed_slack_memory',
+      trace: {
+        ...(memoryResults.trace || {}),
+        memorySearched: true,
+        archiveFallbackRan: false,
+        memorySearchError: null,
+      },
+    };
+  }
+
+  const archiveFallback = await searchMessages(user, {
+    ...options,
+    query,
+    limit,
+    offset,
+  });
+
+  return {
+    retrievalMode: 'advanced_slack_archive_fallback',
+    source: 'slack',
+    topic: query,
+    guidance:
+      'Indexed Slack memory returned no results or was unavailable, so this response used raw archive fallback. Prefer indexed results when trace.searchBackend is text.',
+    trace: {
+      backend: 'archive',
+      memorySearched: typeof searchSlackMemoryChunks === 'function',
+      memoryResultCount,
+      archiveFallbackRan: true,
+      memorySearchError: memorySearchError?.message || null,
+      indexedTrace: memoryResults?.trace || null,
+    },
+    resultCount: archiveFallback.count || 0,
+    results: archiveFallback.results || [],
+  };
+}
+
 module.exports = {
   SlackArchiveServiceError,
   getSlackArchiveConfig,
@@ -1610,4 +1683,5 @@ module.exports = {
   listConversations,
   listConversationMessages,
   searchMessages,
+  advancedSearchMessages,
 };

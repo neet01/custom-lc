@@ -399,14 +399,26 @@ export const slackArchiveSchema: ExtendedJsonSchema = {
   properties: {
     action: {
       type: 'string',
-      enum: ['status', 'sync_archive', 'search_messages', 'list_conversations', 'get_messages'],
+      enum: [
+        'status',
+        'sync_archive',
+        'advanced_search_messages',
+        'search_messages',
+        'list_conversations',
+        'get_messages',
+      ],
       description:
-        'Use status to check Slack archive readiness, sync_archive to begin Slack archive ingestion scaffolding, search_messages for lexical discovery, list_conversations for channel or DM selection, and get_messages to inspect one selected conversation.',
+        'Slack archive action. Prefer advanced_search_messages for semantic/hybrid indexed retrieval over archived Slack memory. Use search_messages only for exact lexical fallback, list_conversations for channel/DM selection, get_messages to inspect one selected conversation, status to check readiness, and sync_archive to ingest GovSlack history.',
     },
     query: {
       type: 'string',
       description:
-        'For search_messages: a short search phrase. Do not pass the full user question.',
+        'For advanced_search_messages or search_messages: a short distilled search phrase. Do not pass the full user question.',
+    },
+    topic: {
+      type: 'string',
+      description:
+        'For advanced_search_messages: the core topic or subject to search with the indexed Slack enterprise-memory backend. Pass the distilled subject, not the full user question.',
     },
     conversationId: {
       type: 'string',
@@ -415,7 +427,38 @@ export const slackArchiveSchema: ExtendedJsonSchema = {
     },
     senderUserId: {
       type: 'string',
-      description: 'Optional Slack user id to restrict search_messages to one sender.',
+      description: 'Optional Slack user id to restrict advanced_search_messages or search_messages to one sender.',
+    },
+    senderScope: {
+      type: 'string',
+      enum: ['any', 'me', 'others'],
+      description:
+        'For advanced_search_messages: restrict sender to any, the signed-in user, or others.',
+    },
+    conversationType: {
+      type: 'string',
+      enum: ['any', 'public_channel', 'private_channel', 'im', 'mpim'],
+      description:
+        'For advanced_search_messages: optionally restrict to public channels, private channels, DMs, or group DMs.',
+    },
+    participants: {
+      type: 'array',
+      items: { type: 'string' },
+      maxItems: 10,
+      description:
+        'For advanced_search_messages: optional participant names, emails, Slack user ids, or channel names to narrow search.',
+    },
+    daysBack: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 3650,
+      description: 'For advanced_search_messages: how many days back to search.',
+    },
+    sortBy: {
+      type: 'string',
+      enum: ['relevance', 'recent', 'oldest'],
+      description:
+        'For advanced_search_messages: relevance uses the Mongo text index score, recent/oldest use time ordering.',
     },
     limit: {
       type: 'integer',
@@ -1011,7 +1054,7 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   slack_archive_search: {
     name: 'slack_archive_search',
     description:
-      'Search and retrieve archived Slack messages. Current scope supports status, lexical search, conversation listing, and per-conversation message retrieval. Sync scaffolding exists but GovSlack OAuth/token ingestion is not implemented yet.',
+      'Search and retrieve archived GovSlack messages. Prefer advanced_search_messages for indexed semantic/hybrid discovery using EnterpriseMemory text-index chunks; use get_messages for exact per-conversation context and search_messages only as lexical fallback.',
     schema: slackArchiveSchema,
     toolType: 'builtin',
   },

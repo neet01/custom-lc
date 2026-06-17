@@ -10,6 +10,7 @@ import type {
   SlackArchiveCancelResponse,
   SlackArchiveResetResponse,
   SlackArchiveStatusResponse,
+  SlackArchiveSyncAcceptedResponse,
   SlackArchiveSyncRequest,
   SlackArchiveSyncResponse,
 } from 'librechat-data-provider';
@@ -32,7 +33,7 @@ export const useSlackArchiveStatusQuery = (
 };
 
 export const useSyncSlackArchiveMutation = (): UseMutationResult<
-  SlackArchiveSyncResponse,
+  SlackArchiveSyncResponse | SlackArchiveSyncAcceptedResponse,
   unknown,
   SlackArchiveSyncRequest
 > => {

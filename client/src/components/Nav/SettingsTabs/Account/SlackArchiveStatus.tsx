@@ -113,7 +113,7 @@ function getStatusDetail({
     return 'Read-only GovSlack archive data is available for search, summaries, and follow-up retrieval.';
   }
 
-  return 'OAuth scaffolding is ready, but Slack Web API ingestion still needs to be completed before live syncs will succeed.';
+  return 'GovSlack is connected and ready to ingest the current user workspace history.';
 }
 
 function getPrimaryActionLabel({

@@ -277,6 +277,7 @@ async function fetchSlackUserProfile({ userAccessToken, slackUserId, apiBaseUrl 
   }
 
   const url = new URL('/users.info', apiBaseUrl);
+  url.pathname = `${new URL(apiBaseUrl).pathname.replace(/\/+$/, '')}/users.info`;
   url.searchParams.set('user', slackUserId);
 
   const response = await fetch(url, {

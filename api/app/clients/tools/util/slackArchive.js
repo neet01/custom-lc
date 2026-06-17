@@ -123,7 +123,7 @@ function createSlackArchiveTool({ req }) {
     {
       name: SLACK_ARCHIVE_TOOL_NAME,
       description:
-        'Searches and retrieves archived Slack messages. Current scope supports status, lexical search, conversation listing, and per-conversation message retrieval. Sync scaffolding exists but GovSlack OAuth/token ingestion is not implemented yet.',
+        'Searches and retrieves archived Slack messages. Current scope supports status, GovSlack archive sync, lexical search, conversation listing, and per-conversation message retrieval.',
       schema: slackArchiveJsonSchema,
     },
   );

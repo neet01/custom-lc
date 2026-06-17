@@ -377,11 +377,19 @@ Main code areas:
 
 Current scope/limits:
 
-- current implementation is scaffold-level only for GovSlack archive support
-- GovSlack OAuth install/callback is wired, but Slack Web API conversation/message ingestion is not implemented yet
-- sync attempts currently fail intentionally with `501` until ingestion is added
-- current token persistence is stored per Cortex user for development convenience; production should move the bot/workspace install into a dedicated workspace-scoped install model
-- there is not yet a `SlackIdentityLink` or equivalent mapping from `team_id + slack_user_id` to the Cortex/Entra user, so future `/Cortex` DM or channel flows are not ready
+- GovSlack OAuth install/callback is wired and now persists:
+  - a workspace-scoped `SlackWorkspaceInstall` record for the bot install
+  - a user-scoped `SlackIdentityLink` record for the installing Slack user
+- Slack Web API conversation/message ingestion is implemented for:
+  - public channels
+  - private channels
+  - DMs
+  - MPIMs
+  - thread replies via `conversations.replies`
+- Slack archive sync now also queues a Slack-specific enterprise-memory projection pass after successful ingestion
+- archive-backed lexical retrieval is available immediately through the archive collections and built-in tool
+- production should still move sensitive bot/workspace secrets out of Mongo and into a secrets-backed model such as AWS Secrets Manager
+- future `/Cortex` DM or channel flows still need a dedicated worker/runtime even though the identity-link records now exist
 
 GovSlack-specific design decisions:
 

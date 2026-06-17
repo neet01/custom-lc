@@ -423,11 +423,12 @@ New GovSlack scaffolding is now in the repo for the Slack side of the same workf
 Current scope:
 
 - GovSlack OAuth start/callback and status wiring exist
-- archive sync, retrieval endpoints, and the built-in tool all exist at the contract level
-- actual Slack Web API ingestion is still not implemented, so sync currently returns an expected `501`
-- current OAuth token storage is a temporary per-user scaffold and should be replaced with:
-  - a workspace-scoped GovSlack install record for the bot token
-  - a `SlackIdentityLink`-style mapping for `team_id + slack_user_id -> Cortex user / Entra identity`
+- archive sync now performs real GovSlack conversation/message ingestion for the connected user
+- current persistence now includes:
+  - a workspace-scoped GovSlack install record for the bot token and install metadata
+  - a `SlackIdentityLink` record for `team_id + slack_user_id -> Cortex user`
+- archive-backed lexical retrieval is available immediately from Slack archive collections and the built-in tool
+- Slack is not yet projected into the canonical enterprise-memory layer, so cross-source memory retrieval parity with Teams is still pending
 
 Important future-bot direction:
 
@@ -470,7 +471,9 @@ Current product truth:
 
 - the UI trigger is now in place where expected
 - GovSlack install testing can proceed once credentials are available
-- live archive sync will still stop at the current expected `501` until Slack conversation/message ingestion is implemented
+- live archive sync can now execute against GovSlack once credentials are installed
+- archive sync now also queues Slack -> enterprise-memory projection after successful ingestion
+- the major remaining Slack gap after credential hookup is the dedicated GovSlack bot worker/runtime for `/Cortex`-style conversational interactions
 
 ### Document intelligence planning and Phase 1 kickoff
 

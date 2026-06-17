@@ -111,6 +111,8 @@ export const outlookUpdateMessageReadState = (messageId: string) =>
 export const outlookDailyBrief = () => `${outlookRoot}/daily-brief`;
 
 export const slackArchiveStatus = () => `${slackArchiveRoot}/status`;
+export const slackArchiveOAuthStart = (params: { team?: string; returnTo?: string } = {}) =>
+  `${slackArchiveRoot}/oauth/start${buildQuery(params as Record<string, unknown>)}`;
 export const slackArchiveSync = () => `${slackArchiveRoot}/sync`;
 export const slackArchiveCancel = () => `${slackArchiveRoot}/cancel`;
 export const slackArchiveReset = () => `${slackArchiveRoot}/reset`;

@@ -125,6 +125,13 @@ export function getSlackArchiveStatus(): Promise<sa.SlackArchiveStatusResponse> 
   return request.get(endpoints.slackArchiveStatus());
 }
 
+export function getSlackArchiveInstallUrl(params: {
+  team?: string;
+  returnTo?: string;
+} = {}): Promise<{ installUrl: string; redirectUri: string; state: string }> {
+  return request.get(endpoints.slackArchiveOAuthStart(params));
+}
+
 export function syncSlackArchive(
   payload: sa.SlackArchiveSyncRequest = {},
 ): Promise<sa.SlackArchiveSyncResponse> {

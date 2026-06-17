@@ -8,7 +8,7 @@ import {
   Spinner,
   useToastContext,
 } from '@librechat/client';
-import { apiBaseUrl, QueryKeys } from 'librechat-data-provider';
+import { dataService, QueryKeys } from 'librechat-data-provider';
 import {
   useCancelSlackArchiveSyncMutation,
   useResetSlackArchiveMutation,
@@ -203,7 +203,7 @@ export default function SlackArchiveStatus() {
     await queryClient.invalidateQueries([QueryKeys.slackArchiveStatus]);
   }, [queryClient]);
 
-  const handleConnect = React.useCallback(() => {
+  const handleConnect = React.useCallback(async () => {
     if (!data?.oauth.installConfigured) {
       showToast({
         message:
@@ -213,15 +213,26 @@ export default function SlackArchiveStatus() {
       return;
     }
 
-    setIsRedirecting(true);
-    const returnTo = encodeURIComponent(window.location.href);
-    const url = `${apiBaseUrl()}/api/slack-archive/oauth/start?redirect=true&returnTo=${returnTo}`;
-    window.location.assign(url);
+    try {
+      setIsRedirecting(true);
+      const result = await dataService.getSlackArchiveInstallUrl({
+        returnTo: window.location.href,
+      });
+      window.location.assign(result.installUrl);
+    } catch (error) {
+      setIsRedirecting(false);
+      const message =
+        error instanceof Error ? error.message : 'Failed to start GovSlack connection.';
+      showToast({
+        message,
+        status: 'error',
+      });
+    }
   }, [data?.oauth.installConfigured, showToast]);
 
   const handlePrimaryAction = async () => {
     if (!data?.oauth.connected) {
-      handleConnect();
+      await handleConnect();
       return;
     }
 

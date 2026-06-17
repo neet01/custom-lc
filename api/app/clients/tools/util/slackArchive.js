@@ -22,12 +22,12 @@ const slackArchiveJsonSchema = {
     query: {
       type: 'string',
       description:
-        'For advanced_search_messages or search_messages: a short distilled search phrase. Do not pass the full user question.',
+        'For search_messages: a short distilled keyword phrase for exact lexical fallback. Do not pass the full user question here.',
     },
     topic: {
       type: 'string',
       description:
-        'For advanced_search_messages: the core topic or subject to search with the indexed Slack enterprise-memory backend.',
+        "For advanced_search_messages: pass the user's full natural-language question verbatim (e.g., \"who said they are responsible for landing gear\" or \"what did I tell people I would do today\"). The server infers the sender (including the signed-in user for first-person questions), the timeframe (today/this week/etc.), and the intent (commitments, ownership/responsibility), then re-ranks results — so do not pre-distill it.",
     },
     conversationId: {
       type: 'string',

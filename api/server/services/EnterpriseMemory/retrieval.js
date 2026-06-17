@@ -1,7 +1,20 @@
 const db = require('~/models');
+const { analyzeSlackQuery, buildIntentChunkClause, rerankSlackChunks } = require('./queryIntent');
 
 function toArray(value) {
   return Array.isArray(value) ? value : [];
+}
+
+async function resolveLinkedSlackUserId(userId) {
+  if (!userId || typeof db.findSlackIdentityLink !== 'function') {
+    return '';
+  }
+  try {
+    const link = await db.findSlackIdentityLink({ user: userId, status: 'linked' });
+    return String(link?.slackUserId || '').trim();
+  } catch {
+    return '';
+  }
 }
 
 function looksLikeMongoObjectId(value) {
@@ -399,16 +412,20 @@ async function searchSlackMemoryChunks(user, options = {}) {
   const sortBy = String(options.sortBy || 'relevance').trim();
   const limit = clampInteger(options.limit, 8, { max: 12 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
-  const daysBack = options.daysBack
-    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
-    : undefined;
 
   const validSenderScopes = new Set(['any', 'me', 'others']);
   const validConversationTypes = new Set(['any', 'public_channel', 'private_channel', 'im', 'mpim']);
-  const normalizedSenderScope = validSenderScopes.has(senderScope) ? senderScope : 'any';
   const normalizedConversationType = validConversationTypes.has(conversationType)
     ? conversationType
     : 'any';
+
+  const analysis = analyzeSlackQuery(topic);
+  const callerSenderScope =
+    validSenderScopes.has(senderScope) && senderScope !== 'any' ? senderScope : '';
+  const effectiveSenderScope = callerSenderScope || analysis.impliedSenderScope || 'any';
+  const effectiveDaysBack = options.daysBack
+    ? clampInteger(options.daysBack, 30, { min: 1, max: 3650 })
+    : analysis.impliedDaysBack;
 
   const participantClauses = buildSlackParticipantConversationClauses(options.participants);
   const { clauses: topicChunkClauses } = buildChunkSearchClauses(topic);
@@ -436,9 +453,9 @@ async function searchSlackMemoryChunks(user, options = {}) {
         retrievalMode: 'enterprise_memory',
         source: 'slack',
         topic: topic || undefined,
-        senderScope: normalizedSenderScope,
+        senderScope: effectiveSenderScope,
         conversationType: normalizedConversationType,
-        daysBack,
+        daysBack: effectiveDaysBack,
         participants: toArray(options.participants).filter(Boolean),
         guidance:
           'No matching Slack memory chunks were found. Broaden the participants, channel type, or timeframe.',
@@ -446,6 +463,7 @@ async function searchSlackMemoryChunks(user, options = {}) {
           backend: 'enterprise_memory',
           searchBackend: 'text',
           textSearchEnabled: isSlackTextSearchEnabled(),
+          queryArchetype: analysis.archetype,
           conversationPrefilterApplied: true,
           conversationIdScoped: false,
           matchedConversationCount: 0,
@@ -456,24 +474,38 @@ async function searchSlackMemoryChunks(user, options = {}) {
     }
   }
 
+  const linkedSlackUserId =
+    !senderUserId && (effectiveSenderScope === 'me' || effectiveSenderScope === 'others')
+      ? await resolveLinkedSlackUserId(userId)
+      : '';
   const senderClauses = senderUserId
     ? [{ 'metadata.slackUserId': senderUserId }]
-    : getSlackSenderClauses(user);
+    : [
+        ...(linkedSlackUserId ? [{ 'metadata.slackUserId': linkedSlackUserId }] : []),
+        ...getSlackSenderClauses(user),
+      ];
+  const isSenderScoped =
+    Boolean(senderUserId) || effectiveSenderScope === 'me' || effectiveSenderScope === 'others';
+  const sourceRecordTypeFilter = isSenderScoped
+    ? 'slack_message'
+    : { $in: ['slack_message', 'slack_conversation'] };
   const baseChunkFilter = {
     user: userId,
     source: 'slack',
-    sourceRecordType: 'slack_message',
+    sourceRecordType: sourceRecordTypeFilter,
     ...(matchedConversationIds.length > 0
       ? { sourceParentRecordId: { $in: matchedConversationIds } }
       : {}),
-    ...(daysBack ? { sourceTimestamp: { $gte: new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000) } } : {}),
+    ...(effectiveDaysBack
+      ? { sourceTimestamp: { $gte: new Date(Date.now() - effectiveDaysBack * 24 * 60 * 60 * 1000) } }
+      : {}),
     ...(senderUserId
       ? { 'metadata.slackUserId': senderUserId }
-      : normalizedSenderScope === 'me'
+      : effectiveSenderScope === 'me'
         ? senderClauses.length > 0
           ? { $or: senderClauses }
           : {}
-        : normalizedSenderScope === 'others'
+        : effectiveSenderScope === 'others'
           ? senderClauses.length > 0
             ? { $nor: senderClauses }
             : {}
@@ -489,11 +521,35 @@ async function searchSlackMemoryChunks(user, options = {}) {
     ...(topicChunkClauses.length > 0 ? { $and: topicChunkClauses } : {}),
   };
 
+  const intentDriven = analysis.archetype !== 'general';
   let chunks = [];
   let searchBackend = 'none';
   let textSearchFellBack = false;
+  let intentRanking = null;
+  let candidatePoolSize = 0;
 
-  if (textSearchEnabled && textSearchString) {
+  if (intentDriven) {
+    const intentClause = buildIntentChunkClause(analysis.intentPhrases);
+    const recallClauses = [
+      ...(topicChunkClauses.length > 0 ? topicChunkClauses : []),
+      ...(intentClause ? [intentClause] : []),
+    ];
+    const useBroadSenderRecall = analysis.selfAuthored && effectiveSenderScope === 'me';
+    const candidateFilter = {
+      ...baseChunkFilter,
+      sourceRecordType: 'slack_message',
+      ...(useBroadSenderRecall || recallClauses.length === 0 ? {} : { $or: recallClauses }),
+    };
+    candidatePoolSize = Math.min(Math.max(limit * 4, 24), 60);
+    const candidates = await db.findEnterpriseMemoryChunks(candidateFilter, {
+      limit: candidatePoolSize,
+      offset,
+      sort: recencySort,
+    });
+    intentRanking = rerankSlackChunks(candidates, analysis, { limit });
+    chunks = intentRanking.map((entry) => entry.chunk);
+    searchBackend = 'hybrid_intent';
+  } else if (textSearchEnabled && textSearchString) {
     const textChunkFilter = { ...baseChunkFilter, $text: { $search: textSearchString } };
     chunks = await db.findEnterpriseMemoryChunks(textChunkFilter, {
       limit,
@@ -526,16 +582,22 @@ async function searchSlackMemoryChunks(user, options = {}) {
   const conversationMap = new Map(
     conversations.map((conversation) => [conversation.slackConversationId, conversation]),
   );
+  const intentByChunkId = new Map(
+    (intentRanking || []).map((entry) => [
+      entry.chunk._id?.toString?.() || entry.chunk.id,
+      entry,
+    ]),
+  );
 
   return {
     retrievalMode: 'enterprise_memory',
     source: 'slack',
     topic: topic || undefined,
     ...(conversationId ? { conversationId } : {}),
-    senderScope: normalizedSenderScope,
+    senderScope: effectiveSenderScope,
     ...(senderUserId ? { senderUserId } : {}),
     conversationType: normalizedConversationType,
-    daysBack,
+    daysBack: effectiveDaysBack,
     participants: toArray(options.participants).filter(Boolean),
     guidance:
       'These are indexed Slack enterprise-memory results. Prefer these for semantic/hybrid discovery; use get_messages for exact thread/channel context after selecting a conversation.',
@@ -544,6 +606,17 @@ async function searchSlackMemoryChunks(user, options = {}) {
       searchBackend,
       textSearchEnabled,
       textSearchFellBack,
+      queryArchetype: analysis.archetype,
+      selfAuthored: analysis.selfAuthored,
+      intentDriven,
+      appliedSenderScope: effectiveSenderScope,
+      appliedDaysBack: effectiveDaysBack ?? null,
+      senderResolvedFromIdentityLink: Boolean(linkedSlackUserId),
+      candidatePoolSize,
+      searchedSourceRecordTypes:
+        intentDriven || isSenderScoped
+          ? ['slack_message']
+          : ['slack_message', 'slack_conversation'],
       conversationPrefilterApplied: shouldPrefilterConversations,
       conversationIdScoped: Boolean(conversationId),
       matchedConversationCount: matchedConversationIds.length,
@@ -551,9 +624,12 @@ async function searchSlackMemoryChunks(user, options = {}) {
     resultCount: chunks.length,
     results: chunks.map((chunk) => {
       const conversation = conversationMap.get(chunk.sourceParentRecordId);
+      const intentEntry = intentByChunkId.get(chunk._id?.toString?.() || chunk.id);
       return {
         id: chunk._id?.toString?.() || chunk.id,
-        slackMessageTs: chunk.sourceRecordId,
+        chunkType: chunk.chunkType || '',
+        sourceRecordType: chunk.sourceRecordType || '',
+        slackMessageTs: chunk.sourceRecordType === 'slack_message' ? chunk.sourceRecordId : '',
         slackConversationId: chunk.sourceParentRecordId,
         conversationId: chunk.sourceParentRecordId,
         conversationName: conversation?.name || '',
@@ -566,6 +642,12 @@ async function searchSlackMemoryChunks(user, options = {}) {
         summary: truncateText(chunk.summary || '', 180),
         excerpt: truncateText(chunk.summary || chunk.text || '', 320),
         sentAt: chunk.sourceTimestamp,
+        ...(intentEntry
+          ? {
+              relevanceScore: intentEntry.relevanceScore,
+              matchedIntent: intentEntry.matchedIntent || '',
+            }
+          : {}),
       };
     }),
   };

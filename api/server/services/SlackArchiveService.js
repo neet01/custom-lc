@@ -84,12 +84,24 @@ function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function looksLikeMongoObjectId(value) {
+  return /^[a-f\d]{24}$/i.test(String(value || '').trim());
+}
+
 function buildSearchRegex(value) {
   const normalized = String(value || '').trim().replace(/\s+/g, ' ');
   if (!normalized) {
     return null;
   }
   return new RegExp(escapeRegex(normalized).replace(/\\ /g, '\\s+'), 'i');
+}
+
+function buildExactSearchRegex(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return null;
+  }
+  return new RegExp(`^${escapeRegex(normalized)}$`, 'i');
 }
 
 function normalizeSlackApiBaseUrl(baseUrl = DEFAULT_SLACK_API_BASE_URL) {
@@ -1284,14 +1296,14 @@ async function getStatus(user) {
       ? db.countEnterpriseMemoryChunks({
           user: userId,
           source: 'slack',
-          sourceRecordType: 'slack_message',
+          sourceRecordType: { $in: ['slack_message', 'slack_conversation'] },
         })
       : 0,
     userId && typeof db.countDistinctEnterpriseMemoryChunkField === 'function'
       ? db.countDistinctEnterpriseMemoryChunkField('sourceParentRecordId', {
           user: userId,
           source: 'slack',
-          sourceRecordType: 'slack_message',
+          sourceRecordType: { $in: ['slack_message', 'slack_conversation'] },
         })
       : 0,
     userId && typeof db.countEnterpriseMemoryEntities === 'function'
@@ -1346,6 +1358,41 @@ async function getStatus(user) {
     projectionConversationCount,
     projectionEntityCount,
   };
+}
+
+async function resolveSlackConversationReference(userId, value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const unprefixedName = normalized.replace(/^#/, '').trim();
+  const exactNameRegex = buildExactSearchRegex(unprefixedName);
+  const clauses = [{ slackConversationId: normalized }];
+
+  if (looksLikeMongoObjectId(normalized)) {
+    clauses.push({ _id: normalized });
+  }
+
+  if (exactNameRegex) {
+    clauses.push({ name: exactNameRegex }, { topic: exactNameRegex });
+  }
+
+  const [conversation] = await db.findSlackArchiveConversations(
+    {
+      user: userId,
+      $or: clauses,
+    },
+    { limit: 1 },
+  );
+
+  return conversation || null;
+}
+
+async function resolveSlackConversationId(userId, value) {
+  const normalized = String(value || '').trim();
+  const conversation = await resolveSlackConversationReference(userId, normalized);
+  return conversation?.slackConversationId || normalized;
 }
 
 async function getSyncStartAvailability(user) {
@@ -1549,14 +1596,16 @@ async function listConversationMessages(user, conversationId, options = {}) {
 
   const limit = clampPositiveInt(options.limit, 50, { max: 200 });
   const offset = clampPositiveInt(options.offset, 0, { min: 0, max: 100000 });
+  const slackConversationId = await resolveSlackConversationId(userId, normalizedConversationId);
 
   const messages = await db.findSlackArchiveMessages(
-    { user: userId, slackConversationId: normalizedConversationId },
+    { user: userId, slackConversationId },
     { limit, offset, sort: { sentAt: -1, createdAt: -1 } },
   );
 
   return {
-    conversationId: normalizedConversationId,
+    conversationId: slackConversationId,
+    requestedConversationId: normalizedConversationId,
     limit,
     offset,
     count: messages.length,
@@ -1575,7 +1624,10 @@ async function searchMessages(user, options = {}) {
   const limit = clampPositiveInt(options.limit, getSlackArchiveConfig().searchLimit, { max: 100 });
   const offset = clampPositiveInt(options.offset, 0, { min: 0, max: 100000 });
   const regex = buildSearchRegex(query);
-  const slackConversationId = String(options.conversationId || options.channelId || '').trim();
+  const requestedConversationId = String(options.conversationId || options.channelId || '').trim();
+  const slackConversationId = requestedConversationId
+    ? await resolveSlackConversationId(userId, requestedConversationId)
+    : '';
   const slackUserId = String(options.senderUserId || '').trim();
 
   const filter = {
@@ -1597,6 +1649,12 @@ async function searchMessages(user, options = {}) {
 
   return {
     query,
+    ...(requestedConversationId
+      ? {
+          conversationId: slackConversationId,
+          requestedConversationId,
+        }
+      : {}),
     limit,
     offset,
     count: messages.length,
@@ -1615,6 +1673,10 @@ async function advancedSearchMessages(user, options = {}) {
     max: 12,
   });
   const offset = clampPositiveInt(options.offset, 0, { min: 0, max: 100000 });
+  const requestedConversationId = String(options.conversationId || options.channelId || '').trim();
+  const resolvedConversationId = requestedConversationId
+    ? await resolveSlackConversationId(getUserId(user), requestedConversationId)
+    : '';
   let memoryResults = null;
   let memorySearchError = null;
 
@@ -1622,6 +1684,7 @@ async function advancedSearchMessages(user, options = {}) {
     try {
       memoryResults = await searchSlackMemoryChunks(user, {
         ...options,
+        ...(resolvedConversationId ? { conversationId: resolvedConversationId } : {}),
         topic: query,
         limit,
         offset,
@@ -1644,6 +1707,8 @@ async function advancedSearchMessages(user, options = {}) {
         ...(memoryResults.trace || {}),
         memorySearched: true,
         archiveFallbackRan: false,
+        requestedConversationId: requestedConversationId || null,
+        resolvedConversationId: resolvedConversationId || null,
         memorySearchError: null,
       },
     };
@@ -1664,6 +1729,8 @@ async function advancedSearchMessages(user, options = {}) {
         memoryResultCount,
         archiveFallbackRan: false,
         archiveFallbackDisabled: true,
+        requestedConversationId: requestedConversationId || null,
+        resolvedConversationId: resolvedConversationId || null,
         memorySearchError: memorySearchError?.message || null,
       },
       resultCount: 0,
@@ -1673,6 +1740,7 @@ async function advancedSearchMessages(user, options = {}) {
 
   const archiveFallback = await searchMessages(user, {
     ...options,
+    ...(resolvedConversationId ? { conversationId: resolvedConversationId } : {}),
     query,
     limit,
     offset,

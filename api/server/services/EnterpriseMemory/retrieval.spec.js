@@ -2,6 +2,7 @@ jest.mock('~/models', () => ({
   findEnterpriseMemoryChunks: jest.fn(),
   findTeamsArchiveConversations: jest.fn(),
   findSlackArchiveConversations: jest.fn(),
+  findSlackIdentityLink: jest.fn(),
 }));
 
 const db = require('~/models');
@@ -23,6 +24,7 @@ describe('EnterpriseMemory retrieval', () => {
     db.findEnterpriseMemoryChunks.mockResolvedValue([]);
     db.findTeamsArchiveConversations.mockResolvedValue([]);
     db.findSlackArchiveConversations.mockResolvedValue([]);
+    db.findSlackIdentityLink.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -228,7 +230,7 @@ describe('EnterpriseMemory retrieval', () => {
       expect.objectContaining({
         user: 'user-1',
         source: 'slack',
-        sourceRecordType: 'slack_message',
+        sourceRecordType: { $in: ['slack_message', 'slack_conversation'] },
         $text: { $search: 'budget approval' },
       }),
       expect.objectContaining({
@@ -251,6 +253,7 @@ describe('EnterpriseMemory retrieval', () => {
         searchBackend: 'text',
         textSearchEnabled: true,
         textSearchFellBack: false,
+        searchedSourceRecordTypes: ['slack_message', 'slack_conversation'],
       },
       results: [
         expect.objectContaining({
@@ -313,7 +316,7 @@ describe('EnterpriseMemory retrieval', () => {
     expect(db.findEnterpriseMemoryChunks).toHaveBeenCalledWith(
       expect.objectContaining({
         source: 'slack',
-        sourceRecordType: 'slack_message',
+        sourceRecordType: { $in: ['slack_message', 'slack_conversation'] },
         sourceParentRecordId: { $in: ['DTEAM'] },
         $text: { $search: 'launch checklist' },
       }),
@@ -326,5 +329,150 @@ describe('EnterpriseMemory retrieval', () => {
       conversationPrefilterApplied: true,
       matchedConversationCount: 1,
     });
+  });
+
+  it('keeps sender-scoped Slack indexed search on per-message chunks only', async () => {
+    db.findEnterpriseMemoryChunks.mockResolvedValue([
+      {
+        _id: 'slack-sender-chunk',
+        sourceRecordType: 'slack_message',
+        sourceRecordId: '1714521600.000300',
+        sourceParentRecordId: 'COPS',
+        summary: 'I will follow up',
+        text: 'I will follow up',
+        sourceTimestamp: new Date('2026-05-22T12:00:00.000Z'),
+        metadata: {
+          displayName: 'Test User',
+          slackUserId: 'U123',
+        },
+      },
+    ]);
+
+    await searchSlackMemoryChunks(user, {
+      topic: 'follow up',
+      senderUserId: 'U123',
+      limit: 3,
+    });
+
+    expect(db.findEnterpriseMemoryChunks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'slack',
+        sourceRecordType: 'slack_message',
+        'metadata.slackUserId': 'U123',
+        $text: { $search: 'follow up' },
+      }),
+      expect.objectContaining({
+        limit: 3,
+      }),
+    );
+  });
+
+  it('resolves a responsibility query with intent re-ranking and message-level attribution', async () => {
+    db.findEnterpriseMemoryChunks.mockResolvedValue([
+      {
+        _id: 'topic-only',
+        sourceRecordType: 'slack_message',
+        sourceRecordId: '1.1',
+        sourceParentRecordId: 'CENG',
+        text: 'the landing gear inspection is overdue',
+        summary: 'the landing gear inspection is overdue',
+        sourceTimestamp: new Date('2026-06-01T10:00:00Z'),
+        metadata: { displayName: 'Sam', slackUserId: 'U010' },
+      },
+      {
+        _id: 'intent-and-topic',
+        sourceRecordType: 'slack_message',
+        sourceRecordId: '1.2',
+        sourceParentRecordId: 'CENG',
+        text: "I'll own landing gear going forward",
+        summary: "I'll own landing gear going forward",
+        sourceTimestamp: new Date('2026-06-02T10:00:00Z'),
+        metadata: { displayName: 'Dana', slackUserId: 'U777' },
+      },
+      {
+        _id: 'intent-only',
+        sourceRecordType: 'slack_message',
+        sourceRecordId: '1.3',
+        sourceParentRecordId: 'CENG',
+        text: "I'll own the deployment pipeline",
+        summary: "I'll own the deployment pipeline",
+        sourceTimestamp: new Date('2026-06-03T10:00:00Z'),
+        metadata: { displayName: 'Lee', slackUserId: 'U999' },
+      },
+    ]);
+
+    const result = await searchSlackMemoryChunks(user, {
+      topic: 'who said they are responsible for landing gear',
+    });
+
+    expect(db.findSlackIdentityLink).not.toHaveBeenCalled();
+    const [candidateFilter, candidateOptions] = db.findEnterpriseMemoryChunks.mock.calls[0];
+    expect(candidateFilter).toMatchObject({
+      source: 'slack',
+      sourceRecordType: 'slack_message',
+      $or: expect.any(Array),
+    });
+    expect(candidateOptions.limit).toBe(32);
+    expect(result.trace).toMatchObject({
+      searchBackend: 'hybrid_intent',
+      queryArchetype: 'responsibility',
+      intentDriven: true,
+      searchedSourceRecordTypes: ['slack_message'],
+    });
+    expect(result.results[0]).toMatchObject({
+      id: 'intent-and-topic',
+      fromDisplayName: 'Dana',
+    });
+    expect(result.results[0].matchedIntent).toBeTruthy();
+    expect(result.results[0].relevanceScore).toBeGreaterThan(result.results[1].relevanceScore);
+  });
+
+  it('resolves "me" from the Slack identity link and infers today for a self-commitment query', async () => {
+    db.findSlackIdentityLink.mockResolvedValue({ slackUserId: 'U123', status: 'linked' });
+    db.findEnterpriseMemoryChunks.mockResolvedValue([
+      {
+        _id: 'greeting',
+        sourceRecordType: 'slack_message',
+        sourceRecordId: '2.1',
+        sourceParentRecordId: 'CGEN',
+        text: 'good morning everyone',
+        summary: 'good morning everyone',
+        sourceTimestamp: new Date('2026-06-17T09:00:00Z'),
+        metadata: { displayName: 'Test User', slackUserId: 'U123' },
+      },
+      {
+        _id: 'commitment',
+        sourceRecordType: 'slack_message',
+        sourceRecordId: '2.2',
+        sourceParentRecordId: 'CGEN',
+        text: "I'll send the status report by EOD",
+        summary: "I'll send the status report by EOD",
+        sourceTimestamp: new Date('2026-06-17T08:00:00Z'),
+        metadata: { displayName: 'Test User', slackUserId: 'U123' },
+      },
+    ]);
+
+    const result = await searchSlackMemoryChunks(user, {
+      topic: 'what did I tell people I would do today',
+    });
+
+    expect(db.findSlackIdentityLink).toHaveBeenCalledWith({ user: 'user-1', status: 'linked' });
+    const [candidateFilter] = db.findEnterpriseMemoryChunks.mock.calls[0];
+    expect(candidateFilter).toMatchObject({
+      source: 'slack',
+      sourceRecordType: 'slack_message',
+      sourceTimestamp: expect.objectContaining({ $gte: expect.any(Date) }),
+    });
+    expect(candidateFilter.$or).toEqual(
+      expect.arrayContaining([{ 'metadata.slackUserId': 'U123' }]),
+    );
+    expect(result.trace).toMatchObject({
+      queryArchetype: 'commitment',
+      appliedSenderScope: 'me',
+      appliedDaysBack: 1,
+      senderResolvedFromIdentityLink: true,
+    });
+    expect(result.results[0]).toMatchObject({ id: 'commitment' });
+    expect(result.results[0].matchedIntent).toBeTruthy();
   });
 });

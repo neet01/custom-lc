@@ -35,6 +35,7 @@ jest.mock('~/server/services/EnterpriseMemory/retrieval', () => ({
 }));
 
 jest.mock('~/models', () => ({
+  findSlackArchiveConversations: jest.fn(),
   findSlackArchiveMessages: jest.fn(),
 }));
 
@@ -58,6 +59,7 @@ describe('SlackArchiveService', () => {
       SLACK_ARCHIVE_ENABLED: 'true',
     };
     isArchiveFeatureAllowed.mockResolvedValue(true);
+    db.findSlackArchiveConversations.mockResolvedValue([]);
     db.findSlackArchiveMessages.mockResolvedValue([]);
   });
 
@@ -133,6 +135,55 @@ describe('SlackArchiveService', () => {
         archiveFallbackRan: false,
         archiveFallbackDisabled: true,
       },
+    });
+  });
+
+  it('resolves an internal conversation id before listing exact Slack messages', async () => {
+    db.findSlackArchiveConversations.mockResolvedValue([
+      {
+        _id: '665f1d7f4e0a7a0012a34567',
+        slackConversationId: 'COPS',
+        name: 'ops',
+      },
+    ]);
+    db.findSlackArchiveMessages.mockResolvedValue([
+      {
+        _id: 'msg-1',
+        slackConversationId: 'COPS',
+        slackMessageTs: '1714521600.000100',
+        displayName: 'Manager',
+        text: 'Budget approval update',
+        normalizedText: 'Budget approval update',
+        sentAt: new Date('2026-05-01T00:00:00.000Z'),
+      },
+    ]);
+
+    const result = await SlackArchiveService.listConversationMessages(
+      user,
+      '665f1d7f4e0a7a0012a34567',
+      { limit: 10 },
+    );
+
+    expect(db.findSlackArchiveConversations).toHaveBeenCalledWith(
+      {
+        user: 'user-1',
+        $or: [
+          { slackConversationId: '665f1d7f4e0a7a0012a34567' },
+          { _id: '665f1d7f4e0a7a0012a34567' },
+          { name: /^665f1d7f4e0a7a0012a34567$/i },
+          { topic: /^665f1d7f4e0a7a0012a34567$/i },
+        ],
+      },
+      { limit: 1 },
+    );
+    expect(db.findSlackArchiveMessages).toHaveBeenCalledWith(
+      { user: 'user-1', slackConversationId: 'COPS' },
+      expect.objectContaining({ limit: 10 }),
+    );
+    expect(result).toMatchObject({
+      conversationId: 'COPS',
+      requestedConversationId: '665f1d7f4e0a7a0012a34567',
+      count: 1,
     });
   });
 });

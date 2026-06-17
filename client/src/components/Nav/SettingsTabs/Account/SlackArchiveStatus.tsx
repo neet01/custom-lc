@@ -1,7 +1,14 @@
 import React from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardPortal,
+  HoverCardTrigger,
+  Spinner,
+  useToastContext,
+} from '@librechat/client';
 import { apiBaseUrl, QueryKeys } from 'librechat-data-provider';
-import { Spinner, useToastContext } from '@librechat/client';
 import {
   useCancelSlackArchiveSyncMutation,
   useResetSlackArchiveMutation,
@@ -23,27 +30,38 @@ function formatTimestamp(value?: string | null) {
 }
 
 function getStatusTone(status?: string | null) {
-  if (status === 'running') {
-    return 'text-text-primary';
-  }
-
   if (status === 'success') {
-    return 'text-emerald-700 dark:text-emerald-300';
+    return {
+      badge: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300',
+      dot: 'bg-emerald-500',
+    };
   }
 
-  if (status === 'partial') {
-    return 'text-amber-700 dark:text-amber-300';
+  if (status === 'partial' || status === 'cancelled') {
+    return {
+      badge: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300',
+      dot: 'bg-amber-500',
+    };
   }
 
   if (status === 'failure') {
-    return 'text-rose-700 dark:text-rose-300';
+    return {
+      badge: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300',
+      dot: 'bg-rose-500',
+    };
   }
 
-  if (status === 'cancelled') {
-    return 'text-amber-700 dark:text-amber-300';
+  if (status === 'running') {
+    return {
+      badge: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300',
+      dot: 'bg-sky-500',
+    };
   }
 
-  return 'text-text-secondary';
+  return {
+    badge: 'border-border-light bg-surface-secondary text-text-secondary',
+    dot: 'bg-zinc-400 dark:bg-zinc-500',
+  };
 }
 
 function getStatusLabel({
@@ -83,37 +101,7 @@ function getStatusLabel({
     return 'Sync cancelled';
   }
 
-  return 'Ready for archive sync';
-}
-
-function getStatusDetail({
-  installConfigured,
-  connected,
-  latestError,
-  hasArchive,
-}: {
-  installConfigured?: boolean;
-  connected?: boolean;
-  latestError?: string;
-  hasArchive: boolean;
-}) {
-  if (!installConfigured) {
-    return 'Set the GovSlack client ID, client secret, redirect URI, and state secret before install.';
-  }
-
-  if (!connected) {
-    return 'Install the GovSlack app for this workspace to store archive tokens for the current user.';
-  }
-
-  if (latestError) {
-    return latestError;
-  }
-
-  if (hasArchive) {
-    return 'Read-only GovSlack archive data is available for search, summaries, and follow-up retrieval.';
-  }
-
-  return 'GovSlack is connected and ready to ingest the current user workspace history.';
+  return 'Ready to sync';
 }
 
 function getPrimaryActionLabel({
@@ -136,10 +124,48 @@ function getPrimaryActionLabel({
   }
 
   if (isSyncing) {
-    return 'Syncing…';
+    return 'Cancel sync';
   }
 
-  return 'Sync now';
+  return 'Sync archive';
+}
+
+function getDetailsSummary({
+  installConfigured,
+  connected,
+  latestError,
+  hasArchive,
+}: {
+  installConfigured?: boolean;
+  connected?: boolean;
+  latestError?: string;
+  hasArchive: boolean;
+}) {
+  if (!installConfigured) {
+    return 'Add the GovSlack client ID, client secret, redirect URI, and state secret before install.';
+  }
+
+  if (!connected) {
+    return 'Install the GovSlack app and link the current user before sync can begin.';
+  }
+
+  if (latestError) {
+    return latestError;
+  }
+
+  if (hasArchive) {
+    return 'Read-only GovSlack archive data is available for search and summaries.';
+  }
+
+  return 'GovSlack is connected and ready to ingest workspace history for the current user.';
+}
+
+function actionButtonClassName(emphasis: 'primary' | 'secondary' = 'primary') {
+  if (emphasis === 'secondary') {
+    return 'inline-flex items-center justify-center rounded-xl border border-border-light bg-surface-primary px-3 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60';
+  }
+
+  return 'inline-flex items-center justify-center rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60';
 }
 
 export default function SlackArchiveStatus() {
@@ -154,19 +180,18 @@ export default function SlackArchiveStatus() {
   const [isRedirecting, setIsRedirecting] = React.useState(false);
 
   const syncStatus = data?.latestSync?.status ?? null;
-  const isSyncing = syncMutation.isLoading || cancelMutation.isLoading || syncStatus === 'running';
+  const isSyncing = syncStatus === 'running';
+  const isBusy =
+    syncMutation.isLoading || cancelMutation.isLoading || resetMutation.isLoading || isRedirecting;
   const hasArchive = (data?.conversationCount ?? 0) > 0 || (data?.messageCount ?? 0) > 0;
   const statusLabel = getStatusLabel({
     installConfigured: data?.oauth.installConfigured,
     connected: data?.oauth.connected,
     syncStatus,
   });
-  const statusDetail = getStatusDetail({
-    installConfigured: data?.oauth.installConfigured,
-    connected: data?.oauth.connected,
-    latestError: data?.latestSync?.errorMessage,
-    hasArchive,
-  });
+  const tone = getStatusTone(
+    !data?.oauth.installConfigured || !data?.oauth.connected ? 'failure' : syncStatus,
+  );
 
   React.useEffect(() => {
     if (data?.oauth.connected) {
@@ -194,9 +219,28 @@ export default function SlackArchiveStatus() {
     window.location.assign(url);
   }, [data?.oauth.installConfigured, showToast]);
 
-  const handleSync = async () => {
+  const handlePrimaryAction = async () => {
     if (!data?.oauth.connected) {
       handleConnect();
+      return;
+    }
+
+    if (isSyncing) {
+      try {
+        const result = await cancelMutation.mutateAsync();
+        await invalidateStatus();
+        showToast({
+          message: result.message,
+          status: result.cancelled ? 'success' : 'error',
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to cancel Slack archive sync.';
+        showToast({
+          message,
+          status: 'error',
+        });
+      }
       return;
     }
 
@@ -216,24 +260,7 @@ export default function SlackArchiveStatus() {
     }
   };
 
-  const handleCancel = async () => {
-    try {
-      const result = await cancelMutation.mutateAsync();
-      await invalidateStatus();
-      showToast({
-        message: result.message,
-        status: result.cancelled ? 'success' : 'error',
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to cancel Slack archive sync.';
-      showToast({
-        message,
-        status: 'error',
-      });
-    }
-  };
-
-  const handleReset = async () => {
+  const handleDelete = async () => {
     if (!window.confirm('Delete archived Slack data for the current user?')) {
       return;
     }
@@ -254,134 +281,124 @@ export default function SlackArchiveStatus() {
     }
   };
 
+  const detailsSummary = getDetailsSummary({
+    installConfigured: data?.oauth.installConfigured,
+    connected: data?.oauth.connected,
+    latestError: data?.latestSync?.errorMessage,
+    hasArchive,
+  });
+
   return (
-    <div className="relative overflow-hidden rounded-[1.75rem] border border-white/40 bg-gradient-to-br from-white/85 via-white/70 to-white/45 p-4 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.35)] backdrop-blur-xl dark:border-white/10 dark:from-zinc-900/85 dark:via-zinc-900/70 dark:to-neutral-950/55">
-      <div className="pointer-events-none absolute inset-x-8 top-0 h-20 rounded-full bg-sky-400/10 blur-3xl" />
-      <div className="relative flex flex-col gap-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <div className="text-sm font-semibold text-text-primary">Slack Archive</div>
-            <div className="mt-1 text-xs uppercase tracking-[0.14em] text-text-secondary">
-              GovSlack
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className="inline-flex items-center justify-center rounded-2xl border border-white/50 bg-white/70 px-4 py-2 text-sm font-medium text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
-              onClick={data?.oauth.connected ? handleSync : handleConnect}
-              disabled={isRedirecting || syncMutation.isLoading || cancelMutation.isLoading}
+    <div className="rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-text-primary">Slack archive</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <div
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${tone.badge}`}
             >
-              {syncMutation.isLoading || isRedirecting ? (
-                <>
-                  <Spinner className="mr-2 h-4 w-4" />
-                  {getPrimaryActionLabel({
-                    installConfigured: data?.oauth.installConfigured,
-                    connected: data?.oauth.connected,
-                    isRedirecting,
-                    isSyncing,
-                  })}
-                </>
-              ) : (
-                getPrimaryActionLabel({
+              <span className={`h-2.5 w-2.5 rounded-full ${tone.dot}`} />
+              {isLoading ? 'Loading…' : statusLabel}
+            </div>
+            <HoverCard openDelay={1500}>
+              <HoverCardTrigger asChild>
+                <button
+                  type="button"
+                  className="text-xs text-text-secondary underline decoration-dotted underline-offset-4 hover:text-text-primary"
+                >
+                  Details
+                </button>
+              </HoverCardTrigger>
+              <HoverCardPortal>
+                <HoverCardContent side="bottom" align="start" className="z-[140] w-80">
+                  <div className="space-y-3 text-sm">
+                    <div className="font-medium text-text-primary">{detailsSummary}</div>
+                    <div className="space-y-1 text-text-secondary">
+                      <div>
+                        Connection:{' '}
+                        <span className="font-medium text-text-primary">
+                          {data?.oauth.connected ? 'Connected' : 'Not connected'}
+                        </span>
+                      </div>
+                      <div>
+                        Team:{' '}
+                        <span className="font-medium text-text-primary">
+                          {data?.oauth.teamId || 'Unavailable'}
+                        </span>
+                      </div>
+                      <div>
+                        Coverage:{' '}
+                        <span className="font-medium text-text-primary">
+                          {(data?.conversationCount ?? 0).toLocaleString()} conversations,{' '}
+                          {(data?.messageCount ?? 0).toLocaleString()} messages
+                        </span>
+                      </div>
+                      <div>
+                        Last sync:{' '}
+                        <span className="font-medium text-text-primary">
+                          {formatTimestamp(
+                            data?.latestSync?.completedAt || data?.latestSync?.startedAt,
+                          )}
+                        </span>
+                      </div>
+                      <div>
+                        Scope:{' '}
+                        <span className="font-medium text-text-primary">
+                          Channels, DMs, threads
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </HoverCardContent>
+              </HoverCardPortal>
+            </HoverCard>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={actionButtonClassName('primary')}
+            onClick={() => void handlePrimaryAction()}
+            disabled={isBusy}
+          >
+            {syncMutation.isLoading || cancelMutation.isLoading || isRedirecting ? (
+              <>
+                <Spinner className="mr-2 h-4 w-4" />
+                {getPrimaryActionLabel({
                   installConfigured: data?.oauth.installConfigured,
                   connected: data?.oauth.connected,
                   isRedirecting,
                   isSyncing,
-                })
+                })}
+              </>
+            ) : (
+              getPrimaryActionLabel({
+                installConfigured: data?.oauth.installConfigured,
+                connected: data?.oauth.connected,
+                isRedirecting,
+                isSyncing,
+              })
+            )}
+          </button>
+
+          {hasArchive ? (
+            <button
+              type="button"
+              className={actionButtonClassName('secondary')}
+              onClick={() => void handleDelete()}
+              disabled={isBusy || isSyncing}
+            >
+              {resetMutation.isLoading ? (
+                <>
+                  <Spinner className="mr-2 h-4 w-4" />
+                  Deleting…
+                </>
+              ) : (
+                'Delete archive'
               )}
             </button>
-            {isSyncing ? (
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-2xl border border-white/50 bg-white/70 px-4 py-2 text-sm font-medium text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
-                onClick={handleCancel}
-                disabled={cancelMutation.isLoading || resetMutation.isLoading}
-              >
-                {cancelMutation.isLoading ? (
-                  <>
-                    <Spinner className="mr-2 h-4 w-4" />
-                    Cancelling…
-                  </>
-                ) : (
-                  'Cancel sync'
-                )}
-              </button>
-            ) : hasArchive ? (
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-2xl border border-white/50 bg-white/70 px-4 py-2 text-sm font-medium text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
-                onClick={handleReset}
-                disabled={resetMutation.isLoading}
-              >
-                {resetMutation.isLoading ? (
-                  <>
-                    <Spinner className="mr-2 h-4 w-4" />
-                    Resetting…
-                  </>
-                ) : (
-                  'Reset archive'
-                )}
-              </button>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl border border-white/40 bg-white/55 px-4 py-3 backdrop-blur dark:border-white/10 dark:bg-zinc-900/45">
-            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-              Status
-            </div>
-            <div className={`mt-2 text-sm font-semibold ${getStatusTone(syncStatus)}`}>
-              {isLoading ? 'Loading…' : statusLabel}
-            </div>
-            <div className="mt-1 text-xs text-text-secondary">{statusDetail}</div>
-          </div>
-
-          <div className="rounded-2xl border border-white/40 bg-white/55 px-4 py-3 backdrop-blur dark:border-white/10 dark:bg-zinc-900/45">
-            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-              Connection
-            </div>
-            <div className="mt-2 text-sm font-semibold text-text-primary">
-              {data?.oauth.connected ? 'Connected' : 'Not connected'}
-            </div>
-            <div className="mt-1 text-xs text-text-secondary">
-              {data?.oauth.teamId
-                ? `Team ${data.oauth.teamId}`
-                : 'Workspace install and user link are required before archive sync.'}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-white/40 bg-white/55 px-4 py-3 backdrop-blur dark:border-white/10 dark:bg-zinc-900/45">
-            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-              Coverage
-            </div>
-            <div className="mt-2 text-sm font-semibold text-text-primary">
-              {(data?.conversationCount ?? 0).toLocaleString()} conversations
-            </div>
-            <div className="mt-1 text-xs text-text-secondary">
-              {(data?.messageCount ?? 0).toLocaleString()} archived messages
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-white/35 bg-white/45 px-4 py-3 text-xs text-text-secondary backdrop-blur dark:border-white/10 dark:bg-zinc-950/35">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-                Last Sync
-              </span>
-              <div className="mt-1 text-sm font-semibold text-text-primary">
-                {formatTimestamp(data?.latestSync?.completedAt || data?.latestSync?.startedAt)}
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-                Scope
-              </div>
-              <div className="mt-1 text-sm font-semibold text-text-primary">Channels, DMs, threads</div>
-            </div>
-          </div>
+          ) : null}
         </div>
       </div>
     </div>

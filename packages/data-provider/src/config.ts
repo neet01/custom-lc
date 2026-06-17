@@ -679,6 +679,13 @@ const mcpServersSchema = z
 
 export type TMcpServersConfig = z.infer<typeof mcpServersSchema>;
 
+const archiveFeaturesSchema = z
+  .object({
+    slackArchive: z.boolean().optional(),
+    teamsArchive: z.boolean().optional(),
+  })
+  .optional();
+
 export const interfaceSchema = z
   .object({
     privacyPolicy: z
@@ -690,6 +697,7 @@ export const interfaceSchema = z
     termsOfService: termsOfServiceSchema.optional(),
     customWelcome: z.string().optional(),
     mcpServers: mcpServersSchema.optional(),
+    archiveFeatures: archiveFeaturesSchema.optional(),
     modelSelect: z.boolean().optional(),
     parameters: z.boolean().optional(),
     multiConvo: z.boolean().optional(),
@@ -780,6 +788,10 @@ export const interfaceSchema = z
       create: true,
       share: false,
       public: false,
+    },
+    archiveFeatures: {
+      slackArchive: false,
+      teamsArchive: false,
     },
     fileSearch: true,
     fileCitations: true,

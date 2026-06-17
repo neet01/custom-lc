@@ -2,6 +2,7 @@ const { isEnabled } = require('@librechat/api');
 const { randomUUID } = require('crypto');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
 const { getGraphApiToken } = require('~/server/services/GraphTokenService');
+const { isArchiveFeatureAllowed } = require('~/server/services/ArchiveFeatureAccess');
 const db = require('~/models');
 
 let projectTeamsArchiveSyncToMemory = null;
@@ -192,6 +193,18 @@ function assertEnabled() {
   }
 }
 
+async function assertArchiveAccess(user) {
+  assertEnabled();
+
+  if (!(await isArchiveFeatureAllowed(user, 'teamsArchive'))) {
+    throw new TeamsArchiveServiceError(
+      'Teams archive is not enabled for the current user.',
+      403,
+      { reason: 'feature_not_enabled_for_user' },
+    );
+  }
+}
+
 function assertDelegatedUser(user) {
   if (!user?.openidId || user?.provider !== 'openid') {
     throw new TeamsArchiveServiceError(
@@ -213,7 +226,7 @@ function assertDelegatedUser(user) {
 }
 
 async function getDelegatedGraphToken(user, scopes = getTeamsArchiveConfig().scopes) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   assertDelegatedUser(user);
   const tokenResponse = await getGraphApiToken(user, user.federatedTokens.access_token, scopes);
   if (!tokenResponse?.access_token) {
@@ -3057,7 +3070,7 @@ async function getStatus(user) {
 }
 
 async function deleteUserArchive(user) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
 
   if (!userId) {
@@ -3142,7 +3155,7 @@ async function deleteUserArchive(user) {
 }
 
 async function cancelRunningSync(user) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const latestRunningJob = await reconcileRunningSyncJob(userId);
 
@@ -3180,7 +3193,7 @@ async function cancelRunningSync(user) {
 }
 
 async function getSyncStartAvailability(user) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   assertDelegatedUser(user);
 
   const userId = user?.id || user?._id?.toString();
@@ -3239,7 +3252,7 @@ async function getSyncStartAvailability(user) {
 }
 
 async function syncUserArchive(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   assertDelegatedUser(user);
 
   const userId = user?.id || user?._id?.toString();
@@ -4001,7 +4014,7 @@ async function syncUserArchive(user, options = {}) {
 }
 
 async function listConversations(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const limit = clampInteger(options.limit, 3, { max: 5 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
@@ -4112,7 +4125,7 @@ function recencyFieldsChanged(oldFields = {}, newFields = {}) {
 }
 
 async function backfillConversationRecency(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   if (!userId) {
     throw new TeamsArchiveServiceError('User id is required for recency backfill', 400);
@@ -4192,7 +4205,7 @@ async function backfillConversationRecency(user, options = {}) {
 }
 
 async function recentMeetingChats(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const limit = clampInteger(options.limit, 5, { min: 1, max: 10 });
   const offset = clampInteger(options.offset, 0, { min: 0, max: 100000 });
@@ -4276,7 +4289,7 @@ async function recentMeetingChats(user, options = {}) {
 }
 
 async function getConversationDossier(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const priorFollowUpChatId = getPriorGraphChatIdForFollowUp(options);
   const chatId = String(options.chatId || priorFollowUpChatId || '').trim();
@@ -4545,7 +4558,7 @@ async function resolveMessageRecord(userId, messageId) {
 }
 
 async function listConversationMessages(user, chatId, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   if (!chatId) {
     throw new TeamsArchiveServiceError('Chat id is required', 400);
@@ -4599,7 +4612,7 @@ async function listConversationMessages(user, chatId, options = {}) {
 }
 
 async function conversationRecentMessages(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const chatId = String(options.chatId || options.priorGraphChatId || '').trim();
   if (!chatId && !(options.topic || options.query)) {
@@ -4699,7 +4712,7 @@ async function conversationRecentMessages(user, options = {}) {
 }
 
 async function conversationSenderMessages(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const chatId = String(options.chatId || options.priorGraphChatId || '').trim();
   if (!chatId && !(options.topic || options.query)) {
@@ -4896,7 +4909,7 @@ function buildActivityExplanation(conversation = {}, diagnosis = {}) {
 }
 
 async function conversationActivityDiagnostics(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const chatId = String(options.chatId || options.priorGraphChatId || '').trim();
   if (!chatId && !(options.topic || options.query)) {
@@ -5199,7 +5212,7 @@ async function buildZeroResultSenderDiagnostics({
 }
 
 async function senderIdentityReport(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const senderScope = String(options.senderScope || 'me').trim();
   const normalizedSenderScope = ['me', 'person'].includes(senderScope) ? senderScope : 'me';
@@ -5336,7 +5349,7 @@ async function senderIdentityReport(user, options = {}) {
 }
 
 async function getMessageBody(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const messageId = String(options.messageId || options.aroundMessageId || '').trim();
   const chatId = String(options.chatId || '').trim();
@@ -5425,7 +5438,7 @@ async function getMessageBody(user, options = {}) {
 }
 
 async function getMessagesWindow(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const chatId = String(options.chatId || '').trim();
   if (!chatId) {
@@ -5554,7 +5567,7 @@ async function getMessagesWindow(user, options = {}) {
 }
 
 async function searchMessages(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const query = String(options.query || '').trim();
   if (!query) {
@@ -5637,7 +5650,7 @@ async function searchMessages(user, options = {}) {
 }
 
 async function recentMessages(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const intent = classifyRetrievalIntent({ ...options, senderScope: 'me' }, { mode: 'recent' });
   let memoryResults = null;
   let memorySearchError = null;
@@ -5772,7 +5785,7 @@ async function recentMessages(user, options = {}) {
 }
 
 async function advancedSearchMessages(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const intent = classifyRetrievalIntent(options, { mode: 'advanced' });
   const topic = String(options.topic || options.query || '').trim();
   const senderScope = String(options.senderScope || 'any').trim();
@@ -5938,7 +5951,7 @@ async function advancedSearchMessages(user, options = {}) {
 }
 
 async function summarizeConversation(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = user?.id || user?._id?.toString();
   const chatId = String(options.chatId || options.priorGraphChatId || '').trim();
   if (!chatId && !(options.topic || options.query)) {

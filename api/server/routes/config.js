@@ -119,6 +119,14 @@ function buildWebSearchConfig(appConfig) {
   };
 }
 
+function isArchiveFeatureEnabled(appConfig, featureName, envEnabled) {
+  if (!envEnabled) {
+    return false;
+  }
+
+  return appConfig?.interfaceConfig?.archiveFeatures?.[featureName] === true;
+}
+
 router.get('/', async function (req, res) {
   try {
     const sharedPayload = buildSharedPayload();
@@ -171,8 +179,8 @@ router.get('/', async function (req, res) {
       sharePointPickerGraphScope: process.env.SHAREPOINT_PICKER_GRAPH_SCOPE,
       sharePointPickerSharePointScope: process.env.SHAREPOINT_PICKER_SHAREPOINT_SCOPE,
       outlookAIEnabled,
-      slackArchiveEnabled,
-      teamsArchiveEnabled,
+      slackArchiveEnabled: isArchiveFeatureEnabled(appConfig, 'slackArchive', slackArchiveEnabled),
+      teamsArchiveEnabled: isArchiveFeatureEnabled(appConfig, 'teamsArchive', teamsArchiveEnabled),
       outlookGraphBaseUrl: process.env.OUTLOOK_GRAPH_BASE_URL || 'https://graph.microsoft.us/v1.0',
       outlookGraphScopes: process.env.OUTLOOK_GRAPH_SCOPES || 'https://graph.microsoft.us/.default',
       conversationImportMaxFileSize: process.env.CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES

@@ -253,6 +253,10 @@ export function getAdminUsers(
   return request.get(endpoints.adminUsers(params));
 }
 
+export function getAdminConfigs(): Promise<{ configs: Record<string, unknown>[] }> {
+  return request.get(endpoints.adminConfigs());
+}
+
 export function getAdminBaseConfig(): Promise<{ config: Record<string, unknown> }> {
   return request.get(endpoints.adminBaseConfig());
 }
@@ -266,6 +270,14 @@ export function patchAdminConfigFields(
   },
 ): Promise<{ config: Record<string, unknown> }> {
   return request.patch(endpoints.adminPatchConfigFields(principalType, principalId), payload);
+}
+
+export function deleteAdminConfigField(
+  principalType: string,
+  principalId: string,
+  fieldPath: string,
+): Promise<{ config: Record<string, unknown> }> {
+  return request.delete(endpoints.adminDeleteConfigField(principalType, principalId, fieldPath));
 }
 
 export function updateAdminUserBalance(

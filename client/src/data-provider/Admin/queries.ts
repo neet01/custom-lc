@@ -10,6 +10,7 @@ import type t from 'librechat-data-provider';
 import store from '~/store';
 
 type AdminBaseConfigResponse = { config: Record<string, unknown> };
+type AdminConfigsResponse = { configs: Record<string, unknown>[] };
 
 export const useAdminUsersQuery = (
   params: t.AdminUsersListParams = {},
@@ -38,6 +39,24 @@ export const useAdminBaseConfigQuery = (
   return useQuery<AdminBaseConfigResponse>(
     [QueryKeys.adminBaseConfig],
     () => dataService.getAdminBaseConfig(),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+      enabled: (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};
+
+export const useAdminConfigsQuery = (
+  config?: UseQueryOptions<AdminConfigsResponse>,
+): QueryObserverResult<AdminConfigsResponse> => {
+  const queriesEnabled = useRecoilValue<boolean>(store.queriesEnabled);
+
+  return useQuery<AdminConfigsResponse>(
+    [QueryKeys.adminBaseConfig, 'configs'],
+    () => dataService.getAdminConfigs(),
     {
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
@@ -232,6 +251,56 @@ export const useAdminUpdateUserBalanceMutation = (): UseMutationResult<
       },
       onSettled: () => {
         queryClient.invalidateQueries([QueryKeys.adminUsers]);
+      },
+    },
+  );
+};
+
+export const useAdminPatchConfigFieldsMutation = (): UseMutationResult<
+  { config: Record<string, unknown> },
+  unknown,
+  {
+    principalType: string;
+    principalId: string;
+    entries: Array<{ fieldPath: string; value: unknown }>;
+    priority?: number;
+  }
+> => {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    ({ principalType, principalId, entries, priority }) =>
+      dataService.patchAdminConfigFields(principalType, principalId, {
+        entries,
+        priority,
+      }),
+    {
+      onSettled: () => {
+        queryClient.invalidateQueries([QueryKeys.adminBaseConfig]);
+        queryClient.invalidateQueries([QueryKeys.adminBaseConfig, 'configs']);
+      },
+    },
+  );
+};
+
+export const useAdminDeleteConfigFieldMutation = (): UseMutationResult<
+  { config: Record<string, unknown> },
+  unknown,
+  {
+    principalType: string;
+    principalId: string;
+    fieldPath: string;
+  }
+> => {
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    ({ principalType, principalId, fieldPath }) =>
+      dataService.deleteAdminConfigField(principalType, principalId, fieldPath),
+    {
+      onSettled: () => {
+        queryClient.invalidateQueries([QueryKeys.adminBaseConfig]);
+        queryClient.invalidateQueries([QueryKeys.adminBaseConfig, 'configs']);
       },
     },
   );

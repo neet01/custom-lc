@@ -1,16 +1,20 @@
 import React from 'react';
-import * as Ariakit from '@ariakit/react';
 import { useQueryClient } from '@tanstack/react-query';
-import { DropdownPopup, Spinner, useToastContext } from '@librechat/client';
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardPortal,
+  HoverCardTrigger,
+  Spinner,
+  useToastContext,
+} from '@librechat/client';
 import { QueryKeys } from 'librechat-data-provider';
-import { Ellipsis, Trash2, XCircle, ShieldAlert } from 'lucide-react';
 import {
   useCancelTeamsArchiveSyncMutation,
   useResetTeamsArchiveMutation,
   useSyncTeamsArchiveMutation,
   useTeamsArchiveStatusQuery,
 } from '~/data-provider';
-import type * as t from '~/common';
 
 function formatTimestamp(value?: string) {
   if (!value) {
@@ -48,31 +52,38 @@ function formatPhase(value?: string | null) {
 }
 
 function getStatusTone(status?: string | null) {
-  if (status === 'running') {
-    return 'text-text-primary';
-  }
-
-  if (status === 'paused') {
-    return 'text-amber-700 dark:text-amber-300';
-  }
-
   if (status === 'success') {
-    return 'text-text-primary';
+    return {
+      badge: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300',
+      dot: 'bg-emerald-500',
+    };
   }
 
-  if (status === 'partial') {
-    return 'text-amber-700 dark:text-amber-300';
+  if (status === 'partial' || status === 'paused' || status === 'cancelled') {
+    return {
+      badge: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300',
+      dot: 'bg-amber-500',
+    };
   }
 
   if (status === 'failure') {
-    return 'text-rose-700 dark:text-rose-300';
+    return {
+      badge: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300',
+      dot: 'bg-rose-500',
+    };
   }
 
-  if (status === 'cancelled') {
-    return 'text-amber-700 dark:text-amber-300';
+  if (status === 'running') {
+    return {
+      badge: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-300',
+      dot: 'bg-sky-500',
+    };
   }
 
-  return 'text-text-secondary';
+  return {
+    badge: 'border-border-light bg-surface-secondary text-text-secondary',
+    dot: 'bg-zinc-400 dark:bg-zinc-500',
+  };
 }
 
 function getStatusLabel(status?: string | null) {
@@ -100,137 +111,80 @@ function getStatusLabel(status?: string | null) {
     return 'Sync cancelled';
   }
 
-  return 'Not synced';
+  return 'Ready to sync';
 }
 
-function getPhaseTone(value?: string | null) {
-  if (value === 'complete' || value === 'success') {
-    return 'text-emerald-700 dark:text-emerald-300';
+function actionButtonClassName(emphasis: 'primary' | 'secondary' = 'primary') {
+  if (emphasis === 'secondary') {
+    return 'inline-flex items-center justify-center rounded-xl border border-border-light bg-surface-primary px-3 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60';
   }
 
-  if (value === 'failed' || value === 'failure' || value === 'cancelled') {
-    return 'text-rose-700 dark:text-rose-300';
-  }
-
-  if (
-    value === 'discovering' ||
-    value === 'discovering_chats' ||
-    value === 'syncing' ||
-    value === 'syncing_messages' ||
-    value === 'paused'
-  ) {
-    return 'text-amber-700 dark:text-amber-300';
-  }
-
-  return 'text-text-primary';
-}
-
-function getProjectionTone(status?: string | null) {
-  if (status === 'success') {
-    return 'bg-emerald-500';
-  }
-
-  if (status === 'failure') {
-    return 'bg-rose-500';
-  }
-
-  if (status === 'running' || status === 'pending') {
-    return 'bg-amber-400';
-  }
-
-  return 'bg-zinc-400 dark:bg-zinc-500';
-}
-
-function isProjectionActive(status?: string | null) {
-  return status === 'running' || status === 'pending';
-}
-
-function getProjectionLabel(status?: string | null) {
-  if (status === 'success') {
-    return 'Active';
-  }
-
-  if (status === 'failure') {
-    return 'Error';
-  }
-
-  if (status === 'running' || status === 'pending') {
-    return 'Indexing';
-  }
-
-  return 'Unavailable';
+  return 'inline-flex items-center justify-center rounded-xl border border-border-light bg-surface-secondary px-3 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-60';
 }
 
 export default function TeamsArchiveStatus() {
   const queryClient = useQueryClient();
   const { showToast } = useToastContext();
   const { data, isLoading } = useTeamsArchiveStatusQuery({
-    refetchInterval: (data) =>
-      data?.latestSync?.status === 'running' ||
-      data?.backfillState?.status === 'discovering' ||
-      data?.backfillState?.status === 'syncing' ||
-      data?.latestProjection?.status === 'running' ||
-      data?.latestProjection?.status === 'pending'
+    refetchInterval: (statusData) =>
+      statusData?.latestSync?.status === 'running' ||
+      statusData?.backfillState?.status === 'discovering' ||
+      statusData?.backfillState?.status === 'syncing' ||
+      statusData?.latestProjection?.status === 'running' ||
+      statusData?.latestProjection?.status === 'pending'
         ? 4000
         : false,
   });
   const syncMutation = useSyncTeamsArchiveMutation();
   const cancelMutation = useCancelTeamsArchiveSyncMutation();
   const resetMutation = useResetTeamsArchiveMutation();
-  const [confirmReset, setConfirmReset] = React.useState(false);
-  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
 
   const syncStatus = data?.latestSync?.status ?? null;
   const backfillState = data?.backfillState;
-  const isBackfillActive =
-    backfillState?.status === 'discovering' || backfillState?.status === 'syncing';
-  const isSyncing =
-    syncMutation.isLoading || cancelMutation.isLoading || syncStatus === 'running' || isBackfillActive;
-  const isMutating = syncMutation.isLoading || cancelMutation.isLoading || resetMutation.isLoading;
+  const backfillStatus = backfillState?.status;
+  const isBackfillActive = backfillStatus === 'discovering' || backfillStatus === 'syncing';
+  const isSyncing = syncStatus === 'running' || isBackfillActive;
+  const isBusy = syncMutation.isLoading || cancelMutation.isLoading || resetMutation.isLoading;
+
   const discoveredChats = backfillState?.discoveredChatCount ?? data?.conversationCount ?? 0;
   const completedChats = backfillState?.completedChatCount ?? 0;
-  const runningChats = backfillState?.runningChatCount ?? 0;
   const pendingChats = backfillState?.pendingChatCount ?? 0;
   const failedChats = backfillState?.failedChatCount ?? 0;
   const totalMessages = backfillState?.totalMessageCount ?? data?.messageCount ?? 0;
-  const projectionCoverage = data?.projectionCoverage;
-  const projectionDiagnostics = data?.latestProjection?.projectionDiagnostics;
   const processedChats = completedChats + failedChats;
-  const hasBackfillBacklog = backfillState?.status === 'paused' && pendingChats > 0;
-  const determinateProgress =
-    backfillState?.discoveryComplete && discoveredChats > 0
-      ? Math.max(2, Math.min(100, Math.round((processedChats / discoveredChats) * 100)))
-      : null;
-  const activePhase = formatPhase(
-    data?.latestSync?.phase ||
-      (isBackfillActive ? backfillState?.status : undefined) ||
-      'idle',
-  );
-  const latestPhaseValue = data?.latestSync?.phase || backfillState?.status;
-  const phaseLabel = formatPhase(latestPhaseValue);
-  const statusLabel = isSyncing ? 'Syncing' : getStatusLabel(syncStatus);
-  const statusDetail =
-    isSyncing
-      ? `${activePhase}. ${completedChats.toLocaleString()} complete, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
-      : hasBackfillBacklog
-        ? `Latest run completed. ${pendingChats.toLocaleString()} chats remain pending for the next sync run${failedChats > 0 ? `, and ${failedChats.toLocaleString()} failed` : ''}.`
-      : backfillState?.errorMessage ||
-        data?.latestSync?.errorMessage ||
-        'Background sync status for Teams chat history.';
+  const hasArchive = (data?.conversationCount ?? 0) > 0 || (data?.messageCount ?? 0) > 0;
+  const hasBackfillBacklog = backfillStatus === 'paused' && pendingChats > 0;
+  const latestPhaseValue = data?.latestSync?.phase || backfillStatus;
+  const activePhase = formatPhase(latestPhaseValue);
+  const effectiveStatus =
+    isSyncing ? 'running' : hasBackfillBacklog ? 'paused' : syncStatus ?? 'idle';
+  const tone = getStatusTone(effectiveStatus);
+  const statusLabel = getStatusLabel(effectiveStatus);
+  const progressSummary = isSyncing
+    ? `${completedChats.toLocaleString()} complete, ${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}`
+    : hasBackfillBacklog
+      ? `${pendingChats.toLocaleString()} chats remain for the next run`
+      : 'Archive backlog is clear';
 
-  React.useEffect(() => {
-    if (isSyncing && confirmReset) {
-      setConfirmReset(false);
+  const handlePrimaryAction = async () => {
+    if (isSyncing) {
+      try {
+        const result = await cancelMutation.mutateAsync();
+        await queryClient.invalidateQueries([QueryKeys.teamsArchiveStatus]);
+        showToast({
+          message: result.message,
+          status: result.cancelled ? 'success' : 'error',
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to cancel Teams archive sync.';
+        showToast({
+          message,
+          status: 'error',
+        });
+      }
+      return;
     }
-  }, [confirmReset, isSyncing]);
 
-  React.useEffect(() => {
-    if (!isMenuOpen && confirmReset) {
-      setConfirmReset(false);
-    }
-  }, [confirmReset, isMenuOpen]);
-
-  const handleSync = async () => {
     try {
       await syncMutation.mutateAsync({ async: true });
       await queryClient.invalidateQueries([QueryKeys.teamsArchiveStatus]);
@@ -247,33 +201,13 @@ export default function TeamsArchiveStatus() {
     }
   };
 
-  const handleCancel = async () => {
-    try {
-      const result = await cancelMutation.mutateAsync();
-      await queryClient.invalidateQueries([QueryKeys.teamsArchiveStatus]);
-      showToast({
-        message: result.message,
-        status: result.cancelled ? 'success' : 'error',
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to cancel Teams archive sync.';
-      showToast({
-        message,
-        status: 'error',
-      });
-    }
-  };
-
-  const handleReset = async () => {
-    if (!confirmReset) {
-      setConfirmReset(true);
+  const handleDelete = async () => {
+    if (!window.confirm('Delete archived Teams data for the current user?')) {
       return;
     }
 
     try {
       const result = await resetMutation.mutateAsync();
-      setConfirmReset(false);
-      setIsMenuOpen(false);
       await queryClient.invalidateQueries([QueryKeys.teamsArchiveStatus]);
       showToast({
         message: result.message,
@@ -289,259 +223,115 @@ export default function TeamsArchiveStatus() {
     }
   };
 
-  const actionMenuItems = React.useMemo<t.MenuItemProps[]>(() => {
-    const items: t.MenuItemProps[] = [];
-
-    if (syncStatus === 'running') {
-      items.push({
-        id: 'cancel-sync',
-        label: cancelMutation.isLoading ? 'Cancelling…' : 'Cancel sync',
-        icon: cancelMutation.isLoading ? <Spinner className="size-4" /> : <XCircle className="size-4" />,
-        disabled: cancelMutation.isLoading || resetMutation.isLoading,
-        onClick: () => {
-          void handleCancel();
-        },
-      });
-    }
-
-    items.push({
-      id: 'delete-archive',
-      label: confirmReset ? 'Confirm delete archive' : 'Delete archived Teams data',
-      icon: confirmReset ? <ShieldAlert className="size-4" /> : <Trash2 className="size-4" />,
-      disabled: isSyncing || isMutating,
-      hideOnClick: false,
-      separate: syncStatus === 'running',
-      onClick: () => {
-        void handleReset();
-      },
-    });
-
-    if (confirmReset) {
-      items.push({
-        id: 'keep-archive',
-        label: 'Keep archive data',
-        icon: <XCircle className="size-4" />,
-        hideOnClick: false,
-        disabled: resetMutation.isLoading,
-        onClick: () => {
-          setConfirmReset(false);
-          setIsMenuOpen(false);
-        },
-      });
-    }
-
-    return items;
-  }, [
-    cancelMutation.isLoading,
-    confirmReset,
-    isMutating,
-    isSyncing,
-    resetMutation.isLoading,
-    syncStatus,
-  ]);
+  const projectionCoverage = data?.projectionCoverage;
+  const projectionStatus = data?.latestProjection?.status ?? 'idle';
 
   return (
-    <div className="relative overflow-hidden rounded-[1.75rem] border border-white/40 bg-gradient-to-br from-white/85 via-white/70 to-white/45 p-4 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.35)] backdrop-blur-xl dark:border-white/10 dark:from-zinc-900/85 dark:via-zinc-900/70 dark:to-neutral-950/55">
-      <div className="pointer-events-none absolute inset-x-8 top-0 h-20 rounded-full bg-[#f5d000]/15 blur-3xl" />
-      <div className="relative flex flex-col gap-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="text-sm font-semibold text-text-primary">Teams Archive</div>
-          <div className="flex items-center gap-2">
+    <div className="rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-text-primary">Teams archive</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <div
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${tone.badge}`}
+            >
+              <span className={`h-2.5 w-2.5 rounded-full ${tone.dot}`} />
+              {isLoading ? 'Loading…' : statusLabel}
+            </div>
+            <HoverCard openDelay={1500}>
+              <HoverCardTrigger asChild>
+                <button
+                  type="button"
+                  className="text-xs text-text-secondary underline decoration-dotted underline-offset-4 hover:text-text-primary"
+                >
+                  Details
+                </button>
+              </HoverCardTrigger>
+              <HoverCardPortal>
+                <HoverCardContent side="bottom" align="start" className="z-[140] w-80">
+                  <div className="space-y-3 text-sm">
+                    <div className="font-medium text-text-primary">{progressSummary}</div>
+                    <div className="space-y-1 text-text-secondary">
+                      <div>
+                        Phase:{' '}
+                        <span className="font-medium text-text-primary">{activePhase}</span>
+                      </div>
+                      <div>
+                        Coverage:{' '}
+                        <span className="font-medium text-text-primary">
+                          {discoveredChats.toLocaleString()} chats, {totalMessages.toLocaleString()}{' '}
+                          messages
+                        </span>
+                      </div>
+                      <div>
+                        Progress:{' '}
+                        <span className="font-medium text-text-primary">
+                          {processedChats.toLocaleString()} processed,{' '}
+                          {pendingChats.toLocaleString()} pending
+                          {failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}
+                        </span>
+                      </div>
+                      <div>
+                        Last sync:{' '}
+                        <span className="font-medium text-text-primary">
+                          {formatTimestamp(
+                            data?.latestSync?.completedAt || data?.latestSync?.startedAt,
+                          )}
+                        </span>
+                      </div>
+                      <div>
+                        Projection:{' '}
+                        <span className="font-medium text-text-primary">
+                          {projectionStatus}
+                          {projectionCoverage?.totalConversationCount
+                            ? `, ${projectionCoverage.indexedConversationCount.toLocaleString()}/${projectionCoverage.totalConversationCount.toLocaleString()} chats projected`
+                            : ''}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </HoverCardContent>
+              </HoverCardPortal>
+            </HoverCard>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={actionButtonClassName('primary')}
+            onClick={() => void handlePrimaryAction()}
+            disabled={isBusy}
+          >
+            {syncMutation.isLoading || cancelMutation.isLoading ? (
+              <>
+                <Spinner className="mr-2 h-4 w-4" />
+                {isSyncing ? 'Cancelling…' : 'Starting…'}
+              </>
+            ) : isSyncing ? (
+              'Cancel sync'
+            ) : (
+              'Sync archive'
+            )}
+          </button>
+
+          {hasArchive ? (
             <button
               type="button"
-              className="inline-flex items-center justify-center rounded-2xl border border-white/50 bg-white/70 px-4 py-2 text-sm font-medium text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
-              onClick={handleSync}
-              disabled={isSyncing || resetMutation.isLoading}
+              className={actionButtonClassName('secondary')}
+              onClick={() => void handleDelete()}
+              disabled={isBusy || isSyncing}
             >
-              {syncMutation.isLoading ? (
+              {resetMutation.isLoading ? (
                 <>
                   <Spinner className="mr-2 h-4 w-4" />
-                  Starting…
+                  Deleting…
                 </>
-              ) : syncStatus === 'running' ? (
-                'Syncing…'
               ) : (
-                'Sync now'
+                'Delete archive'
               )}
             </button>
-            <DropdownPopup
-              portal={true}
-              menuId="teams-archive-actions"
-              focusLoop={true}
-              isOpen={isMenuOpen}
-              setIsOpen={setIsMenuOpen}
-              unmountOnHide={true}
-              className="z-[125]"
-              trigger={
-                <Ariakit.MenuButton
-                  aria-label="Teams archive actions"
-                  aria-expanded={isMenuOpen}
-                  disabled={isMutating}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/50 bg-white/70 text-text-primary shadow-sm backdrop-blur transition-colors hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800/70 dark:hover:bg-zinc-800/90"
-                >
-                  <Ellipsis className="size-4" aria-hidden="true" />
-                </Ariakit.MenuButton>
-              }
-              items={actionMenuItems}
-            />
-          </div>
-        </div>
-
-        {isSyncing ? (
-          <div className="overflow-hidden rounded-2xl border border-white/35 bg-white/45 px-4 py-3 backdrop-blur dark:border-white/10 dark:bg-zinc-900/40">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-text-primary">Indexing archive</div>
-                <div className="mt-1 text-xs text-text-secondary">
-                  {activePhase}. {completedChats.toLocaleString()} complete,{' '}
-                  {pendingChats.toLocaleString()} pending
-                  {failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.
-                </div>
-              </div>
-              <div className="shrink-0 text-right text-xs font-medium text-text-secondary">
-                <div>{activePhase}</div>
-                <div className="mt-1">
-                  {data?.activeSyncs ?? 0}/{data?.maxConcurrentSyncs ?? 0} active slots
-                </div>
-              </div>
-            </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-black/5 dark:bg-white/10">
-              {determinateProgress !== null ? (
-                <div
-                  className="relative h-full rounded-full bg-[#f5d000]/70 shadow-[0_0_20px_rgba(245,208,0,0.35)] transition-[width] duration-500"
-                  style={{ width: `${determinateProgress}%` }}
-                />
-              ) : (
-                <div className="relative h-full w-2/5 animate-pulse rounded-full bg-[#f5d000]/70 shadow-[0_0_20px_rgba(245,208,0,0.35)]" />
-              )}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl border border-white/40 bg-white/55 px-4 py-3 backdrop-blur dark:border-white/10 dark:bg-zinc-900/45">
-            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-              Status
-            </div>
-              <div className={`mt-2 text-sm font-semibold ${getStatusTone(backfillState?.status === 'paused' ? 'paused' : syncStatus)}`}>
-                {isLoading ? 'Loading…' : statusLabel}
-              </div>
-            <div className="mt-1 text-xs text-text-secondary">
-              {statusDetail}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-white/40 bg-white/55 px-4 py-3 backdrop-blur dark:border-white/10 dark:bg-zinc-900/45">
-            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-              Coverage
-            </div>
-            <div className="mt-2 text-sm font-semibold text-text-primary">
-              {discoveredChats.toLocaleString()} discovered chats
-            </div>
-            <div className="mt-1 text-xs text-text-secondary">
-              {totalMessages.toLocaleString()} archived messages
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-white/40 bg-white/55 px-4 py-3 backdrop-blur dark:border-white/10 dark:bg-zinc-900/45">
-            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-              Progress
-            </div>
-              <div className="mt-2 text-sm font-semibold text-text-primary">
-              {isSyncing
-                ? `${completedChats.toLocaleString()} complete`
-                : hasBackfillBacklog
-                  ? `${pendingChats.toLocaleString()} remaining`
-                  : 'No pending chats'}
-              </div>
-            <div className="mt-1 text-xs text-text-secondary">
-              {isSyncing
-                ? `${pendingChats.toLocaleString()} pending${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}`
-                : hasBackfillBacklog
-                  ? `Start another sync run to continue the backfill${failedChats > 0 ? `, ${failedChats.toLocaleString()} failed` : ''}.`
-                  : failedChats > 0
-                    ? `${failedChats.toLocaleString()} failed chats need review`
-                    : 'Archive backlog is clear.'}
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-white/35 bg-white/45 px-4 py-3 text-xs text-text-secondary backdrop-blur dark:border-white/10 dark:bg-zinc-950/35">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-                Last Sync
-              </span>
-              <div className="mt-1 text-sm font-semibold text-text-primary">
-                {formatTimestamp(data?.latestSync?.completedAt || data?.latestSync?.startedAt)}
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-                Latest Phase
-              </div>
-              <div className={`mt-1 text-sm font-semibold ${getPhaseTone(latestPhaseValue)}`}>
-                {phaseLabel}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-white/35 bg-white/45 px-4 py-3 text-xs text-text-secondary backdrop-blur dark:border-white/10 dark:bg-zinc-950/35">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-3">
-                <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-text-secondary">
-                  Memory Projection
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  {isProjectionActive(data?.latestProjection?.status) ? (
-                    <Spinner className="h-3.5 w-3.5 text-amber-500" />
-                  ) : (
-                    <span
-                      className={`h-2.5 w-2.5 rounded-full ${getProjectionTone(
-                        data?.latestProjection?.status,
-                      )}`}
-                    />
-                  )}
-                  <span className="font-medium text-text-primary">
-                    {getProjectionLabel(data?.latestProjection?.status)}
-                  </span>
-                </span>
-              </div>
-              {projectionCoverage ? (
-                <div className="mt-1 text-xs text-text-secondary">
-                  {projectionCoverage.indexedConversationCount.toLocaleString()} /{' '}
-                  {projectionCoverage.totalConversationCount.toLocaleString()} chats projected
-                  {projectionCoverage.totalConversationCount > 0
-                    ? ` (${projectionCoverage.coveragePercent.toFixed(1)}%)`
-                    : ''}
-                  {projectionCoverage.searchableConversationCount <
-                  projectionCoverage.indexedConversationCount
-                    ? ` • ${projectionCoverage.searchableConversationCount.toLocaleString()} with searchable text chunks`
-                    : ''}
-                </div>
-              ) : null}
-              {projectionDiagnostics ? (
-                <div className="mt-1 text-[11px] text-text-secondary">
-                  {projectionDiagnostics.zeroChunkConversationCount.toLocaleString()} zero-chunk chats
-                  {projectionDiagnostics.truncatedConversationCount > 0
-                    ? ` • ${projectionDiagnostics.truncatedConversationCount.toLocaleString()} truncated by fetch cap`
-                    : ''}
-                  {projectionDiagnostics.totalSkippedEmptyTextMessages > 0
-                    ? ` • ${projectionDiagnostics.totalSkippedEmptyTextMessages.toLocaleString()} empty-text messages skipped`
-                    : ''}
-                </div>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              {data?.latestProjection?.errorMessage ? (
-                <span className="text-rose-700 dark:text-rose-300">
-                  {data.latestProjection.errorMessage}
-                </span>
-              ) : null}
-            </div>
-          </div>
+          ) : null}
         </div>
       </div>
     </div>

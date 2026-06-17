@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Spinner, Switch, useToastContext } from '@librechat/client';
+import { Button, Spinner, Switch, useToastContext } from '@librechat/client';
 import { BarChart3, Download, Mail, RefreshCw, ShieldAlert, Users } from 'lucide-react';
 import { dataService, SystemRoles } from 'librechat-data-provider';
 import type {
@@ -11,8 +11,11 @@ import type {
 } from 'librechat-data-provider';
 import {
   useAdminBaseConfigQuery,
+  useAdminConfigsQuery,
+  useAdminDeleteConfigFieldMutation,
   useAdminIssuesQuery,
   useAdminOutlookAuditQuery,
+  useAdminPatchConfigFieldsMutation,
   useAdminSummarizationToggleMutation,
   useAdminUpdateUserBalanceMutation,
   useAdminUsageQuery,
@@ -28,6 +31,24 @@ const PAGE_SIZE = 25;
 type AdminTab = 'usage-users' | 'recent-requests' | 'users' | 'outlook-audit' | 'issues';
 type SummarizationConfigShape = {
   enabled?: boolean;
+  [key: string]: unknown;
+};
+type ArchiveFeatureName = 'slackArchive' | 'teamsArchive';
+type ArchiveFeaturesConfigShape = {
+  slackArchive?: boolean;
+  teamsArchive?: boolean;
+  [key: string]: unknown;
+};
+type AdminConfigRecord = {
+  principalType?: string;
+  principalId?: string;
+  overrides?: {
+    interface?: {
+      archiveFeatures?: ArchiveFeaturesConfigShape;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 };
 
@@ -174,6 +195,31 @@ function isSummarizationEnabled(config: Record<string, unknown> | undefined) {
   return (summarization as SummarizationConfigShape).enabled !== false;
 }
 
+function getBaseArchiveFeatureEnabled(
+  config: Record<string, unknown> | undefined,
+  featureName: ArchiveFeatureName,
+) {
+  const interfaceConfig = config?.interfaceConfig;
+  if (!interfaceConfig || typeof interfaceConfig !== 'object') {
+    return false;
+  }
+
+  const archiveFeatures = (interfaceConfig as { archiveFeatures?: ArchiveFeaturesConfigShape })
+    .archiveFeatures;
+  return archiveFeatures?.[featureName] === true;
+}
+
+function getUserArchiveFeatureOverride(
+  config: AdminConfigRecord | undefined,
+  featureName: ArchiveFeatureName,
+) {
+  return config?.overrides?.interface?.archiveFeatures?.[featureName];
+}
+
+function formatArchiveFeatureLabel(featureName: ArchiveFeatureName) {
+  return featureName === 'slackArchive' ? 'Slack archive' : 'Teams archive';
+}
+
 function TabButton({
   active,
   icon: Icon,
@@ -304,7 +350,10 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const isAdmin = user?.role === SystemRoles.ADMIN;
   const updateUserBalance = useAdminUpdateUserBalanceMutation();
   const adminBaseConfigQuery = useAdminBaseConfigQuery({ enabled: isAdmin });
+  const adminConfigsQuery = useAdminConfigsQuery({ enabled: isAdmin });
+  const deleteConfigField = useAdminDeleteConfigFieldMutation();
   const updateSummarization = useAdminSummarizationToggleMutation();
+  const patchConfigFields = useAdminPatchConfigFieldsMutation();
 
   const usersQuery = useAdminUsersQuery(
     { limit: PAGE_SIZE, offset: usersOffset },
@@ -368,6 +417,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
 
   const isInitialLoading =
     usersQuery.isLoading ||
+    adminConfigsQuery.isLoading ||
     summaryQuery.isLoading ||
     recentUsageQuery.isLoading ||
     issuesQuery.isLoading ||
@@ -375,6 +425,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const hasError =
     usersQuery.isError ||
     adminBaseConfigQuery.isError ||
+    adminConfigsQuery.isError ||
     summaryQuery.isError ||
     recentUsageQuery.isError ||
     issuesQuery.isError ||
@@ -391,6 +442,26 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
   const outlookAudits = outlookAuditQuery.data?.audits ?? [];
   const directoryUsers = usersQuery.data?.users ?? [];
   const summarizationEnabled = isSummarizationEnabled(adminBaseConfigQuery.data?.config);
+  const archiveConfigByUserId = useMemo(() => {
+    const map = new Map<string, AdminConfigRecord>();
+
+    for (const config of adminConfigsQuery.data?.configs ?? []) {
+      const typedConfig = config as AdminConfigRecord;
+      if (typedConfig.principalType === 'user' && typedConfig.principalId) {
+        map.set(typedConfig.principalId, typedConfig);
+      }
+    }
+
+    return map;
+  }, [adminConfigsQuery.data?.configs]);
+  const globalSlackArchiveEnabled = getBaseArchiveFeatureEnabled(
+    adminBaseConfigQuery.data?.config,
+    'slackArchive',
+  );
+  const globalTeamsArchiveEnabled = getBaseArchiveFeatureEnabled(
+    adminBaseConfigQuery.data?.config,
+    'teamsArchive',
+  );
 
   const handleBalanceSave = async (row: AdminUserListItem) => {
     const rawValue = balanceDrafts[row.id] ?? String(row.tokenCredits ?? 0);
@@ -449,6 +520,71 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
         error instanceof Error && error.message
           ? error.message
           : 'Failed to update agent context compaction.';
+      showToast({
+        status: 'error',
+        message,
+      });
+    }
+  };
+
+  const handleArchiveFeatureToggle = async ({
+    principalType,
+    principalId,
+    featureName,
+    enabled,
+  }: {
+    principalType: 'role' | 'user';
+    principalId: string;
+    featureName: ArchiveFeatureName;
+    enabled: boolean;
+  }) => {
+    try {
+      await patchConfigFields.mutateAsync({
+        principalType,
+        principalId,
+        entries: [
+          {
+            fieldPath: `interface.archiveFeatures.${featureName}`,
+            value: enabled,
+          },
+        ],
+      });
+
+      showToast({
+        status: 'success',
+        message: `${formatArchiveFeatureLabel(featureName)} ${
+          enabled ? 'enabled' : 'disabled'
+        } for ${principalType === 'role' ? 'the default rollout' : 'that user'}.`,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : `Failed to update ${formatArchiveFeatureLabel(featureName)} access.`;
+      showToast({
+        status: 'error',
+        message,
+      });
+    }
+  };
+
+  const handleArchiveFeatureReset = async (userId: string, featureName: ArchiveFeatureName) => {
+    try {
+      await deleteConfigField.mutateAsync({
+        principalType: 'user',
+        principalId: userId,
+        fieldPath: `interface.archiveFeatures.${featureName}`,
+      });
+
+      showToast({
+        status: 'success',
+        message: `${formatArchiveFeatureLabel(featureName)} reset to inherit the base rollout.`,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : `Failed to reset ${formatArchiveFeatureLabel(featureName)} access.`;
       showToast({
         status: 'error',
         message,
@@ -553,6 +689,76 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                   onCheckedChange={(checked) => void handleSummarizationToggle(Boolean(checked))}
                   aria-label="Toggle agent context compaction"
                 />
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-sm">
+            <div className="flex flex-col gap-4">
+              <div>
+                <h3 className="text-sm font-semibold text-text-primary">Archive feature rollout</h3>
+                <p className="mt-1 text-xs text-text-secondary">
+                  Controls who can see and use the in-development Slack and Teams archive panels.
+                  The related environment flag must still be enabled on the server.
+                </p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-border-light bg-surface-secondary p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-medium text-text-primary">Slack archive</div>
+                      <div className="mt-1 text-xs text-text-secondary">
+                        Base toggle for all users unless a user-specific override exists.
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-text-secondary">
+                        {globalSlackArchiveEnabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                      <Switch
+                        checked={globalSlackArchiveEnabled}
+                        disabled={patchConfigFields.isLoading}
+                        onCheckedChange={(checked) =>
+                          void handleArchiveFeatureToggle({
+                            principalType: 'role',
+                            principalId: '__base__',
+                            featureName: 'slackArchive',
+                            enabled: Boolean(checked),
+                          })
+                        }
+                        aria-label="Toggle Slack archive rollout"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-border-light bg-surface-secondary p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-medium text-text-primary">Teams archive</div>
+                      <div className="mt-1 text-xs text-text-secondary">
+                        Base toggle for all users unless a user-specific override exists.
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-text-secondary">
+                        {globalTeamsArchiveEnabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                      <Switch
+                        checked={globalTeamsArchiveEnabled}
+                        disabled={patchConfigFields.isLoading}
+                        onCheckedChange={(checked) =>
+                          void handleArchiveFeatureToggle({
+                            principalType: 'role',
+                            principalId: '__base__',
+                            featureName: 'teamsArchive',
+                            enabled: Boolean(checked),
+                          })
+                        }
+                        aria-label="Toggle Teams archive rollout"
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </section>
@@ -777,6 +983,8 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                     <tr className="text-xs uppercase tracking-wide text-text-secondary">
                       <th className="py-2 pr-4 font-medium">User</th>
                       <th className="py-2 pr-4 font-medium">Balance</th>
+                      <th className="py-2 pr-4 font-medium">Slack archive</th>
+                      <th className="py-2 pr-4 font-medium">Teams archive</th>
                       <th className="py-2 pr-4 font-medium">Role</th>
                       <th className="py-2 pr-4 font-medium">Provider</th>
                       <th className="py-2 pr-4 font-medium">Created</th>
@@ -833,6 +1041,94 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                             {formatNumber(row.tokenCredits)} credits
                           </div>
                         </td>
+                        <td className="py-3 pr-4">
+                          {(() => {
+                            const config = archiveConfigByUserId.get(row.id);
+                            const override = getUserArchiveFeatureOverride(config, 'slackArchive');
+                            const effectiveEnabled =
+                              typeof override === 'boolean' ? override : globalSlackArchiveEnabled;
+
+                            return (
+                              <div className="flex min-w-[9rem] items-center gap-3">
+                                <Switch
+                                  checked={effectiveEnabled}
+                                  disabled={patchConfigFields.isLoading || deleteConfigField.isLoading}
+                                  onCheckedChange={(checked) =>
+                                    void handleArchiveFeatureToggle({
+                                      principalType: 'user',
+                                      principalId: row.id,
+                                      featureName: 'slackArchive',
+                                      enabled: Boolean(checked),
+                                    })
+                                  }
+                                  aria-label={`Toggle Slack archive for ${row.email || row.username || row.id}`}
+                                />
+                                <span className="text-xs text-text-secondary">
+                                  {typeof override === 'boolean' ? 'Override' : 'Base'}
+                                </span>
+                                {typeof override === 'boolean' ? (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-auto px-2 py-1 text-xs"
+                                    disabled={
+                                      patchConfigFields.isLoading || deleteConfigField.isLoading
+                                    }
+                                    onClick={() =>
+                                      void handleArchiveFeatureReset(row.id, 'slackArchive')
+                                    }
+                                  >
+                                    Reset
+                                  </Button>
+                                ) : null}
+                              </div>
+                            );
+                          })()}
+                        </td>
+                        <td className="py-3 pr-4">
+                          {(() => {
+                            const config = archiveConfigByUserId.get(row.id);
+                            const override = getUserArchiveFeatureOverride(config, 'teamsArchive');
+                            const effectiveEnabled =
+                              typeof override === 'boolean' ? override : globalTeamsArchiveEnabled;
+
+                            return (
+                              <div className="flex min-w-[9rem] items-center gap-3">
+                                <Switch
+                                  checked={effectiveEnabled}
+                                  disabled={patchConfigFields.isLoading || deleteConfigField.isLoading}
+                                  onCheckedChange={(checked) =>
+                                    void handleArchiveFeatureToggle({
+                                      principalType: 'user',
+                                      principalId: row.id,
+                                      featureName: 'teamsArchive',
+                                      enabled: Boolean(checked),
+                                    })
+                                  }
+                                  aria-label={`Toggle Teams archive for ${row.email || row.username || row.id}`}
+                                />
+                                <span className="text-xs text-text-secondary">
+                                  {typeof override === 'boolean' ? 'Override' : 'Base'}
+                                </span>
+                                {typeof override === 'boolean' ? (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-auto px-2 py-1 text-xs"
+                                    disabled={
+                                      patchConfigFields.isLoading || deleteConfigField.isLoading
+                                    }
+                                    onClick={() =>
+                                      void handleArchiveFeatureReset(row.id, 'teamsArchive')
+                                    }
+                                  >
+                                    Reset
+                                  </Button>
+                                ) : null}
+                              </div>
+                            );
+                          })()}
+                        </td>
                         <td className="py-3 pr-4 text-text-secondary">{row.role}</td>
                         <td className="py-3 pr-4 text-text-secondary">{row.provider}</td>
                         <td className="py-3 pr-4 text-text-secondary">
@@ -844,7 +1140,7 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                       </tr>
                     ))}
                     {directoryUsers.length === 0 ? (
-                      <EmptyRow colSpan={6} message="No users were returned by the admin API." />
+                      <EmptyRow colSpan={8} message="No users were returned by the admin API." />
                     ) : null}
                   </tbody>
                 </table>

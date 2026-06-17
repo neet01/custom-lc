@@ -3,6 +3,7 @@ const { randomUUID } = require('crypto');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
 const db = require('~/models');
 const { getUserPluginAuthValue } = require('~/server/services/PluginService');
+const { isArchiveFeatureAllowed } = require('~/server/services/ArchiveFeatureAccess');
 
 let projectSlackArchiveSyncToMemory = null;
 
@@ -49,6 +50,18 @@ function isSlackArchiveEnabled() {
 function assertEnabled() {
   if (!isSlackArchiveEnabled()) {
     throw new SlackArchiveServiceError('Slack archive is not enabled', 403);
+  }
+}
+
+async function assertArchiveAccess(user) {
+  assertEnabled();
+
+  if (!(await isArchiveFeatureAllowed(user, 'slackArchive'))) {
+    throw new SlackArchiveServiceError(
+      'Slack archive is not enabled for the current user.',
+      403,
+      { reason: 'feature_not_enabled_for_user' },
+    );
   }
 }
 
@@ -296,7 +309,7 @@ function queueSlackProjection(params) {
 }
 
 async function getSlackConnectionForUser(user) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = getUserId(user);
   if (!userId) {
     throw new SlackArchiveServiceError('Authenticated user context is required.', 401);
@@ -1239,7 +1252,7 @@ async function performArchiveSync(syncJobId, user, options = {}) {
 }
 
 async function getStatus(user) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = getUserId(user);
   const config = getSlackArchiveConfig();
   const SlackArchiveOAuthService = require('~/server/services/SlackArchiveOAuthService');
@@ -1330,7 +1343,7 @@ async function getStatus(user) {
 }
 
 async function getSyncStartAvailability(user) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = getUserId(user);
   const runningSync = await db.findLatestSlackArchiveSyncJob({
     user: userId,
@@ -1353,7 +1366,7 @@ async function getSyncStartAvailability(user) {
 }
 
 async function syncUserArchive(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
 
   const availability = await getSyncStartAvailability(user);
   if (!availability.allowed) {
@@ -1409,7 +1422,7 @@ async function syncUserArchive(user, options = {}) {
 }
 
 async function cancelRunningSync(user) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = getUserId(user);
   const runningSync = await db.findLatestSlackArchiveSyncJob({
     user: userId,
@@ -1439,7 +1452,7 @@ async function cancelRunningSync(user) {
 }
 
 async function deleteUserArchive(user) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = getUserId(user);
 
   const latestRunningJob = await db.findLatestSlackArchiveSyncJob({
@@ -1502,7 +1515,7 @@ async function deleteUserArchive(user) {
 }
 
 async function listConversations(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = getUserId(user);
   const limit = clampPositiveInt(options.limit, 25, { max: 100 });
   const offset = clampPositiveInt(options.offset, 0, { min: 0, max: 100000 });
@@ -1521,7 +1534,7 @@ async function listConversations(user, options = {}) {
 }
 
 async function listConversationMessages(user, conversationId, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = getUserId(user);
   const normalizedConversationId = String(conversationId || '').trim();
   if (!normalizedConversationId) {
@@ -1546,7 +1559,7 @@ async function listConversationMessages(user, conversationId, options = {}) {
 }
 
 async function searchMessages(user, options = {}) {
-  assertEnabled();
+  await assertArchiveAccess(user);
   const userId = getUserId(user);
   const query = String(options.query || options.q || '').trim();
   if (!query) {

@@ -1,5 +1,7 @@
 # Enterprise Features Debugging Guide
 
+Last updated: 2026-06-16
+
 This file documents the custom LibreChat changes added in this fork so another LLM or engineer can quickly understand:
 
 - what was added
@@ -122,7 +124,105 @@ Key endpoints:
 - `POST /api/issues`
 - `GET /api/admin/issues`
 
-### 5. Native Spreadsheet Transform Workflow
+### 5. Outlook Workspace
+
+Added a first-party Outlook workspace in the side panel with delegated Graph access.
+
+Current capabilities:
+
+- folders and mailbox listing
+- focused/other/all inbox views
+- mailbox search
+- thread/message display
+- attachment metadata plus same-origin downloads
+- read-state update and delete actions
+- AI actions:
+  - analyze message
+  - draft reply
+  - daily brief
+  - propose meeting slots
+  - create meeting
+- calendar day/week views plus event create/update/delete
+
+Primary files:
+
+- [api/server/routes/outlook.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/outlook.js:1)
+- [api/server/services/OutlookService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/OutlookService.js:1)
+- [client/src/components/SidePanel/Outlook/Panel.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/SidePanel/Outlook/Panel.tsx:1)
+- [client/src/data-provider/Outlook/queries.ts](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/data-provider/Outlook/queries.ts:1)
+- [api/server/services/GraphTokenService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/GraphTokenService.js:1)
+
+Key endpoints:
+
+- `GET /api/outlook/status`
+- `GET /api/outlook/folders`
+- `GET /api/outlook/messages`
+- `GET /api/outlook/calendar`
+- `GET /api/outlook/messages/:messageId`
+- `GET /api/outlook/messages/:messageId/attachments`
+- `GET /api/outlook/messages/:messageId/attachments/:attachmentId/download`
+- `PATCH /api/outlook/messages/:messageId/read`
+- `DELETE /api/outlook/messages/:messageId`
+- `POST /api/outlook/messages/:messageId/analyze`
+- `POST /api/outlook/messages/analyze-selection`
+- `POST /api/outlook/messages/:messageId/drafts`
+- `POST /api/outlook/daily-brief`
+- `POST /api/outlook/messages/:messageId/meeting-slots`
+- `POST /api/outlook/messages/:messageId/meetings`
+- `POST /api/outlook/calendar/events`
+- `PATCH /api/outlook/calendar/events/:eventId`
+- `DELETE /api/outlook/calendar/events/:eventId`
+
+### 6. Outlook Audit Trail
+
+Added persistent Outlook audit records and an admin review surface.
+
+Primary files:
+
+- [packages/data-schemas/src/schema/outlookAudit.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/outlookAudit.ts:1)
+- [packages/data-schemas/src/methods/outlookAudit.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/methods/outlookAudit.ts:1)
+- [api/server/routes/admin/outlookAudit.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/admin/outlookAudit.js:1)
+- [client/src/components/Nav/SettingsTabs/Admin/Admin.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Nav/SettingsTabs/Admin/Admin.tsx:1)
+- [config/migrate-outlook-audit.js](/Users/praneetkotah/Desktop/Development/LibreChat/config/migrate-outlook-audit.js:1)
+
+Key endpoint:
+
+- `GET /api/admin/outlook-audit`
+
+### 7. Teams Archive And Enterprise Memory
+
+Added a Teams archive service with archive-backed retrieval and enterprise-memory projection.
+
+Current capabilities:
+
+- sync Teams chats for the signed-in user
+- background sync start plus status polling
+- cancel or reset user archive state
+- list archived conversations and messages
+- lexical search over archived messages
+- richer built-in tool actions for recent meetings, sender-specific retrieval, diagnostics, message windows, and bounded summaries
+- post-sync projection into `EnterpriseMemory*` collections
+
+Primary files:
+
+- [api/server/routes/teamsArchive.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/teamsArchive.js:1)
+- [api/server/services/TeamsArchiveService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/TeamsArchiveService.js:1)
+- [api/app/clients/tools/util/teamsArchive.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/app/clients/tools/util/teamsArchive.js:1)
+- [api/server/services/EnterpriseMemory/teamsProjection.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/EnterpriseMemory/teamsProjection.js:1)
+- [api/server/services/EnterpriseMemory/retrieval.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/EnterpriseMemory/retrieval.js:1)
+- [client/src/components/Nav/SettingsTabs/Account/TeamsArchiveStatus.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Nav/SettingsTabs/Account/TeamsArchiveStatus.tsx:1)
+
+Key endpoints:
+
+- `GET /api/teams-archive/status`
+- `POST /api/teams-archive/sync`
+- `POST /api/teams-archive/cancel`
+- `POST /api/teams-archive/reset`
+- `GET /api/teams-archive/conversations`
+- `GET /api/teams-archive/conversations/:chatId/messages`
+- `GET /api/teams-archive/search`
+
+### 8. Native Spreadsheet Transform Workflow
 
 Added native spreadsheet handling that returns a new file back in chat.
 
@@ -151,7 +251,7 @@ Key endpoint:
 
 - `POST /api/files/:file_id/transform/spreadsheet`
 
-### 6. Native Word Document Workflow
+### 9. Native Word Document Workflow
 
 Added native `.docx` handling that returns a new `.docx` file back in chat.
 
@@ -186,6 +286,24 @@ Key endpoint:
 
 - `POST /api/files/:file_id/transform/word-document`
 
+### 10. Document Pipeline Scaffolding
+
+Added durable document-side registration during file upload.
+
+Current capabilities:
+
+- create `Document`, `DocumentVersion`, and `DocumentJob` records for document-like uploads
+- register text-backed fallback uploads created during Bedrock oversize handling
+- preserve durable document lineage without changing the existing chat/file contract
+
+Primary files:
+
+- [api/server/services/Documents/register.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Documents/register.js:1)
+- [api/server/services/Files/process.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Files/process.js:1)
+- [packages/data-schemas/src/schema/document.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/document.ts:1)
+- [packages/data-schemas/src/schema/documentVersion.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/documentVersion.ts:1)
+- [packages/data-schemas/src/schema/documentJob.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/documentJob.ts:1)
+
 ## Runtime Expectations
 
 ### Docker
@@ -208,6 +326,19 @@ The custom features depend on Mongo collections for:
 
 - `Usage`
 - `IssueReport`
+- `OutlookAudit`
+- `TeamsArchiveConversation`
+- `TeamsArchiveMessage`
+- `TeamsArchiveSyncJob`
+- `TeamsArchiveBackfillState`
+- `TeamsArchiveSyncLease`
+- `EnterpriseMemoryEntity`
+- `EnterpriseMemoryRelationship`
+- `EnterpriseMemoryChunk`
+- `EnterpriseMemoryJob`
+- `Document`
+- `DocumentVersion`
+- `DocumentJob`
 
 If the app boots but admin/issue features behave strangely, verify migrations ran and the container is pointed at the expected Mongo DB.
 
@@ -254,6 +385,35 @@ Check:
 3. Hard refresh the browser to avoid stale frontend bundles
 4. Check:
    - [client/src/components/Nav/SettingsTabs/Admin/Admin.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Nav/SettingsTabs/Admin/Admin.tsx:1)
+
+### Outlook Workspace Fails
+
+Symptoms:
+
+- Outlook panel says disabled or disconnected
+- mailbox or calendar calls fail with Graph/OBO errors
+- attachment downloads fail from the selected-message view
+- AI actions return data but audit/usage entries are missing
+
+Check:
+
+1. Ensure `.env` includes `OUTLOOK_AI_ENABLED=true` plus the correct GCC High Graph base URL/scopes if applicable
+2. Confirm the signed-in user has a delegated token path that `GraphTokenService` can exchange
+3. Verify the route directly:
+   - `GET /api/outlook/status`
+4. Inspect:
+   - [api/server/services/GraphTokenService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/GraphTokenService.js:1)
+   - [api/server/services/OutlookService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/OutlookService.js:1)
+   - [api/server/routes/outlook.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/outlook.js:1)
+5. For admin visibility gaps, run:
+   - `npm run migrate:outlook-audit`
+
+Common causes:
+
+- public-cloud Graph base URL accidentally used in a GCC High environment
+- OBO exchange failure due to missing/invalid delegated login context
+- client bundle is stale and does not match the current Outlook payload shape
+- attachment metadata exists in Graph but the selected-message enrichment path regressed
 
 ### Report Issue Button Missing
 
@@ -338,6 +498,48 @@ Common causes:
 
 If the complaint is “formatting disappeared,” that is expected with the current implementation.
 
+### Teams Archive Sync/Search Fails
+
+Symptoms:
+
+- sync starts but stalls or fails after Graph throttling
+- `/status` shows running or paused state unexpectedly
+- search is sparse even though chats were synced
+- latest/new-message answers look wrong for recurring meeting chats
+
+Check:
+
+1. Confirm `.env` includes the intended `TEAMS_ARCHIVE_*` settings
+2. Inspect:
+   - [api/server/services/TeamsArchiveService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/TeamsArchiveService.js:1)
+   - [api/server/routes/teamsArchive.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/teamsArchive.js:1)
+   - [api/app/clients/tools/util/teamsArchive.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/app/clients/tools/util/teamsArchive.js:1)
+   - [api/server/services/EnterpriseMemory/teamsProjection.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/EnterpriseMemory/teamsProjection.js:1)
+   - [api/server/services/EnterpriseMemory/retrieval.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/EnterpriseMemory/retrieval.js:1)
+3. Verify status payload fields:
+   - `activeSyncs`
+   - `maxConcurrentSyncs`
+   - `latestSync`
+   - `backfillState`
+   - `latestProjection`
+4. If Graph throttling is suspected, verify the retry envs:
+   - `TEAMS_ARCHIVE_GRAPH_RETRY_ATTEMPTS`
+   - `TEAMS_ARCHIVE_GRAPH_RETRY_BASE_MS`
+   - `TEAMS_ARCHIVE_GRAPH_RETRY_MAX_MS`
+
+Common causes:
+
+- stale lease/job state from a previously interrupted sync
+- Graph `429` / `503` / `504` responses during discovery or message backfill
+- recurring meeting chat title collisions when the caller does not preserve `graphChatId`
+- enterprise-memory projection lagging or failing while the source archive succeeded
+
+Important current rollout note:
+
+- the default `TEAMS_ARCHIVE_MAX_CONCURRENT_SYNCS` is now `1`
+- `graphRequest()` now honors `Retry-After` and retries throttling/transient Graph failures before giving up
+- if a sync still fails after retries, inspect the specific Graph status/message before increasing concurrency again
+
 ### Docker/User Management Confusion
 
 Inside the Docker `api` container, `docker compose exec api ...` starts in `/app/api`, not `/app`.
@@ -392,11 +594,28 @@ cd packages/api && npm run build
 git diff --check
 ```
 
+Outlook:
+
+```bash
+npm run migrate:outlook-audit
+cd api && npx jest server/services/OutlookService.spec.js --runInBand
+```
+
+Teams:
+
+```bash
+cd api && npm run test:teams
+node config/reconcile-cortex-indexes.js --verify
+```
+
 ## Current Known Limitations
 
 - budget progress currently maps to LibreChat cost credits, not literal token counts
 - Word document workflow does not preserve rich source formatting
 - admin issues queue is read-only for now
+- Teams archive currently covers chats, not Teams channel exports
+- enterprise-memory retrieval is still lexical/structured rather than vector/semantic
+- document pipeline persistence exists, but `DocumentJob` worker execution is not implemented yet
 - no commit has been made yet for these local changes unless someone commits them after reading this file
 
 ## Suggested First Debug Sequence

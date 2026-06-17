@@ -60,6 +60,10 @@ function getStatusTone(status?: string | null) {
     return 'text-text-primary';
   }
 
+  if (status === 'partial') {
+    return 'text-amber-700 dark:text-amber-300';
+  }
+
   if (status === 'failure') {
     return 'text-rose-700 dark:text-rose-300';
   }
@@ -82,6 +86,10 @@ function getStatusLabel(status?: string | null) {
 
   if (status === 'success') {
     return 'Synced';
+  }
+
+  if (status === 'partial') {
+    return 'Partially synced';
   }
 
   if (status === 'failure') {

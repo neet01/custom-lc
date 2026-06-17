@@ -392,6 +392,267 @@ describe('TeamsArchiveService', () => {
     );
   });
 
+  it('retries Microsoft Graph throttling before failing a sync', async () => {
+    process.env.TEAMS_ARCHIVE_GRAPH_RETRY_ATTEMPTS = '2';
+    process.env.TEAMS_ARCHIVE_GRAPH_RETRY_BASE_MS = '0';
+    process.env.TEAMS_ARCHIVE_GRAPH_RETRY_MAX_MS = '0';
+    let chatListAttempts = 0;
+
+    global.fetch.mockImplementation(async (url) => {
+      const href = String(url);
+
+      if (href.includes('/me/chats')) {
+        chatListAttempts += 1;
+        if (chatListAttempts === 1) {
+          return {
+            ok: false,
+            status: 429,
+            statusText: 'Too Many Requests',
+            headers: {
+              get: (name) => (String(name).toLowerCase() === 'retry-after' ? '0' : ''),
+            },
+            json: async () => ({ error: { message: 'Too many requests' } }),
+          };
+        }
+
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            value: [
+              {
+                id: 'chat-throttle',
+                chatType: 'group',
+                topic: 'Throttle retry',
+                lastUpdatedDateTime: '2026-05-01T10:00:00.000Z',
+              },
+            ],
+          }),
+        };
+      }
+
+      if (href.includes('/chats/chat-throttle/members')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            value: [],
+          }),
+        };
+      }
+
+      if (href.includes('/chats/chat-throttle/messages')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            value: [],
+          }),
+        };
+      }
+
+      throw new Error(`Unhandled fetch URL: ${href}`);
+    });
+
+    db.findTeamsArchiveConversations.mockImplementation((filter) => {
+      if (filter?.graphChatId?.$in) {
+        return Promise.resolve([]);
+      }
+      if (filter?.syncStatus) {
+        return Promise.resolve([
+          {
+            _id: 'conv-throttle',
+            id: 'conv-throttle',
+            graphChatId: 'chat-throttle',
+            chatType: 'group',
+            participants: [],
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    db.countTeamsArchiveMessages.mockResolvedValue(0);
+
+    const result = await TeamsArchiveService.syncUserArchive(user, {
+      chatLimit: 1,
+      messagesPerChat: 5,
+    });
+
+    expect(chatListAttempts).toBe(2);
+    expect(result.syncJob).toBeTruthy();
+    expect(db.upsertTeamsArchiveConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        graphChatId: 'chat-throttle',
+      }),
+    );
+  });
+
+  it('defers a conversation on exhausted transient Graph 5xx and marks the run partial instead of aborting', async () => {
+    process.env.TEAMS_ARCHIVE_DEFERRED_FAILURE_ENABLED = 'true';
+    process.env.TEAMS_ARCHIVE_GRAPH_RETRY_ATTEMPTS = '0';
+    process.env.TEAMS_ARCHIVE_GRAPH_RETRY_BASE_MS = '0';
+    process.env.TEAMS_ARCHIVE_GRAPH_RETRY_MAX_MS = '0';
+
+    global.fetch.mockImplementation(async (url) => {
+      const href = String(url);
+
+      if (href.includes('/me/chats')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            value: [
+              {
+                id: 'chat-defer',
+                chatType: 'group',
+                topic: 'Deferred chat',
+                lastUpdatedDateTime: '2026-05-01T10:00:00.000Z',
+              },
+            ],
+          }),
+        };
+      }
+
+      if (href.includes('/chats/chat-defer/members')) {
+        return { ok: true, status: 200, json: async () => ({ value: [] }) };
+      }
+
+      if (href.includes('/chats/chat-defer/messages')) {
+        return {
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: { get: () => '' },
+          json: async () => ({ error: { message: 'Graph is having a bad day' } }),
+        };
+      }
+
+      throw new Error(`Unhandled fetch URL: ${href}`);
+    });
+
+    db.findTeamsArchiveConversations.mockImplementation((filter) => {
+      if (filter?.graphChatId?.$in) {
+        return Promise.resolve([]);
+      }
+      if (filter?.$or || filter?.syncStatus) {
+        return Promise.resolve([
+          {
+            _id: 'conv-defer',
+            id: 'conv-defer',
+            graphChatId: 'chat-defer',
+            chatType: 'group',
+            participants: [],
+            syncAttemptCount: 0,
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+    db.countTeamsArchiveMessages.mockResolvedValue(0);
+
+    const result = await TeamsArchiveService.syncUserArchive(user, {
+      chatLimit: 1,
+      messagesPerChat: 5,
+    });
+
+    expect(result.syncJob.status).toBe('partial');
+    expect(result.memoryProjection).toMatchObject({
+      status: 'skipped',
+      reason: 'no_completed_conversations_in_run',
+    });
+
+    expect(db.updateTeamsArchiveConversation).toHaveBeenCalledWith(
+      'conv-defer',
+      expect.objectContaining({
+        syncStatus: 'deferred_failed',
+        syncAttemptCount: 1,
+        syncDeferredStatus: 500,
+        nextRetryAt: expect.any(Date),
+      }),
+    );
+
+    const jobUpdateWithDeferral = db.updateTeamsArchiveSyncJob.mock.calls.find(
+      ([, updates]) => updates?.stats?.deferral,
+    );
+    expect(jobUpdateWithDeferral?.[1]?.stats?.deferral).toMatchObject({
+      enabled: true,
+      runStatus: 'partial',
+      deferredConversationCount: 1,
+      deferredGraphChatIds: ['chat-defer'],
+    });
+  });
+
+  it('aborts the entire run on transient Graph 5xx when deferred-failure handling is disabled', async () => {
+    process.env.TEAMS_ARCHIVE_DEFERRED_FAILURE_ENABLED = 'false';
+    process.env.TEAMS_ARCHIVE_GRAPH_RETRY_ATTEMPTS = '0';
+    process.env.TEAMS_ARCHIVE_GRAPH_RETRY_BASE_MS = '0';
+    process.env.TEAMS_ARCHIVE_GRAPH_RETRY_MAX_MS = '0';
+
+    global.fetch.mockImplementation(async (url) => {
+      const href = String(url);
+
+      if (href.includes('/me/chats')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            value: [
+              {
+                id: 'chat-defer',
+                chatType: 'group',
+                topic: 'Deferred chat',
+                lastUpdatedDateTime: '2026-05-01T10:00:00.000Z',
+              },
+            ],
+          }),
+        };
+      }
+
+      if (href.includes('/chats/chat-defer/members')) {
+        return { ok: true, status: 200, json: async () => ({ value: [] }) };
+      }
+
+      if (href.includes('/chats/chat-defer/messages')) {
+        return {
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: { get: () => '' },
+          json: async () => ({ error: { message: 'Graph is having a bad day' } }),
+        };
+      }
+
+      throw new Error(`Unhandled fetch URL: ${href}`);
+    });
+
+    db.findTeamsArchiveConversations.mockImplementation((filter) => {
+      if (filter?.graphChatId?.$in) {
+        return Promise.resolve([]);
+      }
+      if (filter?.syncStatus) {
+        return Promise.resolve([
+          {
+            _id: 'conv-defer',
+            id: 'conv-defer',
+            graphChatId: 'chat-defer',
+            chatType: 'group',
+            participants: [],
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    await expect(
+      TeamsArchiveService.syncUserArchive(user, { chatLimit: 1, messagesPerChat: 5 }),
+    ).rejects.toThrow();
+
+    expect(db.updateTeamsArchiveConversation).not.toHaveBeenCalledWith(
+      'conv-defer',
+      expect.objectContaining({ syncStatus: 'deferred_failed' }),
+    );
+  });
+
   it('falls back to sender-derived participants when Graph member enrichment fails', async () => {
     global.fetch.mockImplementation(async (url) => {
       const href = String(url);

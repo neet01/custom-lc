@@ -153,6 +153,24 @@ Beyond chat, LibreChat provides AI Agents, Model Context Protocol (MCP) support,
 
 Open source, actively developed, and built for anyone who values control over their AI infrastructure.
 
+## Enterprise Fork Notes
+
+This repository also contains internal enterprise customizations that go beyond the stock upstream product, including:
+
+- Outlook workspace and Outlook audit logging
+- Teams archive sync, retrieval, and enterprise-memory projection
+- native Word and spreadsheet transformation workflows
+- usage tracking, issue reporting, and admin audit additions
+- document-pipeline persistence scaffolding
+
+Internal repo documentation for those areas:
+
+- [CURRENT_SESSION_CONTEXT.md](CURRENT_SESSION_CONTEXT.md)
+- [PROJECT_CONTEXT_HANDOFF.md](PROJECT_CONTEXT_HANDOFF.md)
+- [ENTERPRISE_FEATURES_DEBUGGING.md](ENTERPRISE_FEATURES_DEBUGGING.md)
+- [LOW_LEVEL_APP_CALLS_DIAGRAM.md](LOW_LEVEL_APP_CALLS_DIAGRAM.md)
+- [DOCUMENT_INTELLIGENCE_SYSTEM.md](DOCUMENT_INTELLIGENCE_SYSTEM.md)
+
 ---
 
 ## 🌐 Resources

@@ -408,7 +408,19 @@ async function projectTeamsArchiveSyncToMemory({
   syncJobId,
   graphChatIds = [],
   visibilityScope = 'user',
+  runStatus = 'success',
+  deferredGraphChatIds = [],
 }) {
+  const deferredGraphChatIdSet = new Set(
+    (Array.isArray(deferredGraphChatIds) ? deferredGraphChatIds : []).map((id) => String(id || '').trim()),
+  );
+  const requestedGraphChatIds = Array.isArray(graphChatIds) ? graphChatIds : [];
+  const projectableGraphChatIds = requestedGraphChatIds.filter(
+    (graphChatId) => !deferredGraphChatIdSet.has(String(graphChatId || '').trim()),
+  );
+  const excludedDeferredCount = requestedGraphChatIds.length - projectableGraphChatIds.length;
+  const runIsPartial = runStatus === 'partial' || deferredGraphChatIdSet.size > 0;
+
   const projectionJob = await db.createEnterpriseMemoryJob({
     user: userId,
     tenantId,
@@ -419,15 +431,30 @@ async function projectTeamsArchiveSyncToMemory({
     sourceRecordType: 'teams_sync',
     sourceRecordId: syncJobId,
     stats: {
-      requestedConversationCount: graphChatIds.length,
+      requestedConversationCount: projectableGraphChatIds.length,
       projectedConversationCount: 0,
       entityCount: 0,
       relationshipCount: 0,
       chunkCount: 0,
+      sourceRunStatus: runStatus,
+      sourceRunPartial: runIsPartial,
+      deferredConversationCount: deferredGraphChatIdSet.size,
+      excludedDeferredConversationCount: excludedDeferredCount,
     },
     startedAt: new Date(),
     lastHeartbeatAt: new Date(),
   });
+
+  if (runIsPartial) {
+    logger.warn('[EnterpriseMemory] Projecting a partial Teams sync run; deferred conversations excluded', {
+      userId,
+      syncJobId,
+      runStatus,
+      deferredConversationCount: deferredGraphChatIdSet.size,
+      excludedDeferredConversationCount: excludedDeferredCount,
+      projectableConversationCount: projectableGraphChatIds.length,
+    });
+  }
 
   try {
     let projectedConversationCount = 0;
@@ -452,7 +479,7 @@ async function projectTeamsArchiveSyncToMemory({
       unknown: 0,
     };
 
-    for (const graphChatId of graphChatIds) {
+    for (const graphChatId of projectableGraphChatIds) {
       const [conversation] = await db.findTeamsArchiveConversations({ user: userId, graphChatId }, { limit: 1 });
       if (!conversation) {
         missingConversationCount += 1;
@@ -550,6 +577,10 @@ async function projectTeamsArchiveSyncToMemory({
       participantDegradedConversationCount,
       messageChunkCount,
       conversationWindowChunkCount,
+      sourceRunStatus: runStatus,
+      sourceRunPartial: runIsPartial,
+      deferredConversationCount: deferredGraphChatIdSet.size,
+      excludedDeferredConversationCount: excludedDeferredCount,
     };
 
     const updatedJob = await db.updateEnterpriseMemoryJob(
@@ -559,11 +590,15 @@ async function projectTeamsArchiveSyncToMemory({
         completedAt: new Date(),
         lastHeartbeatAt: new Date(),
         stats: {
-          requestedConversationCount: graphChatIds.length,
+          requestedConversationCount: projectableGraphChatIds.length,
           projectedConversationCount,
           entityCount,
           relationshipCount,
           chunkCount,
+          sourceRunStatus: runStatus,
+          sourceRunPartial: runIsPartial,
+          deferredConversationCount: deferredGraphChatIdSet.size,
+          excludedDeferredConversationCount: excludedDeferredCount,
           projectionDiagnostics,
         },
       },
@@ -572,11 +607,13 @@ async function projectTeamsArchiveSyncToMemory({
     logger.info('[EnterpriseMemory] Teams projection completed', {
       userId,
       syncJobId,
-      requestedConversationCount: graphChatIds.length,
+      requestedConversationCount: projectableGraphChatIds.length,
       projectedConversationCount,
       entityCount,
       relationshipCount,
       chunkCount,
+      sourceRunStatus: runStatus,
+      sourceRunPartial: runIsPartial,
       projectionDiagnostics,
     });
 
@@ -587,6 +624,9 @@ async function projectTeamsArchiveSyncToMemory({
       entityCount,
       relationshipCount,
       chunkCount,
+      sourceRunStatus: runStatus,
+      sourceRunPartial: runIsPartial,
+      deferredConversationCount: deferredGraphChatIdSet.size,
       projectionDiagnostics,
     };
   } catch (error) {

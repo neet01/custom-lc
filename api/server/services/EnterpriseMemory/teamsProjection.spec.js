@@ -261,4 +261,63 @@ describe('teamsProjection', () => {
       }),
     });
   });
+
+  it('excludes deferred conversations and marks a partial run without indexing them', async () => {
+    db.findTeamsArchiveConversations.mockImplementation(async (filter) => {
+      if (filter.graphChatId === 'chat-deferred') {
+        throw new Error('deferred conversation must not be queried for projection');
+      }
+      return [
+        {
+          graphChatId: 'chat-complete',
+          chatType: 'group',
+          topic: 'Complete chat',
+          messageCount: 1,
+          participants: [],
+        },
+      ];
+    });
+    db.findTeamsArchiveMessages.mockResolvedValue([
+      {
+        graphMessageId: 'm-1',
+        graphChatId: 'chat-complete',
+        fromDisplayName: 'Alice',
+        fromEmail: 'alice@example.com',
+        bodyText: 'Only message',
+        bodyPreview: 'Only message',
+        isChunkable: true,
+        mentions: [],
+        attachments: [],
+        sentDateTime: new Date('2026-05-01T00:00:00.000Z'),
+      },
+    ]);
+
+    const result = await projectTeamsArchiveSyncToMemory({
+      userId: 'user-1',
+      tenantId: 'tenant-1',
+      syncJobId: 'sync-partial',
+      graphChatIds: ['chat-complete', 'chat-deferred'],
+      runStatus: 'partial',
+      deferredGraphChatIds: ['chat-deferred'],
+    });
+
+    expect(result).toMatchObject({
+      status: 'success',
+      projectedConversationCount: 1,
+      sourceRunStatus: 'partial',
+      sourceRunPartial: true,
+      deferredConversationCount: 1,
+    });
+
+    const createStats = db.createEnterpriseMemoryJob.mock.calls[0][0].stats;
+    expect(createStats).toMatchObject({
+      requestedConversationCount: 1,
+      sourceRunPartial: true,
+      excludedDeferredConversationCount: 1,
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[EnterpriseMemory] Projecting a partial Teams sync run; deferred conversations excluded',
+      expect.objectContaining({ deferredConversationCount: 1, excludedDeferredConversationCount: 1 }),
+    );
+  });
 });

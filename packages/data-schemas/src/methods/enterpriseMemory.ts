@@ -15,6 +15,7 @@ export interface EnterpriseMemoryQueryOptions {
   limit?: number;
   offset?: number;
   sort?: Record<string, 1 | -1>;
+  textScore?: boolean;
 }
 
 export function createEnterpriseMemoryMethods(mongoose: typeof import('mongoose')) {
@@ -176,9 +177,11 @@ export function createEnterpriseMemoryMethods(mongoose: typeof import('mongoose'
     try {
       const EnterpriseMemoryChunk = mongoose.models
         .EnterpriseMemoryChunk as Model<IEnterpriseMemoryChunk>;
-      const { limit = 100, offset = 0, sort = { sourceTimestamp: -1, updatedAt: -1 } } = options;
-      return (await EnterpriseMemoryChunk.find(filter)
-        .sort(sort)
+      const { limit = 100, offset = 0, sort = { sourceTimestamp: -1, updatedAt: -1 }, textScore = false } = options;
+      const projection = textScore ? { score: { $meta: 'textScore' } } : undefined;
+      const sortSpec = textScore ? { score: { $meta: 'textScore' }, ...sort } : sort;
+      return (await EnterpriseMemoryChunk.find(filter, projection)
+        .sort(sortSpec)
         .skip(offset)
         .limit(limit)
         .lean()) as IEnterpriseMemoryChunk[];

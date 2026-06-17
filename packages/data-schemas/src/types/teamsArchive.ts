@@ -17,9 +17,16 @@ export interface TeamsArchiveConversationData {
   topic?: string;
   webUrl?: string;
   participants?: TeamsArchiveParticipantData[];
-  syncStatus?: 'pending' | 'running' | 'complete' | 'failed';
+  syncStatus?: 'pending' | 'running' | 'complete' | 'failed' | 'deferred_failed';
   syncCursor?: string;
   syncError?: string;
+  syncAttemptCount?: number;
+  syncDeferredAt?: Date;
+  syncDeferredReason?: string;
+  syncDeferredStatus?: number;
+  syncNeedsIntervention?: boolean;
+  nextRetryAt?: Date;
+  lastErrorStatus?: number;
   sourceDiscoveredAt?: Date;
   sourceLastMessageAt?: Date;
   syncStartedAt?: Date;

@@ -1,6 +1,6 @@
 # Current Session Context
 
-Last updated: 2026-05-17
+Last updated: 2026-06-16
 
 This file is the current working handoff for the LibreChat customization effort. Use this as the primary reference for future turns instead of relying on prior chat history.
 
@@ -11,9 +11,9 @@ This LibreChat fork is being turned into an internal enterprise AI platform for 
 - Microsoft Entra ID / GCC High SSO
 - Outlook inbox and calendar integration through delegated Microsoft Graph access
 - enterprise usage tracking and admin reporting
-- document and spreadsheet transformation workflows
-- future MCP/Jira/Confluence/AWS Bedrock integration
-- future Teams archive ingestion and retrieval
+- document and spreadsheet transformation workflows plus document-pipeline scaffolding
+- separate MCP/Jira/Confluence expansion and broader AWS Bedrock agent patterns
+- implemented Teams archive ingestion and retrieval with enterprise-memory projection
 
 ## Strategic North Star
 
@@ -190,7 +190,7 @@ Reason:
 
 ### Outlook workspace
 
-The Outlook integration is the main active workstream.
+The Outlook integration is implemented. Active work is now split across Outlook polish, Teams archive hardening, and document/memory infrastructure.
 
 Implemented:
 
@@ -332,12 +332,14 @@ New backend foundation implemented for Teams archive ingestion and search:
 - API routes:
   - `GET /api/teams-archive/status`
   - `POST /api/teams-archive/sync`
+  - `POST /api/teams-archive/cancel`
+  - `POST /api/teams-archive/reset`
   - `GET /api/teams-archive/conversations`
   - `GET /api/teams-archive/conversations/:chatId/messages`
   - `GET /api/teams-archive/search?q=...`
 - built-in Cortex tool:
   - `teams_archive_search`
-  - actions: `status`, `sync_archive`, `search_messages`, `advanced_search_messages`, `recent_messages`, `list_conversations`, `get_messages`, `get_messages_window`, `summarize_conversation`
+  - actions: `status`, `sync_archive`, `search_messages`, `advanced_search_messages`, `recent_messages`, `recent_meeting_chats`, `list_conversations`, `conversation_dossier`, `get_messages`, `conversation_recent_messages`, `conversation_sender_messages`, `conversation_activity_diagnostics`, `sender_identity_report`, `get_message_body`, `get_messages_window`, `summarize_conversation`
 - startup config now exposes `teamsArchiveEnabled`
 - `.env.example` now includes `TEAMS_ARCHIVE_*` variables
 
@@ -387,11 +389,29 @@ Enterprise retrieval status:
   - new envs:
     - `TEAMS_ARCHIVE_SYNC_STALE_MINUTES`
     - `TEAMS_ARCHIVE_MAX_CONCURRENT_SYNCS`
+    - `TEAMS_ARCHIVE_GRAPH_RETRY_ATTEMPTS`
+    - `TEAMS_ARCHIVE_GRAPH_RETRY_BASE_MS`
+    - `TEAMS_ARCHIVE_GRAPH_RETRY_MAX_MS`
+  - default `TEAMS_ARCHIVE_MAX_CONCURRENT_SYNCS` is now `1`
+  - Graph requests now retry `429`, `503`, and `504` with `Retry-After` aware backoff before failing the sync
   - status now exposes `activeSyncs` and `maxConcurrentSyncs` for operator visibility
 
 ## Most Recent Session Changes
 
 These are the most recent changes made in this session.
+
+### Teams archive sync hardening
+
+What changed:
+
+- lowered the default global Teams sync concurrency from `3` to `1` to reduce Graph throttling pressure during rollout
+- added explicit Graph retry knobs in `.env.example`:
+  - `TEAMS_ARCHIVE_GRAPH_RETRY_ATTEMPTS`
+  - `TEAMS_ARCHIVE_GRAPH_RETRY_BASE_MS`
+  - `TEAMS_ARCHIVE_GRAPH_RETRY_MAX_MS`
+- `TeamsArchiveService.graphRequest()` now honors `Retry-After` and retries `429`, `503`, and `504` responses before surfacing failure
+- added regression coverage in:
+  - [api/server/services/TeamsArchiveService.spec.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/TeamsArchiveService.spec.js:1)
 
 ### Document intelligence planning and Phase 1 kickoff
 

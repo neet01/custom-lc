@@ -1,4 +1,4 @@
-export type TeamsArchiveSyncStatus = 'running' | 'success' | 'failure' | 'cancelled';
+export type TeamsArchiveSyncStatus = 'running' | 'success' | 'partial' | 'failure' | 'cancelled';
 
 export type TeamsArchiveLatestSync = {
   id: string;
@@ -99,7 +99,7 @@ export type TeamsArchiveSyncConversation = {
   chatType: string;
   messageCount: number;
   lastMessageAt?: string;
-  syncStatus?: 'pending' | 'running' | 'complete' | 'failed';
+  syncStatus?: 'pending' | 'running' | 'complete' | 'failed' | 'deferred_failed';
 };
 
 export type TeamsArchiveSyncResponse = {

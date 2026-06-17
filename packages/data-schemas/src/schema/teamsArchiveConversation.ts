@@ -15,9 +15,16 @@ export interface ITeamsArchiveConversation extends Document {
   topic?: string;
   webUrl?: string;
   participants?: ITeamsArchiveParticipant[];
-  syncStatus?: 'pending' | 'running' | 'complete' | 'failed';
+  syncStatus?: 'pending' | 'running' | 'complete' | 'failed' | 'deferred_failed';
   syncCursor?: string;
   syncError?: string;
+  syncAttemptCount?: number;
+  syncDeferredAt?: Date;
+  syncDeferredReason?: string;
+  syncDeferredStatus?: number;
+  syncNeedsIntervention?: boolean;
+  nextRetryAt?: Date;
+  lastErrorStatus?: number;
   sourceDiscoveredAt?: Date;
   sourceLastMessageAt?: Date;
   syncStartedAt?: Date;
@@ -94,7 +101,7 @@ const teamsArchiveConversationSchema = new Schema<ITeamsArchiveConversation>(
     },
     syncStatus: {
       type: String,
-      enum: ['pending', 'running', 'complete', 'failed'],
+      enum: ['pending', 'running', 'complete', 'failed', 'deferred_failed'],
       default: 'pending',
       index: true,
     },
@@ -105,6 +112,32 @@ const teamsArchiveConversationSchema = new Schema<ITeamsArchiveConversation>(
     syncError: {
       type: String,
       maxlength: 2000,
+    },
+    syncAttemptCount: {
+      type: Number,
+      default: 0,
+    },
+    syncDeferredAt: {
+      type: Date,
+    },
+    syncDeferredReason: {
+      type: String,
+      maxlength: 256,
+    },
+    syncDeferredStatus: {
+      type: Number,
+    },
+    syncNeedsIntervention: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    nextRetryAt: {
+      type: Date,
+      index: true,
+    },
+    lastErrorStatus: {
+      type: Number,
     },
     sourceDiscoveredAt: {
       type: Date,
@@ -209,6 +242,7 @@ teamsArchiveConversationSchema.index({ user: 1, lastMessageAt: -1 });
 teamsArchiveConversationSchema.index({ user: 1, chatType: 1, lastMeaningfulMessageAt: -1, lastMessageAt: -1 });
 teamsArchiveConversationSchema.index({ user: 1, lastMeaningfulMessageAt: -1, updatedAt: -1 });
 teamsArchiveConversationSchema.index({ user: 1, syncStatus: 1, sourceUpdatedAt: -1, updatedAt: -1 });
+teamsArchiveConversationSchema.index({ user: 1, syncStatus: 1, nextRetryAt: 1 });
 teamsArchiveConversationSchema.index({ user: 1, sourceLastMessageAt: -1, updatedAt: -1 });
 teamsArchiveConversationSchema.index({ user: 1, participantDegraded: 1, updatedAt: -1 });
 teamsArchiveConversationSchema.index({ tenantId: 1, lastMessageAt: -1 });

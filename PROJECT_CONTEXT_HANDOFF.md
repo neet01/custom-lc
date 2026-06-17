@@ -1,5 +1,7 @@
 # LibreChat Enterprise Project Context Handoff
 
+Last updated: 2026-06-16
+
 This document is a high-signal handoff for another LLM or engineer.
 
 It is meant to answer:
@@ -35,7 +37,7 @@ Long-term goals include:
 - usage observability and admin oversight
 - budget awareness and anti-runaway-spend controls
 - native file transformation workflows
-- integrations for Jira, Confluence, Outlook, and eventually other Office 365 / enterprise tools
+- integrations for Jira, Confluence, SharePoint, Slack, and other Office 365 / enterprise tools
 - use of AWS Bedrock models and Bedrock-based agent patterns
 - future ability to execute enterprise tasks on behalf of users through safe integrations
 
@@ -218,7 +220,153 @@ Current scope:
 - read-only issue queue for admins
 - no triage workflow or status changes yet
 
-### 5. Native Spreadsheet File Workflow
+### 5. Outlook Workspace And AI Inbox
+
+Implemented:
+
+- Outlook workspace in the LibreChat sidebar with `Inbox` and `Calendar` tabs
+- delegated Microsoft Graph access through the shared OBO token path
+- folder-aware mailbox browsing with search, focused/other/all views, thread display, unread state updates, and delete actions
+- attachment awareness in both the mailbox list and selected-message view, plus same-origin attachment downloads
+- AI actions for:
+  - message analysis
+  - draft generation
+  - daily brief
+  - meeting-slot proposal
+  - meeting creation
+- calendar visibility and event CRUD inside LibreChat, including timezone-aware rendering and Teams meeting join links when present
+
+Main code areas:
+
+- [api/server/routes/outlook.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/outlook.js:1)
+- [api/server/services/OutlookService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/OutlookService.js:1)
+- [client/src/components/SidePanel/Outlook/Panel.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/SidePanel/Outlook/Panel.tsx:1)
+- [client/src/data-provider/Outlook/queries.ts](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/data-provider/Outlook/queries.ts:1)
+
+Feature flags/config:
+
+- `OUTLOOK_AI_ENABLED=true`
+- `.env.example` includes `OUTLOOK_GRAPH_*` and `OUTLOOK_AI_*` settings
+
+### 6. Outlook Audit Trail And Admin Visibility
+
+Implemented:
+
+- persistent `OutlookAudit` records for mailbox, calendar, attachment, and AI actions
+- admin endpoint for paginated Outlook audit review
+- admin dashboard surface for the audit stream
+- usage/balance persistence for Outlook AI actions through the same usage accounting path used elsewhere in the fork
+
+Main code areas:
+
+- [packages/data-schemas/src/schema/outlookAudit.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/outlookAudit.ts:1)
+- [packages/data-schemas/src/methods/outlookAudit.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/methods/outlookAudit.ts:1)
+- [api/server/routes/outlook.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/outlook.js:1)
+- [api/server/routes/admin/outlookAudit.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/admin/outlookAudit.js:1)
+- [client/src/components/Nav/SettingsTabs/Admin/Admin.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Nav/SettingsTabs/Admin/Admin.tsx:1)
+- [config/migrate-outlook-audit.js](/Users/praneetkotah/Desktop/Development/LibreChat/config/migrate-outlook-audit.js:1)
+
+Key endpoints:
+
+- `GET /api/outlook/*`
+- `POST /api/outlook/*`
+- `PATCH /api/outlook/*`
+- `DELETE /api/outlook/*`
+- `GET /api/admin/outlook-audit`
+
+### 7. Teams Archive And Retrieval
+
+Implemented:
+
+- user-scoped Teams chat archive sync with delegated Graph access
+- status, sync, cancel, and reset flows
+- archived conversation listing and message retrieval
+- lexical message search plus richer tool-driven retrieval paths
+- account-level Teams sync status card in the side-panel surface
+
+Main code areas:
+
+- [api/server/routes/teamsArchive.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/teamsArchive.js:1)
+- [api/server/services/TeamsArchiveService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/TeamsArchiveService.js:1)
+- [api/app/clients/tools/util/teamsArchive.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/app/clients/tools/util/teamsArchive.js:1)
+- [client/src/components/Nav/SettingsTabs/Account/TeamsArchiveStatus.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Nav/SettingsTabs/Account/TeamsArchiveStatus.tsx:1)
+- [packages/data-schemas/src/schema/teamsArchiveConversation.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/teamsArchiveConversation.ts:1)
+- [packages/data-schemas/src/schema/teamsArchiveMessage.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/teamsArchiveMessage.ts:1)
+- [packages/data-schemas/src/schema/teamsArchiveSyncJob.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/teamsArchiveSyncJob.ts:1)
+- [packages/data-schemas/src/schema/teamsArchiveBackfillState.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/teamsArchiveBackfillState.ts:1)
+- [packages/data-schemas/src/schema/teamsArchiveSyncLease.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/teamsArchiveSyncLease.ts:1)
+
+Current API/tool surface:
+
+- routes:
+  - `GET /api/teams-archive/status`
+  - `POST /api/teams-archive/sync`
+  - `POST /api/teams-archive/cancel`
+  - `POST /api/teams-archive/reset`
+  - `GET /api/teams-archive/conversations`
+  - `GET /api/teams-archive/conversations/:chatId/messages`
+  - `GET /api/teams-archive/search`
+- built-in tool:
+  - `teams_archive_search`
+  - actions include `recent_meeting_chats`, `conversation_dossier`, `conversation_recent_messages`, `conversation_sender_messages`, `conversation_activity_diagnostics`, `sender_identity_report`, `get_message_body`, `get_messages_window`, and `summarize_conversation`
+
+Current scope/limits:
+
+- chat archive only, not Teams channel export
+- access today is through API routes and the built-in tool, not a dedicated Teams workspace UI
+- retrieval is source-backed and bounded; it is not yet a fully semantic/vector stack
+
+### 8. Enterprise Memory Projection For Teams
+
+Implemented:
+
+- canonical memory persistence for:
+  - `EnterpriseMemoryEntity`
+  - `EnterpriseMemoryRelationship`
+  - `EnterpriseMemoryChunk`
+  - `EnterpriseMemoryJob`
+- Teams archive sync projects conversations, people, relationships, and message chunks into that canonical layer
+- retrieval paths such as `advanced_search_messages` and `recent_messages` attempt enterprise-memory lookup first and fall back to the source archive when needed
+
+Main code areas:
+
+- [api/server/services/EnterpriseMemory/teamsProjection.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/EnterpriseMemory/teamsProjection.js:1)
+- [api/server/services/EnterpriseMemory/retrieval.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/EnterpriseMemory/retrieval.js:1)
+- [packages/data-schemas/src/schema/enterpriseMemoryEntity.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/enterpriseMemoryEntity.ts:1)
+- [packages/data-schemas/src/schema/enterpriseMemoryRelationship.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/enterpriseMemoryRelationship.ts:1)
+- [packages/data-schemas/src/schema/enterpriseMemoryChunk.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/enterpriseMemoryChunk.ts:1)
+- [packages/data-schemas/src/schema/enterpriseMemoryJob.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/enterpriseMemoryJob.ts:1)
+
+Current limits:
+
+- retrieval is still lexical/structured, not OpenSearch/vector-backed
+- cross-source linking between Teams, Outlook, documents, Jira, and Confluence is not implemented yet
+- projection failure is tracked separately and does not invalidate the underlying Teams archive sync
+
+### 9. Document Pipeline Scaffolding
+
+Implemented:
+
+- canonical document persistence for:
+  - `Document`
+  - `DocumentVersion`
+  - `DocumentJob`
+- upload registration now creates durable document-side records for document-like uploads
+- oversized Bedrock uploads can be converted into text-backed document pipeline inputs instead of remaining provider-bound attachments
+
+Main code areas:
+
+- [api/server/services/Documents/register.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Documents/register.js:1)
+- [api/server/services/Files/process.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/Files/process.js:1)
+- [packages/data-schemas/src/schema/document.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/document.ts:1)
+- [packages/data-schemas/src/schema/documentVersion.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/documentVersion.ts:1)
+- [packages/data-schemas/src/schema/documentJob.ts](/Users/praneetkotah/Desktop/Development/LibreChat/packages/data-schemas/src/schema/documentJob.ts:1)
+
+Current limit:
+
+- worker consumption of `DocumentJob` records is not implemented yet, so this is durable scaffolding rather than a complete document-intelligence runtime
+
+### 10. Native Spreadsheet File Workflow
 
 Implemented natively in LibreChat, not as an MCP integration.
 
@@ -258,7 +406,7 @@ Known limitation:
 - preserving VBA/macros is not currently implemented
 - the agreed product direction was to ask finance users to upload non-macro spreadsheets for now
 
-### 6. Native Word Document Workflow
+### 11. Native Word Document Workflow
 
 Implemented natively in LibreChat, not as an MCP integration.
 
@@ -287,7 +435,7 @@ Known limitation:
 - it does not preserve complex source formatting, tables, comments, or tracked changes
 - if the backend document transform succeeds but the UI only shows pasted text, also inspect `ToolService.js` / run-content handling for file artifact streaming
 
-### 7. Enterprise Debugging Guide
+### 12. Enterprise Debugging Guide
 
 Added:
 
@@ -456,37 +604,26 @@ Key design choice:
 
 This repo is intentionally separate from LibreChat.
 
-## Outlook Planning Context
+## Outlook Implementation Context
 
-This was discussed as planning only and has not been implemented yet.
+Outlook is implemented in this repo today through LibreChat itself.
 
-The user had tried building a custom Outlook add-in in GCC High and ran into `brk://` / broker redirect issues.
+Current scope:
 
-Planning conclusion:
+- mailbox and folder access
+- thread/message viewing
+- attachment visibility and downloads
+- read-state updates and delete actions
+- AI analysis and drafting actions
+- daily brief / meeting-slot proposal / meeting creation flows
+- calendar browsing plus event create/update/delete
+- audit logging and usage tracking around Outlook actions
 
-- integrate Outlook with LibreChat first
-- treat the custom Outlook add-in as a later phase if needed
+The older GCC High Outlook add-in discussion is still relevant only as future context:
 
-Reasoning:
-
-- LibreChat already provides admin controls, issue reporting, usage tracking, and future tool orchestration
-- building Outlook features in LibreChat first is lower-risk than immediately debugging Office host behavior plus GCC High auth plus deployment issues
-
-Planning notes already established:
-
-- Outlook add-ins using modern Office auth patterns can require broker-style redirects such as `brk-multihub://...`
-- GCC High requires government cloud endpoints, not public cloud defaults
-- likely future Outlook capabilities should include:
-  - search mail
-  - summarize threads
-  - draft replies
-  - create calendar events
-  - possibly action flows gated by approval or policy
-
-Recommended future direction:
-
-- make Outlook another governed enterprise integration surfaced through LibreChat
-- later, if needed, build an Outlook add-in as a thin shell that launches or complements LibreChat
+- Office add-ins can require broker-style redirects such as `brk-multihub://...`
+- GCC High still requires government-cloud endpoints rather than public-cloud defaults
+- if an Outlook add-in is built later, the better pattern is a thin shell over this existing LibreChat Outlook backend rather than a separate duplicate implementation
 
 ## Things Explicitly Not Done Yet
 
@@ -499,7 +636,11 @@ The following items were discussed but not implemented yet:
 - issue triage workflow with status changes
 - high-fidelity `.docx` round-trip with full formatting preservation
 - true `.xlsm` macro-preserving spreadsheet support
-- full Outlook integration
+- thin Outlook add-in shell, if that product surface is still wanted later
+- Teams channel export / channel archive support
+- cross-source enterprise-memory linking across Teams, Outlook, documents, Jira, Confluence, and Slack
+- semantic/vector retrieval on top of enterprise memory
+- worker-driven execution of `DocumentJob` records
 - final production deployment architecture in AWS GovCloud
 
 ## Current Product Position
@@ -507,11 +648,16 @@ The following items were discussed but not implemented yet:
 At the current point in the project:
 
 - LibreChat has enterprise-specific observability additions
+- Outlook workspace is implemented inside the product
+- Outlook actions write audit and usage records
+- Teams archive, status tracking, and archive-backed retrieval are implemented
+- Teams now project into a canonical enterprise-memory layer
 - users can report failures inside the platform
 - admins can see usage and issue reports
 - users have a budget-style progress indicator
 - native file workflows now exist for spreadsheets and Word docs
-- external integrations are planned with a separate MCP services repo
+- document-pipeline persistence scaffolding is implemented
+- external Jira/Confluence-style integrations are still intended to live in the separate MCP services repo
 
 This is a strong platform foundation, but not the finished EnterpriseGPT end state.
 
@@ -524,15 +670,21 @@ If another model picks this up, the likely next high-value threads are:
 - per-workspace limits
 - clearer admin cost views
 
-2. Mature native file workflows
+2. Harden Teams retrieval and enterprise memory
+- validate throttling/backoff behavior under real sync load
+- improve retrieval completeness and diagnostics
+- continue moving high-value queries off raw archive scans where practical
+
+3. Mature native file workflows and the document pipeline
 - richer spreadsheet analytical outputs
 - better Word fidelity
+- worker execution for `DocumentJob`
 
-3. Wire enterprise integrations into LibreChat
+4. Wire remaining enterprise integrations into LibreChat
 - start with Jira/Confluence end-to-end
-- then Outlook
+- then SharePoint/Slack-style sources
 
-4. Add enterprise auth/RBAC
+5. Add enterprise auth/RBAC
 - Entra group claims
 - admin/user role enforcement tied to enterprise identity
 

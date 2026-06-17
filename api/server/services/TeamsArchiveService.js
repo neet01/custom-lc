@@ -29,15 +29,25 @@ const DEFAULT_CHAT_LIMIT = 50;
 const DEFAULT_MESSAGES_PER_CHAT = 250;
 const DEFAULT_SEARCH_LIMIT = 25;
 const DEFAULT_SYNC_STALE_MINUTES = 45;
-const DEFAULT_MAX_CONCURRENT_SYNCS = 3;
+const DEFAULT_MAX_CONCURRENT_SYNCS = 1;
 const DEFAULT_DISCOVERY_REFRESH_HOURS = 12;
-const DEFAULT_DISCOVERY_CONCURRENCY = 4;
+const DEFAULT_DISCOVERY_CONCURRENCY = 2;
 const DEFAULT_MEMBER_ENRICHMENT_MODE = 'adaptive';
 const DEFAULT_MEMBER_ENRICHMENT_FAILURE_THRESHOLD = 8;
 const DEFAULT_CONVERSATION_DOSSIER_MAX_MESSAGES = 20000;
 const DEFAULT_RECENCY_BACKFILL_MAX_MESSAGES = 100000;
+const DEFAULT_GRAPH_RETRY_ATTEMPTS = 5;
+const DEFAULT_GRAPH_RETRY_BASE_MS = 1000;
+const DEFAULT_GRAPH_RETRY_MAX_MS = 60000;
 const HEARTBEAT_MIN_INTERVAL_MS = 30 * 1000;
 const HEARTBEAT_CHAT_INTERVAL = 5;
+const DEFAULT_MESSAGE_PAGE_DELAY_MS = 300;
+const ENSURE_ACTIVE_CHECK_INTERVAL_MS = 10 * 1000;
+const BACKFILL_SNAPSHOT_THROTTLE_MS = 60 * 1000;
+const DEFAULT_DEFERRED_FAILURE_MAX_ATTEMPTS = 5;
+const DEFAULT_DEFERRED_FAILURE_BACKOFF_BASE_MS = 5 * 60 * 1000;
+const DEFAULT_DEFERRED_FAILURE_BACKOFF_MAX_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_DEFERRED_FAILURE_RUN_BUDGET = 5;
 
 class TeamsArchiveServiceError extends Error {
   constructor(message, status = 500, details) {
@@ -59,6 +69,11 @@ function isTeamsArchiveEnabled() {
   return isEnabled(process.env.TEAMS_ARCHIVE_ENABLED);
 }
 
+function clampPositiveInt(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
 function normalizeGraphBaseUrl(baseUrl = DEFAULT_GRAPH_BASE_URL) {
   const trimmed = String(baseUrl || DEFAULT_GRAPH_BASE_URL)
     .trim()
@@ -76,6 +91,9 @@ function getTeamsArchiveConfig() {
   const parsedMemberLookupFailureThreshold = Number(
     process.env.TEAMS_ARCHIVE_MEMBER_ENRICHMENT_FAILURE_THRESHOLD,
   );
+  const parsedGraphRetryAttempts = Number(process.env.TEAMS_ARCHIVE_GRAPH_RETRY_ATTEMPTS);
+  const parsedGraphRetryBaseMs = Number(process.env.TEAMS_ARCHIVE_GRAPH_RETRY_BASE_MS);
+  const parsedGraphRetryMaxMs = Number(process.env.TEAMS_ARCHIVE_GRAPH_RETRY_MAX_MS);
   const memberEnrichmentMode = String(
     process.env.TEAMS_ARCHIVE_MEMBER_ENRICHMENT_MODE || DEFAULT_MEMBER_ENRICHMENT_MODE,
   )
@@ -115,6 +133,40 @@ function getTeamsArchiveConfig() {
       Number.isFinite(parsedMaxConcurrentSyncs) && parsedMaxConcurrentSyncs >= 0
         ? Math.floor(parsedMaxConcurrentSyncs)
         : DEFAULT_MAX_CONCURRENT_SYNCS,
+    graphRetryAttempts:
+      Number.isFinite(parsedGraphRetryAttempts) && parsedGraphRetryAttempts >= 0
+        ? Math.min(Math.floor(parsedGraphRetryAttempts), 10)
+        : DEFAULT_GRAPH_RETRY_ATTEMPTS,
+    graphRetryBaseMs:
+      Number.isFinite(parsedGraphRetryBaseMs) && parsedGraphRetryBaseMs >= 0
+        ? Math.floor(parsedGraphRetryBaseMs)
+        : DEFAULT_GRAPH_RETRY_BASE_MS,
+    graphRetryMaxMs:
+      Number.isFinite(parsedGraphRetryMaxMs) && parsedGraphRetryMaxMs >= 0
+        ? Math.floor(parsedGraphRetryMaxMs)
+        : DEFAULT_GRAPH_RETRY_MAX_MS,
+    messagePageDelayMs:
+      Number.isFinite(Number(process.env.TEAMS_ARCHIVE_MESSAGE_PAGE_DELAY_MS)) &&
+      Number(process.env.TEAMS_ARCHIVE_MESSAGE_PAGE_DELAY_MS) >= 0
+        ? Number(process.env.TEAMS_ARCHIVE_MESSAGE_PAGE_DELAY_MS)
+        : DEFAULT_MESSAGE_PAGE_DELAY_MS,
+    deferredFailureEnabled: isEnabled(process.env.TEAMS_ARCHIVE_DEFERRED_FAILURE_ENABLED),
+    deferredFailureMaxAttempts: clampPositiveInt(
+      process.env.TEAMS_ARCHIVE_DEFERRED_FAILURE_MAX_ATTEMPTS,
+      DEFAULT_DEFERRED_FAILURE_MAX_ATTEMPTS,
+    ),
+    deferredFailureBackoffBaseMs: clampPositiveInt(
+      process.env.TEAMS_ARCHIVE_DEFERRED_FAILURE_BACKOFF_BASE_MS,
+      DEFAULT_DEFERRED_FAILURE_BACKOFF_BASE_MS,
+    ),
+    deferredFailureBackoffMaxMs: clampPositiveInt(
+      process.env.TEAMS_ARCHIVE_DEFERRED_FAILURE_BACKOFF_MAX_MS,
+      DEFAULT_DEFERRED_FAILURE_BACKOFF_MAX_MS,
+    ),
+    deferredFailureRunBudget: clampPositiveInt(
+      process.env.TEAMS_ARCHIVE_DEFERRED_FAILURE_RUN_BUDGET,
+      DEFAULT_DEFERRED_FAILURE_RUN_BUDGET,
+    ),
   };
 }
 
@@ -210,6 +262,56 @@ async function parseGraphError(response) {
   }
 }
 
+function getHeaderValue(headers, name) {
+  if (!headers) {
+    return '';
+  }
+
+  if (typeof headers.get === 'function') {
+    return headers.get(name) || headers.get(name.toLowerCase()) || '';
+  }
+
+  return headers[name] || headers[name.toLowerCase()] || '';
+}
+
+function parseRetryAfterMs(headers) {
+  const retryAfter = String(getHeaderValue(headers, 'retry-after') || '').trim();
+  if (!retryAfter) {
+    return null;
+  }
+
+  const retryAfterSeconds = Number(retryAfter);
+  if (Number.isFinite(retryAfterSeconds)) {
+    return Math.max(0, retryAfterSeconds * 1000);
+  }
+
+  const retryAfterDate = new Date(retryAfter);
+  if (!Number.isNaN(retryAfterDate.getTime())) {
+    return Math.max(0, retryAfterDate.getTime() - Date.now());
+  }
+
+  return null;
+}
+
+function isRetryableGraphStatus(status) {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function computeGraphRetryDelayMs(response, attemptNumber, config = getTeamsArchiveConfig()) {
+  const retryAfterMs = parseRetryAfterMs(response?.headers);
+  if (retryAfterMs !== null) {
+    return Math.min(retryAfterMs, config.graphRetryMaxMs);
+  }
+
+  const exponentialDelay = config.graphRetryBaseMs * 2 ** Math.max(0, attemptNumber - 1);
+  const jitter = config.graphRetryBaseMs > 0 ? Math.floor(Math.random() * config.graphRetryBaseMs) : 0;
+  return Math.min(exponentialDelay + jitter, config.graphRetryMaxMs);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
 async function graphRequest(user, pathname, options = {}) {
   const token = await getDelegatedGraphToken(user, options.scopes);
   const url = buildGraphUrl(pathname, options.query);
@@ -223,11 +325,33 @@ async function graphRequest(user, pathname, options = {}) {
     headers['Content-Type'] = 'application/json';
   }
 
-  const response = await fetch(url, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
+  const config = getTeamsArchiveConfig();
+  const maxRetries = Math.max(0, options.maxRetries ?? config.graphRetryAttempts);
+  let response = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    response = await fetch(url, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    });
+
+    if (response.ok || !isRetryableGraphStatus(response.status) || attempt >= maxRetries) {
+      break;
+    }
+
+    const retryDelayMs = computeGraphRetryDelayMs(response, attempt + 1, config);
+    if (!options.suppressErrorLog) {
+      logger.warn('[TeamsArchiveService] Microsoft Graph request throttled; retrying', {
+        status: response.status,
+        path: pathname,
+        attempt: attempt + 1,
+        maxRetries,
+        retryDelayMs,
+      });
+    }
+    await sleep(retryDelayMs);
+  }
 
   if (!response.ok) {
     const graphMessage = await parseGraphError(response);
@@ -2249,6 +2373,22 @@ function isRecoverableChatMessageError(error) {
   );
 }
 
+function isDeferrableChatMessageError(error) {
+  return (
+    error?.name === 'TeamsArchiveServiceError' &&
+    (error?.status === 500 || error?.status === 502 || error?.status === 503 || error?.status === 504)
+  );
+}
+
+function isGraphThrottleError(error) {
+  return error?.name === 'TeamsArchiveServiceError' && error?.status === 429;
+}
+
+function computeConversationRetryDelayMs(attemptNumber, config) {
+  const exponentialDelay = config.deferredFailureBackoffBaseMs * 2 ** Math.max(0, attemptNumber - 1);
+  return Math.min(exponentialDelay, config.deferredFailureBackoffMaxMs);
+}
+
 function getSyncHeartbeatReference(job) {
   return (
     toDate(job?.updatedAt) ||
@@ -2380,10 +2520,21 @@ async function getSyncJobById(syncJobId) {
   return db.findTeamsArchiveSyncJobById(syncJobId);
 }
 
+const ensureActiveLastChecked = new Map();
+
 async function ensureSyncJobActive(syncJobId) {
+  const now = Date.now();
+  const lastChecked = ensureActiveLastChecked.get(syncJobId) ?? 0;
+
+  if (now - lastChecked < ENSURE_ACTIVE_CHECK_INTERVAL_MS) {
+    return null;
+  }
+
+  ensureActiveLastChecked.set(syncJobId, now);
   const currentJob = await getSyncJobById(syncJobId);
 
   if (currentJob?.status === 'cancelled') {
+    ensureActiveLastChecked.delete(syncJobId);
     throw new TeamsArchiveSyncCancelledError();
   }
 
@@ -2555,8 +2706,23 @@ function computeBackfillLifecycleStatus({
   return 'idle';
 }
 
+const backfillSnapshotLastRefreshed = new Map();
+
 async function refreshBackfillStateSnapshot(userId, updates = {}, options = {}) {
-  const { includeMessageCount = true, hasActiveSync = false } = options;
+  const { includeMessageCount = true, hasActiveSync = false, force = false } = options;
+
+  const now = Date.now();
+  const lastRefreshed = backfillSnapshotLastRefreshed.get(userId) ?? 0;
+  const throttled = !force && now - lastRefreshed < BACKFILL_SNAPSHOT_THROTTLE_MS;
+
+  if (throttled) {
+    return db.upsertTeamsArchiveBackfillState({
+      user: userId,
+      lastHeartbeatAt: new Date(),
+      ...updates,
+    });
+  }
+
   const [discoveredChatCount, completedChatCount, pendingChatCount, runningChatCount, failedChatCount, totalMessageCount] =
     await Promise.all([
       db.countTeamsArchiveConversations({ user: userId }),
@@ -2568,6 +2734,8 @@ async function refreshBackfillStateSnapshot(userId, updates = {}, options = {}) 
         ? db.countTeamsArchiveMessages({ user: userId })
         : Promise.resolve(undefined),
     ]);
+
+  backfillSnapshotLastRefreshed.set(userId, now);
 
   const nextState = {
     user: userId,
@@ -3191,7 +3359,7 @@ async function syncUserArchive(user, options = {}) {
       lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
       errorMessage: '',
       lastDiscoveredAt: shouldRefreshDiscovery ? new Date() : existingBackfillState?.lastDiscoveredAt,
-    }, { includeMessageCount: false, hasActiveSync: true });
+    }, { includeMessageCount: false, hasActiveSync: true, force: true });
 
     const syncedConversations = [];
     let processedChats = 0;
@@ -3210,6 +3378,10 @@ async function syncUserArchive(user, options = {}) {
       alreadyComplete: 0,
     };
     const completedGraphChatIds = new Set();
+    const deferredGraphChatIds = new Set();
+    let consecutiveDeferrals = 0;
+    let runCooldownTriggered = false;
+    let runBudgetExceeded = false;
     const memberLookupController = createMemberLookupController(config);
 
     while (!discoveryComplete && discoveredThisRun < chatLimit) {
@@ -3371,16 +3543,23 @@ async function syncUserArchive(user, options = {}) {
       { userLeaseKey, slotLeaseKey, ownerToken },
     );
 
-    const conversationsToSync = await db.findTeamsArchiveConversations(
-      {
-        user: userId,
-        syncStatus: { $in: ['pending', 'running', 'failed'] },
-      },
-      {
-        limit: chatLimit,
-        sort: { sourceUpdatedAt: -1, sourceLastMessageAt: -1, updatedAt: -1 },
-      },
-    );
+    const conversationSelectionFilter = config.deferredFailureEnabled
+      ? {
+          user: userId,
+          $or: [
+            { syncStatus: { $in: ['pending', 'running', 'failed'] } },
+            { syncStatus: 'deferred_failed', nextRetryAt: { $lte: new Date() } },
+          ],
+        }
+      : {
+          user: userId,
+          syncStatus: { $in: ['pending', 'running', 'failed'] },
+        };
+
+    const conversationsToSync = await db.findTeamsArchiveConversations(conversationSelectionFilter, {
+      limit: chatLimit,
+      sort: { sourceUpdatedAt: -1, sourceLastMessageAt: -1, updatedAt: -1 },
+    });
 
     for (const conversation of conversationsToSync) {
       await ensureSyncJobActive(syncJob._id?.toString?.() || syncJob.id);
@@ -3394,6 +3573,8 @@ async function syncUserArchive(user, options = {}) {
       let nextMessageCursor = conversation?.syncCursor || null;
       let latestMessageAt = conversation?.lastMessageAt || null;
       let conversationFailed = false;
+      let conversationDeferred = false;
+      let deferredErrorStatus = null;
       let reachedIncrementalCutoff = false;
       const inferredMessageParticipants = [];
       const inferredMentionParticipants = [];
@@ -3452,22 +3633,45 @@ async function syncUserArchive(user, options = {}) {
           if (!nextMessageCursor || reachedIncrementalCutoff) {
             break;
           }
+
+          if (config.messagePageDelayMs > 0) {
+            await sleep(config.messagePageDelayMs);
+          }
         }
       } catch (error) {
-        if (!isRecoverableChatMessageError(error)) {
+        if (isRecoverableChatMessageError(error)) {
+          conversationFailed = true;
+          skippedMessageChats += 1;
+          logger.warn('[TeamsArchiveService] Failed to list chat messages; continuing sync', {
+            userId,
+            syncJobId: syncJob._id?.toString?.() || syncJob.id,
+            chatId: conversation.graphChatId,
+            chatType,
+            status: error?.status,
+            details: error?.details,
+          });
+        } else if (config.deferredFailureEnabled && isGraphThrottleError(error)) {
+          runCooldownTriggered = true;
+          logger.warn('[TeamsArchiveService] Microsoft Graph throttling exhausted; cooling down run', {
+            userId,
+            syncJobId: syncJob._id?.toString?.() || syncJob.id,
+            chatId: conversation.graphChatId,
+            chatType,
+            status: error?.status,
+          });
+        } else if (config.deferredFailureEnabled && isDeferrableChatMessageError(error)) {
+          conversationDeferred = true;
+          deferredErrorStatus = error?.status ?? null;
+          logger.warn('[TeamsArchiveService] Conversation deferred after exhausted transient Graph error', {
+            userId,
+            syncJobId: syncJob._id?.toString?.() || syncJob.id,
+            chatId: conversation.graphChatId,
+            chatType,
+            status: error?.status,
+          });
+        } else {
           throw error;
         }
-
-        conversationFailed = true;
-        skippedMessageChats += 1;
-        logger.warn('[TeamsArchiveService] Failed to list chat messages; continuing sync', {
-          userId,
-          syncJobId: syncJob._id?.toString?.() || syncJob.id,
-          chatId: conversation.graphChatId,
-          chatType,
-          status: error?.status,
-          details: error?.details,
-        });
       }
 
       const messageCountForConversation = await db.countTeamsArchiveMessages({
@@ -3486,7 +3690,11 @@ async function syncUserArchive(user, options = {}) {
         },
       );
       const searchabilityStats = summarizeMessageSearchability(archivedMessagesForStats);
-      const isConversationComplete = !conversationFailed && (incrementalRefresh || !nextMessageCursor);
+      const isConversationComplete =
+        !conversationFailed &&
+        !conversationDeferred &&
+        !runCooldownTriggered &&
+        (incrementalRefresh || !nextMessageCursor);
       const enrichedParticipants = mergeConversationParticipants({
         graphParticipants: toArray(conversation?.participants).filter(
           (participant) => participant?.source === 'graph' || participant?.source === 'mixed',
@@ -3497,12 +3705,54 @@ async function syncUserArchive(user, options = {}) {
         memberLookupFailed: Boolean(conversation?.participantDegraded),
       });
 
+      let deferredFields = {};
+      if (conversationDeferred) {
+        const nextAttempt = (conversation?.syncAttemptCount || 0) + 1;
+        const needsIntervention = nextAttempt >= config.deferredFailureMaxAttempts;
+        deferredFields = {
+          syncAttemptCount: nextAttempt,
+          syncDeferredAt: new Date(),
+          syncDeferredReason: 'transient_graph_error',
+          syncDeferredStatus: deferredErrorStatus,
+          lastErrorStatus: deferredErrorStatus,
+          syncNeedsIntervention: needsIntervention,
+          nextRetryAt: needsIntervention
+            ? null
+            : new Date(Date.now() + computeConversationRetryDelayMs(nextAttempt, config)),
+        };
+        deferredGraphChatIds.add(conversation.graphChatId);
+        consecutiveDeferrals += 1;
+        if (consecutiveDeferrals >= config.deferredFailureRunBudget) {
+          runBudgetExceeded = true;
+        }
+      } else if (!runCooldownTriggered) {
+        consecutiveDeferrals = 0;
+      }
+
+      const syncStatusValue = conversationDeferred
+        ? 'deferred_failed'
+        : conversationFailed
+          ? 'failed'
+          : isConversationComplete
+            ? 'complete'
+            : 'pending';
+
       const conversationRecord = await db.updateTeamsArchiveConversation(conversationId, {
-        syncStatus: conversationFailed ? 'failed' : isConversationComplete ? 'complete' : 'pending',
+        syncStatus: syncStatusValue,
         syncCursor:
-          conversationFailed || incrementalRefresh ? undefined : nextMessageCursor || undefined,
-        syncError: conversationFailed ? 'Message sync skipped due to Graph permissions or missing chat data' : '',
+          conversationDeferred || conversationFailed || incrementalRefresh
+            ? undefined
+            : nextMessageCursor || undefined,
+        syncError: conversationDeferred
+          ? 'Message sync deferred after exhausted transient Microsoft Graph error; will retry'
+          : conversationFailed
+            ? 'Message sync skipped due to Graph permissions or missing chat data'
+            : '',
         syncCompletedAt: isConversationComplete ? new Date() : undefined,
+        ...deferredFields,
+        ...(isConversationComplete
+          ? { syncAttemptCount: 0, syncNeedsIntervention: false, nextRetryAt: null, syncDeferredReason: '' }
+          : {}),
         lastMessageSyncAt: new Date(),
         lastSyncedAt: new Date(),
         lastMessageAt: latestMessageAt || conversation?.lastMessageAt,
@@ -3579,7 +3829,22 @@ async function syncUserArchive(user, options = {}) {
           lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
         }, { includeMessageCount: false, hasActiveSync: true });
       }
+
+      if (runCooldownTriggered || runBudgetExceeded) {
+        logger.warn('[TeamsArchiveService] Stopping run early', {
+          userId,
+          syncJobId: syncJob._id?.toString?.() || syncJob.id,
+          reason: runCooldownTriggered ? 'graph_throttle_cooldown' : 'deferred_failure_budget_exceeded',
+          consecutiveDeferrals,
+          deferredConversationCount: deferredGraphChatIds.size,
+        });
+        break;
+      }
     }
+
+    const runIsPartial =
+      deferredGraphChatIds.size > 0 || runCooldownTriggered || runBudgetExceeded;
+    const runStatusValue = runIsPartial ? 'partial' : 'success';
 
     const backfillSnapshot = await refreshBackfillStateSnapshot(userId, {
       nextChatPageLink,
@@ -3587,7 +3852,7 @@ async function syncUserArchive(user, options = {}) {
       lastSyncJobId: syncJob._id?.toString?.() || syncJob.id,
       lastCompletedAt: discoveryComplete ? new Date() : undefined,
       errorMessage: '',
-    }, { hasActiveSync: false });
+    }, { hasActiveSync: false, force: true });
 
     logger.info('[TeamsArchiveService] Sync completed', {
       userId,
@@ -3607,7 +3872,7 @@ async function syncUserArchive(user, options = {}) {
     });
 
     const updatedJob = await db.updateTeamsArchiveSyncJob(syncJob._id?.toString?.() || syncJob.id, {
-      status: 'success',
+      status: runStatusValue,
       phase: 'complete',
       checkpoint: buildSyncJobCheckpoint({
         phase: 'complete',
@@ -3623,6 +3888,15 @@ async function syncUserArchive(user, options = {}) {
         discoveryDecisionSummary,
         processedChatTypeSummary,
         memberLookup: memberLookupController.stats,
+        deferral: {
+          enabled: config.deferredFailureEnabled,
+          runStatus: runStatusValue,
+          deferredConversationCount: deferredGraphChatIds.size,
+          deferredGraphChatIds: [...deferredGraphChatIds],
+          cooldownTriggered: runCooldownTriggered,
+          budgetExceeded: runBudgetExceeded,
+          consecutiveDeferralsAtEnd: consecutiveDeferrals,
+        },
         backfillState: {
           discoveredChatCount: backfillSnapshot?.discoveredChatCount || 0,
           completedChatCount: backfillSnapshot?.completedChatCount || 0,
@@ -3647,6 +3921,8 @@ async function syncUserArchive(user, options = {}) {
             tenantId: user?.tenantId,
             syncJobId: updatedJob?._id?.toString?.() || syncJob._id?.toString?.() || syncJob.id,
             graphChatIds: [...completedGraphChatIds],
+            runStatus: runStatusValue,
+            deferredGraphChatIds: [...deferredGraphChatIds],
           }) || {
             status: 'skipped',
             reason: 'enterprise_memory_projection_unavailable',
@@ -3708,6 +3984,12 @@ async function syncUserArchive(user, options = {}) {
     }, { includeMessageCount: false });
     throw error;
   } finally {
+    const syncJobId = syncJob?._id?.toString?.() || syncJob?.id;
+    if (syncJobId) {
+      ensureActiveLastChecked.delete(syncJobId);
+    }
+    backfillSnapshotLastRefreshed.delete(userId);
+
     const releaseOperations = [releaseSyncLease(userLeaseKey, ownerToken)];
 
     if (slotLeaseKey) {

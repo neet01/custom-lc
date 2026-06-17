@@ -107,6 +107,18 @@ function buildChunkSearchClauses(value) {
   return { phraseRegex, termRegexes, clauses };
 }
 
+function isTextSearchEnabled() {
+  return /^(true|1|yes|on)$/i.test(String(process.env.TEAMS_ARCHIVE_TEXT_SEARCH_ENABLED || '').trim());
+}
+
+function buildTextSearchString(value) {
+  const terms = buildTopicTerms(value);
+  if (terms.length > 0) {
+    return terms.join(' ');
+  }
+  return String(value || '').trim();
+}
+
 function getUserSenderClauses(user) {
   const normalizedEmail = String(user?.email || '')
     .trim()
@@ -221,7 +233,7 @@ async function searchTeamsMemoryChunks(user, options = {}) {
   }
 
   const senderClauses = getUserSenderClauses(user);
-  const chunkFilter = {
+  const baseChunkFilter = {
     user: userId,
     source: 'teams',
     sourceRecordType: 'teams_message',
@@ -236,14 +248,41 @@ async function searchTeamsMemoryChunks(user, options = {}) {
           ? { $nor: senderClauses }
           : {}
         : {}),
+  };
+
+  const regexChunkFilter = {
+    ...baseChunkFilter,
     ...(topicChunkClauses.length > 0 ? { $and: topicChunkClauses } : {}),
   };
 
-  const chunks = await db.findEnterpriseMemoryChunks(chunkFilter, {
-    limit,
-    offset,
-    sort: sortBy === 'oldest' ? { sourceTimestamp: 1, orderIndex: 1 } : { sourceTimestamp: -1, orderIndex: -1 },
-  });
+  const recencySort =
+    sortBy === 'oldest' ? { sourceTimestamp: 1, orderIndex: 1 } : { sourceTimestamp: -1, orderIndex: -1 };
+  const textSearchString = buildTextSearchString(topic);
+  const useTextSearch =
+    isTextSearchEnabled() && Boolean(textSearchString) && topicChunkClauses.length > 0;
+
+  let chunks;
+  let searchBackend = 'regex';
+  let textSearchFellBack = false;
+
+  if (useTextSearch) {
+    const textChunkFilter = { ...baseChunkFilter, $text: { $search: textSearchString } };
+    chunks = await db.findEnterpriseMemoryChunks(textChunkFilter, {
+      limit,
+      offset,
+      sort: sortBy === 'oldest' ? { sourceTimestamp: 1 } : { sourceTimestamp: -1 },
+      textScore: sortBy !== 'oldest',
+    });
+    searchBackend = 'text';
+
+    if (chunks.length === 0) {
+      chunks = await db.findEnterpriseMemoryChunks(regexChunkFilter, { limit, offset, sort: recencySort });
+      searchBackend = 'regex';
+      textSearchFellBack = true;
+    }
+  } else {
+    chunks = await db.findEnterpriseMemoryChunks(regexChunkFilter, { limit, offset, sort: recencySort });
+  }
 
   const conversationIds = [...new Set(chunks.map((chunk) => chunk.sourceParentRecordId).filter(Boolean))];
   const conversations = conversationIds.length
@@ -268,6 +307,8 @@ async function searchTeamsMemoryChunks(user, options = {}) {
       'These are compact enterprise-memory previews. If one conversation stands out, summarize that conversation before expanding to a bounded message window.',
     trace: {
       backend: 'enterprise_memory',
+      searchBackend,
+      textSearchFellBack,
       conversationPrefilterApplied: shouldPrefilterConversations,
       chatIdScoped: Boolean(scopedGraphChatId),
       topicPrefilterApplied: false,

@@ -859,6 +859,7 @@ export type TStartupConfig = {
   sharePointPickerGraphScope?: string;
   sharePointPickerSharePointScope?: string;
   outlookAIEnabled?: boolean;
+  slackArchiveEnabled?: boolean;
   teamsArchiveEnabled?: boolean;
   outlookGraphBaseUrl?: string;
   outlookGraphScopes?: string;

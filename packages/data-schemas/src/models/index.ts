@@ -31,6 +31,12 @@ import { createPromptModel } from './prompt';
 import { createPromptGroupModel } from './promptGroup';
 import { createConversationTagModel } from './conversationTag';
 import { createSharedLinkModel } from './sharedLink';
+import { createSlackArchiveConversationModel } from './slackArchiveConversation';
+import { createSlackArchiveMessageModel } from './slackArchiveMessage';
+import { createSlackArchiveSyncLeaseModel } from './slackArchiveSyncLease';
+import { createSlackArchiveSyncJobModel } from './slackArchiveSyncJob';
+import { createSlackIdentityLinkModel } from './slackIdentityLink';
+import { createSlackWorkspaceInstallModel } from './slackWorkspaceInstall';
 import { createTeamsArchiveConversationModel } from './teamsArchiveConversation';
 import { createTeamsArchiveBackfillStateModel } from './teamsArchiveBackfillState';
 import { createTeamsArchiveMessageModel } from './teamsArchiveMessage';
@@ -82,6 +88,12 @@ export function createModels(mongoose: typeof import('mongoose')) {
     PromptGroup: createPromptGroupModel(mongoose),
     ConversationTag: createConversationTagModel(mongoose),
     SharedLink: createSharedLinkModel(mongoose),
+    SlackArchiveConversation: createSlackArchiveConversationModel(mongoose),
+    SlackArchiveMessage: createSlackArchiveMessageModel(mongoose),
+    SlackArchiveSyncLease: createSlackArchiveSyncLeaseModel(mongoose),
+    SlackArchiveSyncJob: createSlackArchiveSyncJobModel(mongoose),
+    SlackIdentityLink: createSlackIdentityLinkModel(mongoose),
+    SlackWorkspaceInstall: createSlackWorkspaceInstallModel(mongoose),
     TeamsArchiveBackfillState: createTeamsArchiveBackfillStateModel(mongoose),
     TeamsArchiveConversation: createTeamsArchiveConversationModel(mongoose),
     TeamsArchiveMessage: createTeamsArchiveMessageModel(mongoose),

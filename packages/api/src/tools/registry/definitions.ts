@@ -394,6 +394,58 @@ export const teamsArchiveSchema: ExtendedJsonSchema = {
   required: ['action'],
 };
 
+export const slackArchiveSchema: ExtendedJsonSchema = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['status', 'sync_archive', 'search_messages', 'list_conversations', 'get_messages'],
+      description:
+        'Use status to check Slack archive readiness, sync_archive to begin Slack archive ingestion scaffolding, search_messages for lexical discovery, list_conversations for channel or DM selection, and get_messages to inspect one selected conversation.',
+    },
+    query: {
+      type: 'string',
+      description:
+        'For search_messages: a short search phrase. Do not pass the full user question.',
+    },
+    conversationId: {
+      type: 'string',
+      description:
+        'Stable Slack conversation identity, such as a channel id or DM id. Use this for follow-up retrieval in one selected conversation.',
+    },
+    senderUserId: {
+      type: 'string',
+      description: 'Optional Slack user id to restrict search_messages to one sender.',
+    },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description:
+        'Optional result limit for searches and message retrieval. Keep this small unless exhaustive output is requested.',
+    },
+    offset: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 100000,
+      description: 'Optional pagination offset for list and search operations.',
+    },
+    conversationLimit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 10000,
+      description: 'For sync_archive: maximum number of Slack conversations to ingest.',
+    },
+    messagesPerConversation: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 5000,
+      description: 'For sync_archive: maximum number of messages to ingest per Slack conversation.',
+    },
+  },
+  required: ['action'],
+};
+
 /** Wolfram Alpha tool JSON schema */
 export const wolframSchema: ExtendedJsonSchema = {
   type: 'object',
@@ -954,6 +1006,13 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
     description:
       'Search and retrieve archived Microsoft Teams chats. Always pass priorGraphChatId from selectedConversation for follow-up questions. Use recent_meeting_chats for recent meeting requests, conversation_recent_messages with selectedConversation.graphChatId for follow-up latest/new-message requests, conversation_sender_messages for messages from me/a person and inspect zeroResultDiagnostics before saying no messages exist, conversation_activity_diagnostics for recency/searchability explanations, sender_identity_report for sender matching uncertainty, and respect evidenceBudget/identityChanged before definitive answers.',
     schema: teamsArchiveSchema,
+    toolType: 'builtin',
+  },
+  slack_archive_search: {
+    name: 'slack_archive_search',
+    description:
+      'Search and retrieve archived Slack messages. Current scope supports status, lexical search, conversation listing, and per-conversation message retrieval. Sync scaffolding exists but GovSlack OAuth/token ingestion is not implemented yet.',
+    schema: slackArchiveSchema,
     toolType: 'builtin',
   },
   image_gen_oai: {

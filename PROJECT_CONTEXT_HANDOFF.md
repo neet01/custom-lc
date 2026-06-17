@@ -343,6 +343,55 @@ Current limits:
 - cross-source linking between Teams, Outlook, documents, Jira, and Confluence is not implemented yet
 - projection failure is tracked separately and does not invalidate the underlying Teams archive sync
 
+### 8a. Slack Archive / GovSlack Scaffold
+
+Implemented:
+
+- GovSlack archive persistence scaffolding for:
+  - `SlackArchiveConversation`
+  - `SlackArchiveMessage`
+  - `SlackArchiveSyncJob`
+  - `SlackArchiveSyncLease`
+- backend routes for:
+  - `GET /api/slack-archive/status`
+  - `GET /api/slack-archive/oauth/start`
+  - `GET /api/slack-archive/oauth/callback`
+  - `POST /api/slack-archive/sync`
+  - `POST /api/slack-archive/cancel`
+  - `POST /api/slack-archive/reset`
+  - `GET /api/slack-archive/conversations`
+  - `GET /api/slack-archive/conversations/:conversationId/messages`
+  - `GET /api/slack-archive/search`
+- built-in Cortex tool:
+  - `slack_archive_search`
+- side-panel Slack archive status card now lives in the MCP builder surface directly under the Teams archive card
+
+Main code areas:
+
+- [api/server/services/SlackArchiveService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/SlackArchiveService.js:1)
+- [api/server/services/SlackArchiveOAuthService.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/SlackArchiveOAuthService.js:1)
+- [api/server/routes/slackArchive.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/routes/slackArchive.js:1)
+- [api/app/clients/tools/util/slackArchive.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/app/clients/tools/util/slackArchive.js:1)
+- [client/src/components/Nav/SettingsTabs/Account/SlackArchiveStatus.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/Nav/SettingsTabs/Account/SlackArchiveStatus.tsx:1)
+- [client/src/components/SidePanel/MCPBuilder/MCPBuilderPanel.tsx](/Users/praneetkotah/Desktop/Development/LibreChat/client/src/components/SidePanel/MCPBuilder/MCPBuilderPanel.tsx:1)
+
+Current scope/limits:
+
+- current implementation is scaffold-level only for GovSlack archive support
+- GovSlack OAuth install/callback is wired, but Slack Web API conversation/message ingestion is not implemented yet
+- sync attempts currently fail intentionally with `501` until ingestion is added
+- current token persistence is stored per Cortex user for development convenience; production should move the bot/workspace install into a dedicated workspace-scoped install model
+- there is not yet a `SlackIdentityLink` or equivalent mapping from `team_id + slack_user_id` to the Cortex/Entra user, so future `/Cortex` DM or channel flows are not ready
+
+GovSlack-specific design decisions:
+
+- use GovSlack domains and app configuration, not commercial Slack defaults:
+  - OAuth authorize host: `https://slack-gov.com`
+  - API base: `https://slack-gov.com/api`
+- keep the archive and the future bot as thin adapters into the existing Cortex runtime, retrieval, and enterprise-memory pipeline
+- for the future interactive bot, prefer a dedicated `slack_worker` or equivalent event consumer rather than bolting Slack event handling into the main web process
+- shared-channel and group-chat responses should default to the least-privileged safe surface, typically DM or ephemeral response patterns where possible
+
 ### 9. Document Pipeline Scaffolding
 
 Implemented:

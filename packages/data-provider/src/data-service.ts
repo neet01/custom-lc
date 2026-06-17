@@ -8,6 +8,7 @@ import * as q from './types/queries';
 import * as f from './types/files';
 import * as mcp from './types/mcpServers';
 import * as o from './types/outlook';
+import * as sa from './types/slackArchive';
 import * as ta from './types/teamsArchive';
 import * as config from './config';
 import request from './request';
@@ -118,6 +119,24 @@ export function updateOutlookMessageReadState(
 
 export function getOutlookDailyBrief(): Promise<o.OutlookDailyBriefResponse> {
   return request.post(endpoints.outlookDailyBrief(), {});
+}
+
+export function getSlackArchiveStatus(): Promise<sa.SlackArchiveStatusResponse> {
+  return request.get(endpoints.slackArchiveStatus());
+}
+
+export function syncSlackArchive(
+  payload: sa.SlackArchiveSyncRequest = {},
+): Promise<sa.SlackArchiveSyncResponse> {
+  return request.post(endpoints.slackArchiveSync(), payload);
+}
+
+export function cancelSlackArchiveSync(): Promise<sa.SlackArchiveCancelResponse> {
+  return request.post(endpoints.slackArchiveCancel(), {});
+}
+
+export function resetSlackArchive(): Promise<sa.SlackArchiveResetResponse> {
+  return request.post(endpoints.slackArchiveReset(), { confirm: true });
 }
 
 export function getTeamsArchiveStatus(): Promise<ta.TeamsArchiveStatusResponse> {

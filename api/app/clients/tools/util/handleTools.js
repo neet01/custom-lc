@@ -50,6 +50,7 @@ const {
   createWordDocumentTool,
   primeFiles: primeWordDocumentFiles,
 } = require('./wordDocument');
+const { SLACK_ARCHIVE_TOOL_NAME, createSlackArchiveTool } = require('./slackArchive');
 const { TEAMS_ARCHIVE_TOOL_NAME, createTeamsArchiveTool } = require('./teamsArchive');
 const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
 const { getUserPluginAuthValue } = require('~/server/services/PluginService');
@@ -369,6 +370,12 @@ const loadTools = async ({
     } else if (tool === TEAMS_ARCHIVE_TOOL_NAME) {
       requestedTools[tool] = async () =>
         createTeamsArchiveTool({
+          req: options.req,
+        });
+      continue;
+    } else if (tool === SLACK_ARCHIVE_TOOL_NAME) {
+      requestedTools[tool] = async () =>
+        createSlackArchiveTool({
           req: options.req,
         });
       continue;

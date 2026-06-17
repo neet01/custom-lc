@@ -5,6 +5,7 @@ import { Button, Spinner, FilterInput, OGDialogTrigger, TooltipAnchor } from '@l
 import { useLocalize, useMCPServerManager, useHasAccess } from '~/hooks';
 import { useGetStartupConfig } from '~/data-provider';
 import MCPConfigDialog from '~/components/MCP/MCPConfigDialog';
+import SlackArchiveStatus from '~/components/Nav/SettingsTabs/Account/SlackArchiveStatus';
 import TeamsArchiveStatus from '~/components/Nav/SettingsTabs/Account/TeamsArchiveStatus';
 import MCPAdminSettings from './MCPAdminSettings';
 import MCPServerDialog from './MCPServerDialog';
@@ -95,6 +96,12 @@ export default function MCPBuilderPanel() {
         {startupConfig?.teamsArchiveEnabled === true && (
           <div className="pt-2">
             <TeamsArchiveStatus />
+          </div>
+        )}
+
+        {startupConfig?.slackArchiveEnabled === true && (
+          <div className="pt-2">
+            <SlackArchiveStatus />
           </div>
         )}
 

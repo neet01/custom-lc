@@ -19,6 +19,10 @@ const {
   TEAMS_ARCHIVE_TOOL_NAME,
   teamsArchiveJsonSchema,
 } = require('~/app/clients/tools/util/teamsArchive');
+const {
+  SLACK_ARCHIVE_TOOL_NAME,
+  slackArchiveJsonSchema,
+} = require('~/app/clients/tools/util/slackArchive');
 
 const customBuiltinToolDefinitions = [
   {
@@ -38,6 +42,12 @@ const customBuiltinToolDefinitions = [
     description:
       'Search and retrieve archived Microsoft Teams chats that were previously ingested into Cortex. Always provide an "action" parameter. For a normal query, use action="search_messages".',
     schema: teamsArchiveJsonSchema,
+  },
+  {
+    name: SLACK_ARCHIVE_TOOL_NAME,
+    description:
+      'Search and retrieve archived Slack messages that were previously ingested into Cortex. Always provide an "action" parameter. Use action="search_messages" for normal lexical discovery.',
+    schema: slackArchiveJsonSchema,
   },
 ];
 

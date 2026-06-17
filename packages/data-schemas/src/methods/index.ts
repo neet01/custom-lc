@@ -34,6 +34,7 @@ import { createPresetMethods, type PresetMethods } from './preset';
 import { createConversationTagMethods, type ConversationTagMethods } from './conversationTag';
 import { createMessageMethods, type MessageMethods } from './message';
 import { createConversationMethods, type ConversationMethods } from './conversation';
+import { createSlackArchiveMethods, type SlackArchiveMethods } from './slackArchive';
 import { createTeamsArchiveMethods, type TeamsArchiveMethods } from './teamsArchive';
 /* Tier 3 — Complex (heavier injection) */
 import {
@@ -95,6 +96,7 @@ export type AllMethods = UserMethods &
   TxMethods &
   TransactionMethods &
   SpendTokensMethods &
+  SlackArchiveMethods &
   TeamsArchiveMethods &
   IssueReportMethods &
   OutlookAuditMethods &
@@ -147,6 +149,7 @@ export function createMethods(
   });
 
   const issueReportMethods = createIssueReportMethods(mongoose);
+  const slackArchiveMethods = createSlackArchiveMethods(mongoose);
   const teamsArchiveMethods = createTeamsArchiveMethods(mongoose);
   const outlookAuditMethods = createOutlookAuditMethods(mongoose);
   const usageMethods = createUsageMethods(mongoose);
@@ -226,6 +229,7 @@ export function createMethods(
     ...txMethods,
     ...transactionMethods,
     ...spendTokensMethods,
+    ...slackArchiveMethods,
     ...teamsArchiveMethods,
     ...issueReportMethods,
     ...outlookAuditMethods,
@@ -269,6 +273,7 @@ export type {
   TxMethods,
   TransactionMethods,
   SpendTokensMethods,
+  SlackArchiveMethods,
   TeamsArchiveMethods,
   OutlookAuditMethods,
   UsageMethods,

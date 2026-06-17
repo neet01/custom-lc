@@ -70,6 +70,7 @@ export const messagesArtifacts = (messageId: string) => `${messagesRoot}/artifac
 export const messagesBranch = () => `${messagesRoot}/branch`;
 
 const outlookRoot = `${BASE_URL}/api/outlook`;
+const slackArchiveRoot = `${BASE_URL}/api/slack-archive`;
 const teamsArchiveRoot = `${BASE_URL}/api/teams-archive`;
 
 export const outlookStatus = () => `${outlookRoot}/status`;
@@ -108,6 +109,11 @@ export const outlookUpdateMessageReadState = (messageId: string) =>
   `${outlookMessage(messageId)}/read`;
 
 export const outlookDailyBrief = () => `${outlookRoot}/daily-brief`;
+
+export const slackArchiveStatus = () => `${slackArchiveRoot}/status`;
+export const slackArchiveSync = () => `${slackArchiveRoot}/sync`;
+export const slackArchiveCancel = () => `${slackArchiveRoot}/cancel`;
+export const slackArchiveReset = () => `${slackArchiveRoot}/reset`;
 
 export const teamsArchiveStatus = () => `${teamsArchiveRoot}/status`;
 export const teamsArchiveSync = () => `${teamsArchiveRoot}/sync`;

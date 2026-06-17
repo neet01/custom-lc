@@ -393,8 +393,47 @@ Enterprise retrieval status:
     - `TEAMS_ARCHIVE_GRAPH_RETRY_BASE_MS`
     - `TEAMS_ARCHIVE_GRAPH_RETRY_MAX_MS`
   - default `TEAMS_ARCHIVE_MAX_CONCURRENT_SYNCS` is now `1`
-  - Graph requests now retry `429`, `503`, and `504` with `Retry-After` aware backoff before failing the sync
-  - status now exposes `activeSyncs` and `maxConcurrentSyncs` for operator visibility
+- Graph requests now retry `429`, `503`, and `504` with `Retry-After` aware backoff before failing the sync
+- status now exposes `activeSyncs` and `maxConcurrentSyncs` for operator visibility
+
+### Slack archive / GovSlack
+
+New GovSlack scaffolding is now in the repo for the Slack side of the same workflow:
+
+- persistence schemas for:
+  - `SlackArchiveConversation`
+  - `SlackArchiveMessage`
+  - `SlackArchiveSyncJob`
+  - `SlackArchiveSyncLease`
+- backend routes:
+  - `GET /api/slack-archive/status`
+  - `GET /api/slack-archive/oauth/start`
+  - `GET /api/slack-archive/oauth/callback`
+  - `POST /api/slack-archive/sync`
+  - `POST /api/slack-archive/cancel`
+  - `POST /api/slack-archive/reset`
+  - `GET /api/slack-archive/conversations`
+  - `GET /api/slack-archive/conversations/:conversationId/messages`
+  - `GET /api/slack-archive/search?q=...`
+- built-in Cortex tool:
+  - `slack_archive_search`
+- startup config now exposes `slackArchiveEnabled`
+- side-panel Slack archive card now renders in the MCP builder directly under the Teams archive card
+
+Current scope:
+
+- GovSlack OAuth start/callback and status wiring exist
+- archive sync, retrieval endpoints, and the built-in tool all exist at the contract level
+- actual Slack Web API ingestion is still not implemented, so sync currently returns an expected `501`
+- current OAuth token storage is a temporary per-user scaffold and should be replaced with:
+  - a workspace-scoped GovSlack install record for the bot token
+  - a `SlackIdentityLink`-style mapping for `team_id + slack_user_id -> Cortex user / Entra identity`
+
+Important future-bot direction:
+
+- the future `/Cortex` DM and group-chat experience should be a thin front-end on top of the existing Cortex runtime, not a separate agent stack
+- prefer a dedicated GovSlack worker or event-consumer service for Socket Mode / events handling instead of pushing Slack event processing into the main web server
+- reuse the same retrieval, memory, and policy layers already being built for Teams and enterprise memory
 
 ## Most Recent Session Changes
 
@@ -412,6 +451,26 @@ What changed:
 - `TeamsArchiveService.graphRequest()` now honors `Retry-After` and retries `429`, `503`, and `504` responses before surfacing failure
 - added regression coverage in:
   - [api/server/services/TeamsArchiveService.spec.js](/Users/praneetkotah/Desktop/Development/LibreChat/api/server/services/TeamsArchiveService.spec.js:1)
+
+### GovSlack archive scaffold and side-panel trigger
+
+What changed:
+
+- added GovSlack archive persistence, route, and built-in tool scaffolding
+- added GovSlack OAuth install/callback wiring with signed state validation
+- tightened callback return handling so only relative or same-origin `returnTo` values are carried through the OAuth round-trip
+- added a new Slack archive status card in the MCP builder panel directly under the Teams archive card
+- added the client data-provider surface for:
+  - Slack archive status
+  - sync
+  - cancel
+  - reset
+
+Current product truth:
+
+- the UI trigger is now in place where expected
+- GovSlack install testing can proceed once credentials are available
+- live archive sync will still stop at the current expected `501` until Slack conversation/message ingestion is implemented
 
 ### Document intelligence planning and Phase 1 kickoff
 

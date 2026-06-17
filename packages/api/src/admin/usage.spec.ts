@@ -248,6 +248,20 @@ describe('createAdminUsageHandlers', () => {
       getCacheMultiplier: jest
         .fn()
         .mockImplementation(({ cacheType }) => (cacheType === 'write' ? 3.75 : 0.3)),
+      resolveFinanceUserOrgMetadata: jest.fn().mockResolvedValue(
+        new Map([
+          [
+            '507f1f77bcf86cd799439011',
+            {
+              graphUserId: 'graph-user-1',
+              team: 'Finance Operations',
+              role: 'Budget Analyst',
+              company: 'Example Co',
+              officeLocation: 'HQ',
+            },
+          ],
+        ]),
+      ),
     });
     const { req, res, status, send, setHeader } = createReqRes({ days: '30' });
 
@@ -262,6 +276,9 @@ describe('createAdminUsageHandlers', () => {
 
     const csv = (send as jest.Mock).mock.calls[0][0] as string;
     expect(csv).toContain('estimated_total_cost_usd');
+    expect(csv).toContain('org_team');
+    expect(csv).toContain('Finance Operations');
+    expect(csv).toContain('Budget Analyst');
     expect(csv).toContain('finance@example.com');
     expect(csv).toContain('claude-sonnet-4-5');
     expect(csv).toContain('0.006390');

@@ -3,6 +3,7 @@ const { createAdminUsageHandlers } = require('@librechat/api');
 const { SystemCapabilities } = require('@librechat/data-schemas');
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
 const { requireJwtAuth } = require('~/server/middleware');
+const { resolveFinanceUserOrgMetadata } = require('~/server/services/AdminFinanceOrgService');
 const db = require('~/models');
 
 const router = express.Router();
@@ -19,6 +20,7 @@ const handlers = createAdminUsageHandlers({
   getValueKey: db.getValueKey,
   getMultiplier: db.getMultiplier,
   getCacheMultiplier: db.getCacheMultiplier,
+  resolveFinanceUserOrgMetadata,
 });
 
 router.use(requireJwtAuth, requireAdminAccess);

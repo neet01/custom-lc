@@ -327,26 +327,49 @@ export function createSlackArchiveMethods(mongoose: typeof import('mongoose')) {
   ): Promise<ISlackArchiveSyncLease | null> {
     try {
       const SlackArchiveSyncLease = mongoose.models.SlackArchiveSyncLease as Model<ISlackArchiveSyncLease>;
-      return (await SlackArchiveSyncLease.findOneAndUpdate(
+      const now = new Date();
+      const updates = {
+        leaseType: record.leaseType,
+        ownerToken: record.ownerToken,
+        user: record.user,
+        leaseExpiresAt: record.leaseExpiresAt,
+        lastHeartbeatAt: record.lastHeartbeatAt || now,
+      };
+
+      const acquiredLease = await SlackArchiveSyncLease.findOneAndUpdate(
         {
           leaseKey: record.leaseKey,
           $or: [
-            { leaseExpiresAt: { $lte: new Date() } },
+            { leaseExpiresAt: { $lte: now } },
             { ownerToken: record.ownerToken },
           ],
         },
         {
-          $set: record,
-          $setOnInsert: {
-            leaseKey: record.leaseKey,
-          },
+          $set: updates,
         },
         {
           new: true,
-          upsert: true,
         },
-      )) as ISlackArchiveSyncLease | null;
+      );
+
+      if (acquiredLease) {
+        return acquiredLease as ISlackArchiveSyncLease;
+      }
+
+      const existingLease = await SlackArchiveSyncLease.findOne({ leaseKey: record.leaseKey }).lean();
+      if (existingLease) {
+        return null;
+      }
+
+      return (await SlackArchiveSyncLease.create({
+        leaseKey: record.leaseKey,
+        ...updates,
+      })) as ISlackArchiveSyncLease;
     } catch (error) {
+      if ((error as { code?: number })?.code === 11000) {
+        return null;
+      }
+
       logger.error('[acquireSlackArchiveSyncLease] Error acquiring Slack archive sync lease', error);
       throw new Error('Error acquiring Slack archive sync lease');
     }

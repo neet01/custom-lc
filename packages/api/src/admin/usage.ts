@@ -54,13 +54,25 @@ export interface AdminUsageDeps {
     endpoint?: string;
     endpointTokenConfig?: Record<string, Record<string, number>>;
   }) => number | null;
+  resolveFinanceUserOrgMetadata?: (
+    users: IUser[],
+    requester?: IUser,
+  ) => Promise<Map<string, FinanceUserOrgMetadata>>;
 }
 
-const USER_SUMMARY_FIELDS = '_id name username email avatar role provider';
+const USER_SUMMARY_FIELDS = '_id name username email avatar role provider openidId idOnTheSource';
 const DEFAULT_SUMMARY_DAYS = 30;
 const MAX_SUMMARY_DAYS = 365;
 const USD_PER_MILLION_TOKENS = 1_000_000;
 const CSV_PRICING_BASIS = 'repo_model_pricing_usd_per_1m_tokens';
+
+export type FinanceUserOrgMetadata = {
+  graphUserId?: string;
+  team?: string;
+  role?: string;
+  company?: string;
+  officeLocation?: string;
+};
 
 type EstimatedUsageCost = {
   inputCostUsd: number;
@@ -78,6 +90,11 @@ type FinanceReportRow = {
   email: string;
   role: string;
   provider: string;
+  graphUserId: string;
+  orgTeam: string;
+  orgRole: string;
+  orgCompany: string;
+  orgOfficeLocation: string;
   requestCount: number;
   pricedRequestCount: number;
   unpricedRequestCount: number;
@@ -244,6 +261,11 @@ function buildFinanceReportCsv(
     'email',
     'role',
     'provider',
+    'graph_user_id',
+    'org_team',
+    'org_role',
+    'org_company',
+    'org_office_location',
     'request_count',
     'priced_request_count',
     'unpriced_request_count',
@@ -276,6 +298,11 @@ function buildFinanceReportCsv(
       row.email,
       row.role,
       row.provider,
+      row.graphUserId,
+      row.orgTeam,
+      row.orgRole,
+      row.orgCompany,
+      row.orgOfficeLocation,
       row.requestCount,
       row.pricedRequestCount,
       row.unpricedRequestCount,
@@ -519,6 +546,11 @@ export function createAdminUsageHandlers(deps: AdminUsageDeps) {
           | 'email'
           | 'role'
           | 'provider'
+          | 'graphUserId'
+          | 'orgTeam'
+          | 'orgRole'
+          | 'orgCompany'
+          | 'orgOfficeLocation'
           | 'requestCount'
           | 'totalTokens'
           | 'inputTokens'
@@ -572,9 +604,15 @@ export function createAdminUsageHandlers(deps: AdminUsageDeps) {
         }
       }
 
+      const orgMetadataByUserId =
+        deps.resolveFinanceUserOrgMetadata != null
+          ? await deps.resolveFinanceUserOrgMetadata(users, req.user)
+          : new Map<string, FinanceUserOrgMetadata>();
+
       const rows: FinanceReportRow[] = usageByUser.map((item) => {
         const user = usersById.get(item.userId);
         const cost = costByUser.get(item.userId);
+        const orgMetadata = orgMetadataByUserId.get(item.userId);
         return {
           userId: item.userId,
           name: user?.name ?? '',
@@ -582,6 +620,11 @@ export function createAdminUsageHandlers(deps: AdminUsageDeps) {
           email: user?.email ?? '',
           role: user?.role ?? 'USER',
           provider: user?.provider ?? 'local',
+          graphUserId: orgMetadata?.graphUserId ?? '',
+          orgTeam: orgMetadata?.team ?? '',
+          orgRole: orgMetadata?.role ?? '',
+          orgCompany: orgMetadata?.company ?? '',
+          orgOfficeLocation: orgMetadata?.officeLocation ?? '',
           requestCount: item.requestCount,
           pricedRequestCount: cost?.pricedRequestCount ?? 0,
           unpricedRequestCount: cost?.unpricedRequestCount ?? item.requestCount,
@@ -609,6 +652,11 @@ export function createAdminUsageHandlers(deps: AdminUsageDeps) {
         email: '',
         role: '',
         provider: '',
+        graphUserId: '',
+        orgTeam: '',
+        orgRole: '',
+        orgCompany: '',
+        orgOfficeLocation: '',
         requestCount: overviewSummary.requestCount,
         pricedRequestCount: rows.reduce((sum, row) => sum + row.pricedRequestCount, 0),
         unpricedRequestCount: rows.reduce((sum, row) => sum + row.unpricedRequestCount, 0),

@@ -105,4 +105,34 @@ describe('SlackArchiveService', () => {
       },
     });
   });
+
+  it('does not fall back to raw archive search for advanced search by default', async () => {
+    searchSlackMemoryChunks.mockResolvedValue({
+      retrievalMode: 'enterprise_memory',
+      source: 'slack',
+      trace: {
+        backend: 'enterprise_memory',
+        searchBackend: 'text',
+      },
+      resultCount: 0,
+      results: [],
+    });
+
+    const result = await SlackArchiveService.advancedSearchMessages(user, {
+      topic: 'budget approval',
+      limit: 4,
+    });
+
+    expect(searchSlackMemoryChunks).toHaveBeenCalled();
+    expect(db.findSlackArchiveMessages).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      retrievalMode: 'advanced_indexed_slack_memory',
+      resultCount: 0,
+      trace: {
+        backend: 'enterprise_memory',
+        archiveFallbackRan: false,
+        archiveFallbackDisabled: true,
+      },
+    });
+  });
 });

@@ -49,6 +49,10 @@ function isSlackArchiveEnabled() {
   return isEnabled(process.env.SLACK_ARCHIVE_ENABLED);
 }
 
+function isAdvancedArchiveFallbackEnabled() {
+  return isEnabled(process.env.SLACK_ARCHIVE_ADVANCED_SEARCH_ARCHIVE_FALLBACK_ENABLED);
+}
+
 function assertEnabled() {
   if (!isSlackArchiveEnabled()) {
     throw new SlackArchiveServiceError('Slack archive is not enabled', 403);
@@ -1642,6 +1646,28 @@ async function advancedSearchMessages(user, options = {}) {
         archiveFallbackRan: false,
         memorySearchError: null,
       },
+    };
+  }
+
+  if (!isAdvancedArchiveFallbackEnabled()) {
+    return {
+      ...(memoryResults || {}),
+      retrievalMode: 'advanced_indexed_slack_memory',
+      source: 'slack',
+      topic: query,
+      guidance:
+        'Indexed Slack memory returned no results or was unavailable. The advanced Slack search does not run raw archive fallback by default; use search_messages only when exact lexical archive fallback is intentionally needed.',
+      trace: {
+        ...(memoryResults?.trace || {}),
+        backend: memoryResults?.trace?.backend || 'enterprise_memory',
+        memorySearched: typeof searchSlackMemoryChunks === 'function',
+        memoryResultCount,
+        archiveFallbackRan: false,
+        archiveFallbackDisabled: true,
+        memorySearchError: memorySearchError?.message || null,
+      },
+      resultCount: 0,
+      results: [],
     };
   }
 

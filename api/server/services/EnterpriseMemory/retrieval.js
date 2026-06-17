@@ -163,6 +163,16 @@ function mapCompactParticipants(participants = [], max = 4) {
     .map((participant) => ({
       displayName: participant?.displayName || '',
       email: participant?.email || '',
+    }))
+    .filter((participant) => participant.displayName || participant.email);
+}
+
+function mapCompactSlackParticipants(participants = [], max = 4) {
+  return toArray(participants)
+    .slice(0, max)
+    .map((participant) => ({
+      displayName: participant?.displayName || participant?.realName || participant?.username || '',
+      email: participant?.email || '',
       slackUserId: participant?.slackUserId || '',
     }))
     .filter((participant) => participant.displayName || participant.email || participant.slackUserId);
@@ -549,7 +559,7 @@ async function searchSlackMemoryChunks(user, options = {}) {
         conversationName: conversation?.name || '',
         topic: conversation?.topic || '',
         conversationType: conversation?.conversationType || chunk?.metadata?.conversationType || '',
-        participants: mapCompactParticipants(conversation?.participants || []),
+        participants: mapCompactSlackParticipants(conversation?.participants || []),
         fromDisplayName: chunk?.metadata?.displayName || chunk?.metadata?.username || '',
         slackUserId: chunk?.metadata?.slackUserId || '',
         threadTs: chunk?.metadata?.threadTs || '',

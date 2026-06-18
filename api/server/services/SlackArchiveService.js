@@ -1074,6 +1074,22 @@ async function syncSingleConversation({
   };
 }
 
+/**
+ * Merges a discovered Slack channel with its upserted conversation record.
+ * `upsertSlackArchiveConversation` returns a hydrated Mongoose document, and
+ * spreading one with `{ ...doc }` drops every schema field (they live behind
+ * getters on `doc._doc`). That previously left `slackConversationId`/`_id`
+ * undefined, which starved the memory projection of conversation ids and
+ * produced zero searchable chunks. Always normalize to a plain object first.
+ */
+function toDiscoveredConversation(channel, upsertedConversation) {
+  const plainConversation =
+    typeof upsertedConversation?.toObject === 'function'
+      ? upsertedConversation.toObject()
+      : upsertedConversation;
+  return { channel, ...plainConversation };
+}
+
 async function performArchiveSync(syncJobId, user, options = {}) {
   const userId = getUserId(user);
   const connection = await getSlackConnectionForUser(user);
@@ -1135,10 +1151,7 @@ async function performArchiveSync(syncJobId, user, options = {}) {
         sourceDiscoveredAt: discoveredAt,
       });
 
-      discoveredConversations.push({
-        channel,
-        ...upsertedConversation,
-      });
+      discoveredConversations.push(toDiscoveredConversation(channel, upsertedConversation));
     }
 
     await db.updateSlackArchiveSyncJob(syncJobId, {
@@ -1769,6 +1782,7 @@ module.exports = {
   SlackArchiveServiceError,
   getSlackArchiveConfig,
   getUserId,
+  toDiscoveredConversation,
   getStatus,
   getSyncStartAvailability,
   syncUserArchive,

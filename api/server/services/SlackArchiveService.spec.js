@@ -138,6 +138,28 @@ describe('SlackArchiveService', () => {
     });
   });
 
+  it('preserves conversation fields when merging a hydrated Mongoose doc (regression: empty projection)', () => {
+    const mongoose = require('mongoose');
+    const schema = new mongoose.Schema({
+      slackConversationId: String,
+      name: String,
+      syncAttemptCount: Number,
+    });
+    const Model =
+      mongoose.models.SlackArchiveConvRegression ||
+      mongoose.model('SlackArchiveConvRegression', schema);
+    const hydratedDoc = new Model({ slackConversationId: 'C001', name: 'ops', syncAttemptCount: 0 });
+
+    expect({ ...hydratedDoc }.slackConversationId).toBeUndefined();
+
+    const channel = { id: 'C001', name: 'ops' };
+    const merged = SlackArchiveService.toDiscoveredConversation(channel, hydratedDoc);
+
+    expect(merged.slackConversationId).toBe('C001');
+    expect(merged._id).toBeDefined();
+    expect(merged.channel).toBe(channel);
+  });
+
   it('resolves an internal conversation id before listing exact Slack messages', async () => {
     db.findSlackArchiveConversations.mockResolvedValue([
       {

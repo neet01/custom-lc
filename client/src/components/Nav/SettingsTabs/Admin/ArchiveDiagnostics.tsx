@@ -320,7 +320,7 @@ export default function ArchiveDiagnostics() {
   };
 
   return (
-    <section className="flex min-h-[55vh] flex-col rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-sm">
+    <section className="min-h-[55vh] overflow-visible rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-sm">
       <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <h3 className="text-sm font-semibold text-text-primary">Archive indexing diagnostics</h3>
@@ -485,8 +485,8 @@ export default function ArchiveDiagnostics() {
             </div>
           ) : null}
 
-          <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-2xl border border-border-medium">
-            <table className="min-w-full divide-y divide-border-medium text-left">
+          <div className="mt-4 w-full overflow-x-auto overflow-y-visible rounded-2xl border border-border-medium">
+            <table className="min-w-[72rem] divide-y divide-border-medium text-left">
               <thead className="bg-surface-secondary">
                 <tr className="text-xs uppercase tracking-wide text-text-secondary">
                   <th className="py-2 pl-4 pr-4 font-medium">Health</th>

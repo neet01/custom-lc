@@ -301,6 +301,7 @@ if (cluster.isMaster) {
     app.use('/oauth', routes.oauth);
     app.use('/api/auth', routes.auth);
     app.use('/api/admin', routes.adminAuth);
+    app.use('/api/admin/archive-diagnostics', routes.adminArchiveDiagnostics);
     app.use('/api/admin/issues', routes.adminIssues);
     app.use('/api/admin/outlook-audit', routes.adminOutlookAudit);
     app.use('/api/actions', routes.actions);

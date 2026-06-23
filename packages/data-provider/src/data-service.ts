@@ -10,6 +10,7 @@ import * as mcp from './types/mcpServers';
 import * as o from './types/outlook';
 import * as sa from './types/slackArchive';
 import * as ta from './types/teamsArchive';
+import * as ad from './types/archiveDiagnostics';
 import * as config from './config';
 import request from './request';
 import * as s from './schemas';
@@ -125,10 +126,12 @@ export function getSlackArchiveStatus(): Promise<sa.SlackArchiveStatusResponse> 
   return request.get(endpoints.slackArchiveStatus());
 }
 
-export function getSlackArchiveInstallUrl(params: {
-  team?: string;
-  returnTo?: string;
-} = {}): Promise<{ installUrl: string; redirectUri: string; state: string }> {
+export function getSlackArchiveInstallUrl(
+  params: {
+    team?: string;
+    returnTo?: string;
+  } = {},
+): Promise<{ installUrl: string; redirectUri: string; state: string }> {
   return request.get(endpoints.slackArchiveOAuthStart(params));
 }
 
@@ -298,6 +301,12 @@ export function getAdminUsage(
   params: q.AdminUsageListParams = {},
 ): Promise<q.AdminUsageListResponse> {
   return request.get(endpoints.adminUsage(params));
+}
+
+export function getAdminArchiveDiagnostics(
+  params: ad.ArchiveDiagnosticsParams = {},
+): Promise<ad.ArchiveDiagnosticsResponse> {
+  return request.get(endpoints.adminArchiveDiagnostics(params));
 }
 
 export function getAdminUsageSummary(

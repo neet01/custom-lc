@@ -60,6 +60,7 @@ export enum QueryKeys {
   graphToken = 'graphToken',
   adminBaseConfig = 'adminBaseConfig',
   adminUsers = 'adminUsers',
+  adminArchiveDiagnostics = 'adminArchiveDiagnostics',
   adminUsage = 'adminUsage',
   adminUsageSummary = 'adminUsageSummary',
   adminIssues = 'adminIssues',

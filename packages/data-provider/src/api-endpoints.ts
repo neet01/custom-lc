@@ -1,5 +1,6 @@
 import type { AssistantsEndpoint } from './schemas';
 import * as q from './types/queries';
+import type * as ad from './types/archiveDiagnostics';
 import type * as o from './types/outlook';
 import { ResourceType } from './accessPermissions';
 
@@ -270,6 +271,9 @@ export const adminDeleteConfigField = (
 
 export const adminUserBalance = (userId: string) =>
   `${BASE_URL}/api/admin/users/${encodeURIComponent(userId)}/balance`;
+
+export const adminArchiveDiagnostics = (params: ad.ArchiveDiagnosticsParams = {}) =>
+  `${BASE_URL}/api/admin/archive-diagnostics${buildQuery(params as Record<string, unknown>)}`;
 
 export const adminUsage = (params: q.AdminUsageListParams = {}) =>
   `${BASE_URL}/api/admin/usage${buildQuery(params as Record<string, unknown>)}`;

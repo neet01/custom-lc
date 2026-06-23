@@ -3,3 +3,4 @@ export * from './mcpServers';
 export * from './outlook';
 export * from './slackArchive';
 export * from './teamsArchive';
+export * from './archiveDiagnostics';

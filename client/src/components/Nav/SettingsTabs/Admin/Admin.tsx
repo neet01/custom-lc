@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Button, Spinner, Switch, useToastContext } from '@librechat/client';
-import { BarChart3, Download, Mail, RefreshCw, ShieldAlert, Users } from 'lucide-react';
+import { BarChart3, Database, Download, Mail, RefreshCw, ShieldAlert, Users } from 'lucide-react';
 import { dataService, SystemRoles } from 'librechat-data-provider';
 import type {
   AdminIssueReportItem,
@@ -24,11 +24,18 @@ import {
 } from '~/data-provider';
 import { useAuthContext } from '~/hooks';
 import { cn, formatDate, formatDateTime } from '~/utils';
+import ArchiveDiagnostics from './ArchiveDiagnostics';
 
 const DAY_OPTIONS = [7, 30, 90];
 const PAGE_SIZE = 25;
 
-type AdminTab = 'usage-users' | 'recent-requests' | 'users' | 'outlook-audit' | 'issues';
+type AdminTab =
+  | 'usage-users'
+  | 'recent-requests'
+  | 'users'
+  | 'archive-diagnostics'
+  | 'outlook-audit'
+  | 'issues';
 type SummarizationConfigShape = {
   enabled?: boolean;
   [key: string]: unknown;
@@ -79,10 +86,7 @@ function getBrowserTimeZone() {
   }
 }
 
-function getDownloadFilename(
-  headerValue: string | undefined,
-  fallback: string,
-) {
+function getDownloadFilename(headerValue: string | undefined, fallback: string) {
   if (!headerValue) {
     return fallback;
   }
@@ -641,7 +645,8 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
               Admin reporting
             </h2>
             <p className="mt-1 text-xs text-text-secondary">
-              Workspace-wide usage, user activity, Outlook audit events, and user-reported issues.
+              Workspace-wide usage, archive indexing, Outlook audit events, and user-reported
+              issues.
             </p>
           </div>
           <label className="flex items-center gap-2 text-xs text-text-secondary">
@@ -673,7 +678,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
           <section className="rounded-2xl border border-border-medium bg-surface-primary p-4 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-text-primary">Agent context compaction</h3>
+                <h3 className="text-sm font-semibold text-text-primary">
+                  Agent context compaction
+                </h3>
                 <p className="mt-1 text-xs text-text-secondary">
                   Globally controls rolling summarization for agent chats when prompts approach the
                   model context limit.
@@ -810,6 +817,12 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
               onClick={() => setActiveTab('users')}
             />
             <TabButton
+              active={activeTab === 'archive-diagnostics'}
+              icon={Database}
+              label="Archive indexing"
+              onClick={() => setActiveTab('archive-diagnostics')}
+            />
+            <TabButton
               active={activeTab === 'outlook-audit'}
               icon={Mail}
               label="Outlook audit"
@@ -837,8 +850,8 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
             >
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <p className="text-xs text-text-secondary">
-                  CSV export is intended for finance review. Estimated cost is based on model pricing
-                  in Cortex and should be reconciled to AWS billing for invoice truth.
+                  CSV export is intended for finance review. Estimated cost is based on model
+                  pricing in Cortex and should be reconciled to AWS billing for invoice truth.
                 </p>
                 <button
                   type="button"
@@ -880,7 +893,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                         <td className="py-3 pr-4">{formatNumber(row.inputTokens)}</td>
                         <td className="py-3 pr-4">{formatNumber(row.outputTokens)}</td>
                         <td className="py-3 pr-4 text-text-secondary">
-                          {row.lastSeenAt ? formatAdminDateTime(row.lastSeenAt) : 'No usage in window'}
+                          {row.lastSeenAt
+                            ? formatAdminDateTime(row.lastSeenAt)
+                            : 'No usage in window'}
                         </td>
                       </tr>
                     ))}
@@ -1052,7 +1067,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                               <div className="flex min-w-[9rem] items-center gap-3">
                                 <Switch
                                   checked={effectiveEnabled}
-                                  disabled={patchConfigFields.isLoading || deleteConfigField.isLoading}
+                                  disabled={
+                                    patchConfigFields.isLoading || deleteConfigField.isLoading
+                                  }
                                   onCheckedChange={(checked) =>
                                     void handleArchiveFeatureToggle({
                                       principalType: 'user',
@@ -1096,7 +1113,9 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
                               <div className="flex min-w-[9rem] items-center gap-3">
                                 <Switch
                                   checked={effectiveEnabled}
-                                  disabled={patchConfigFields.isLoading || deleteConfigField.isLoading}
+                                  disabled={
+                                    patchConfigFields.isLoading || deleteConfigField.isLoading
+                                  }
                                   onCheckedChange={(checked) =>
                                     void handleArchiveFeatureToggle({
                                       principalType: 'user',
@@ -1153,6 +1172,8 @@ function Admin({ workspaceMode = false }: { workspaceMode?: boolean }) {
               />
             </TableShell>
           ) : null}
+
+          {activeTab === 'archive-diagnostics' ? <ArchiveDiagnostics /> : null}
 
           {activeTab === 'outlook-audit' ? (
             <TableShell

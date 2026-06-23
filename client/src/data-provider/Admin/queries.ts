@@ -86,6 +86,25 @@ export const useAdminUsageQuery = (
   );
 };
 
+export const useAdminArchiveDiagnosticsQuery = (
+  params: t.ArchiveDiagnosticsParams = {},
+  config?: UseQueryOptions<t.ArchiveDiagnosticsResponse>,
+): QueryObserverResult<t.ArchiveDiagnosticsResponse> => {
+  const queriesEnabled = useRecoilValue<boolean>(store.queriesEnabled);
+
+  return useQuery<t.ArchiveDiagnosticsResponse>(
+    [QueryKeys.adminArchiveDiagnostics, params],
+    () => dataService.getAdminArchiveDiagnostics(params),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+      enabled: (config?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};
+
 export const useAdminUsageSummaryQuery = (
   params: t.AdminUsageSummaryParams = {},
   config?: UseQueryOptions<t.AdminUsageSummaryResponse>,
@@ -160,26 +179,30 @@ export const useAdminSummarizationToggleMutation = (): UseMutationResult<
     {
       onMutate: async (enabled) => {
         await queryClient.cancelQueries([QueryKeys.adminBaseConfig]);
-        const previousConfig =
-          queryClient.getQueryData<AdminBaseConfigResponse>([QueryKeys.adminBaseConfig]);
+        const previousConfig = queryClient.getQueryData<AdminBaseConfigResponse>([
+          QueryKeys.adminBaseConfig,
+        ]);
 
-        queryClient.setQueryData<AdminBaseConfigResponse>([QueryKeys.adminBaseConfig], (current) => {
-          const config = current?.config ?? {};
-          const summarization =
-            config.summarization && typeof config.summarization === 'object'
-              ? (config.summarization as Record<string, unknown>)
-              : {};
+        queryClient.setQueryData<AdminBaseConfigResponse>(
+          [QueryKeys.adminBaseConfig],
+          (current) => {
+            const config = current?.config ?? {};
+            const summarization =
+              config.summarization && typeof config.summarization === 'object'
+                ? (config.summarization as Record<string, unknown>)
+                : {};
 
-          return {
-            config: {
-              ...config,
-              summarization: {
-                ...summarization,
-                enabled,
+            return {
+              config: {
+                ...config,
+                summarization: {
+                  ...summarization,
+                  enabled,
+                },
               },
-            },
-          };
-        });
+            };
+          },
+        );
 
         return { previousConfig };
       },

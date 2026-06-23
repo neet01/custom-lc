@@ -732,13 +732,13 @@ async function getSlackUserProfile(token, slackUserId, userCache) {
   }
 }
 
-async function listSlackConversations(token, conversationLimit) {
+async function paginateSlackConversations(methodName, token, types, conversationLimit) {
   const conversations = [];
   let cursor = '';
 
   while (conversations.length < conversationLimit) {
-    const payload = await slackApiRequest('conversations.list', token, {
-      types: 'public_channel,private_channel,im,mpim',
+    const payload = await slackApiRequest(methodName, token, {
+      types,
       exclude_archived: false,
       limit: Math.min(200, conversationLimit - conversations.length),
       cursor,
@@ -752,7 +752,40 @@ async function listSlackConversations(token, conversationLimit) {
     }
   }
 
-  return conversations.slice(0, conversationLimit);
+  return conversations;
+}
+
+async function listSlackConversations(token, conversationLimit) {
+  const channels = await paginateSlackConversations(
+    'conversations.list',
+    token,
+    'public_channel,private_channel,im,mpim',
+    conversationLimit,
+  );
+
+  // On Enterprise Grid, conversations.list is scoped to the token's workspace and
+  // omits both DMs and channels the user belongs to elsewhere in the org (other
+  // workspaces / org-shared). users.conversations enumerates every conversation the
+  // authenticated user is a member of across all types, so we union the two sources
+  // and dedupe by channel id to maximize coverage without dropping anything.
+  let memberConversations = [];
+  try {
+    memberConversations = await paginateSlackConversations(
+      'users.conversations',
+      token,
+      'public_channel,private_channel,im,mpim',
+      conversationLimit,
+    );
+  } catch (error) {
+    logger.warn('[SlackArchiveService] Failed to enumerate user conversations via users.conversations', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  return uniqueBy([...channels, ...memberConversations], (channel) => channel?.id).slice(
+    0,
+    conversationLimit,
+  );
 }
 
 async function listConversationMembers(channel, token, userCache) {
@@ -1783,6 +1816,7 @@ module.exports = {
   getSlackArchiveConfig,
   getUserId,
   toDiscoveredConversation,
+  listSlackConversations,
   getStatus,
   getSyncStartAvailability,
   syncUserArchive,

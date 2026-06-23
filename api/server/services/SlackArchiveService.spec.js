@@ -160,6 +160,50 @@ describe('SlackArchiveService', () => {
     expect(merged.channel).toBe(channel);
   });
 
+  it('unions member conversations (DMs + missed channels) from users.conversations with conversations.list', async () => {
+    const slackResponse = (channels) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ ok: true, channels, response_metadata: { next_cursor: '' } }),
+    });
+    const fetchMock = jest.fn(async (url) => {
+      const target = String(url);
+      if (target.includes('conversations.list')) {
+        return slackResponse([
+          { id: 'C1', name: 'ops' },
+          { id: 'C2', name: 'eng' },
+        ]);
+      }
+      if (target.includes('users.conversations')) {
+        return slackResponse([
+          { id: 'C2', name: 'eng' },
+          { id: 'C3', name: 'cross-workspace-channel' },
+          { id: 'D1', is_im: true, user: 'U9' },
+        ]);
+      }
+      throw new Error(`Unexpected Slack method: ${target}`);
+    });
+    const originalFetch = global.fetch;
+    global.fetch = fetchMock;
+
+    try {
+      const conversations = await SlackArchiveService.listSlackConversations('xoxp-token', 100);
+      const ids = conversations.map((conversation) => conversation.id).sort();
+
+      expect(ids).toEqual(['C1', 'C2', 'C3', 'D1']);
+      const calledMethods = fetchMock.mock.calls.map(([url]) => String(url));
+      expect(calledMethods.some((url) => url.includes('conversations.list'))).toBe(true);
+      expect(
+        calledMethods.some(
+          (url) => url.includes('users.conversations') && url.includes('public_channel'),
+        ),
+      ).toBe(true);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it('resolves an internal conversation id before listing exact Slack messages', async () => {
     db.findSlackArchiveConversations.mockResolvedValue([
       {

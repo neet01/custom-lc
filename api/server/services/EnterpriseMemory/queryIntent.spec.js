@@ -23,6 +23,28 @@ describe('queryIntent.analyzeSlackQuery', () => {
     expect(analysis.topicTerms).not.toContain('responsible');
   });
 
+  it('classifies a self recency-listing query (outgoing messages) without content topic', () => {
+    const analysis = analyzeSlackQuery('what are my most recent outgoing messages');
+
+    expect(analysis.archetype).toBe('self_activity');
+    expect(analysis.selfAuthored).toBe(true);
+    expect(analysis.impliedSenderScope).toBe('me');
+    expect(analysis.intentPhrases).toEqual([]);
+    expect(analysis.topicTerms).toEqual([]);
+  });
+
+  it('keeps a content topic on a self-activity query that names a subject', () => {
+    const analysis = analyzeSlackQuery('messages I sent about the budget');
+
+    expect(analysis.archetype).toBe('self_activity');
+    expect(analysis.impliedSenderScope).toBe('me');
+    expect(analysis.topicTerms).toEqual(expect.arrayContaining(['budget']));
+  });
+
+  it('does not misclassify a commitment query as self-activity', () => {
+    expect(analyzeSlackQuery('what did I tell people I would do today').archetype).toBe('commitment');
+  });
+
   it('leaves an ordinary topic query as a general archetype with no expansion', () => {
     const analysis = analyzeSlackQuery('budget approval timeline');
 

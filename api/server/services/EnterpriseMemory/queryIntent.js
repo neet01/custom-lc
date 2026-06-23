@@ -87,6 +87,15 @@ const SELF_COMMITMENT_PATTERNS = [
   /what (am i|do i) (need to|have to|supposed to) (do|deliver|finish|send|ship)/,
 ];
 
+const SELF_ACTIVITY_PATTERNS = [
+  /\b(my|recent|latest|last)\b[\s\S]*\b(outgoing|sent)\b[\s\S]*\bmessages?\b/,
+  /\b(outgoing|sent) messages?\b/,
+  /\bmessages? i (sent|wrote|posted|put out)\b/,
+  /\bmy (recent|latest|last|outgoing|sent) messages?\b/,
+  /\bwhat (have|did) i (post|posted|send|sent|write|wrote)\b/,
+  /\bmy (recent|latest) (slack )?(activity|posts|messages)\b/,
+];
+
 const GENERIC_COMMITMENT_PATTERNS = [
   /\bcommit(ment|ments|ted)?\b/,
   /\baction items?\b/,
@@ -122,7 +131,9 @@ const TOPIC_STOP_WORDS = new Set([
   'about', 'with', 'from', 'into', 'that', 'this', 'those', 'these', 'and', 'the', 'for', 'to',
   'people', 'everyone', 'everybody', 'team', 'teams', 'folks', 'guys', 'someone', 'anyone',
   'today', 'yesterday', 'week', 'month', 'morning', 'afternoon', 'evening', 'recently', 'lately',
-  'past', 'last', 'message', 'messages', 'chat', 'chats', 'discussion', 'discussed',
+  'past', 'last', 'recent', 'latest', 'most', 'message', 'messages', 'chat', 'chats',
+  'discussion', 'discussed', 'outgoing', 'sent', 'send', 'post', 'posted', 'posting', 'posts',
+  'wrote', 'write', 'put', 'activity',
   'show', 'find', 'search', 'look', 'get', 'give', 'around', 'regarding', 'related',
 ]);
 
@@ -169,6 +180,10 @@ function classifyArchetype(normalizedQuery) {
 
   if (hasWho && matchesAny(normalizedQuery, RESPONSIBILITY_PATTERNS)) {
     return { archetype: 'responsibility', selfAuthored: false };
+  }
+
+  if (matchesAny(normalizedQuery, SELF_ACTIVITY_PATTERNS)) {
+    return { archetype: 'self_activity', selfAuthored: true };
   }
 
   if (matchesAny(normalizedQuery, SELF_COMMITMENT_PATTERNS)) {

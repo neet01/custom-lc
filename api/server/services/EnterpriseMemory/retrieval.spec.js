@@ -475,4 +475,49 @@ describe('EnterpriseMemory retrieval', () => {
     expect(result.results[0]).toMatchObject({ id: 'commitment' });
     expect(result.results[0].matchedIntent).toBeTruthy();
   });
+
+  it('lists the user\'s own messages by recency for a self-activity query (no content match)', async () => {
+    db.findSlackIdentityLink.mockResolvedValue({ slackUserId: 'U123', status: 'linked' });
+    db.findEnterpriseMemoryChunks.mockResolvedValue([
+      {
+        _id: 'older',
+        sourceRecordType: 'slack_message',
+        sourceRecordId: '3.1',
+        sourceParentRecordId: 'DABC',
+        text: 'pinging the vendor about pricing',
+        summary: 'pinging the vendor about pricing',
+        sourceTimestamp: new Date('2026-06-16T10:00:00Z'),
+        metadata: { displayName: 'Test User', slackUserId: 'U123', conversationType: 'im' },
+      },
+      {
+        _id: 'newer',
+        sourceRecordType: 'slack_message',
+        sourceRecordId: '3.2',
+        sourceParentRecordId: 'DABC',
+        text: 'sent the deck over',
+        summary: 'sent the deck over',
+        sourceTimestamp: new Date('2026-06-17T10:00:00Z'),
+        metadata: { displayName: 'Test User', slackUserId: 'U123', conversationType: 'im' },
+      },
+    ]);
+
+    const result = await searchSlackMemoryChunks(user, {
+      topic: 'what are my most recent outgoing messages',
+    });
+
+    const [candidateFilter] = db.findEnterpriseMemoryChunks.mock.calls[0];
+    expect(candidateFilter).toMatchObject({
+      source: 'slack',
+      sourceRecordType: 'slack_message',
+    });
+    expect(candidateFilter.$or).toEqual(
+      expect.arrayContaining([{ 'metadata.slackUserId': 'U123' }]),
+    );
+    expect(result.trace).toMatchObject({
+      queryArchetype: 'self_activity',
+      appliedSenderScope: 'me',
+      senderResolvedFromIdentityLink: true,
+    });
+    expect(result.results[0]).toMatchObject({ id: 'newer' });
+  });
 });
